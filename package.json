@@ -1,5 +1,5 @@
 {
-  "name": "bun-email-api",
+  "name": "email-gateway",
   "module": "src/index.ts",
   "type": "module",
   "scripts": {

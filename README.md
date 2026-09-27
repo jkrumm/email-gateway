@@ -1,4 +1,6 @@
-# bun-email-api
+# email-gateway
+
+The single door to all of my email: Proton Mail (Bridge), Resend and later Gmail behind one API and UI. Direction: [docs/vision.md](docs/vision.md).
 
 ## Local Development
 
@@ -82,7 +84,7 @@ Jev is called through the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway
 
 ## Storage
 
-Every email (sent and received via Resend, plus the human inbox via IMAP) and every contact-form submission is persisted in a SQLite database opened with `bun:sqlite` (`src/db/`), at `${BEA_DATA_DIR}/bun-email-api.sqlite`. Migrations (`src/db/migrations.ts`) run automatically on first use, tracked via `PRAGMA user_version`.
+Every email (sent and received via Resend, plus the human inbox via IMAP) and every contact-form submission is persisted in a SQLite database opened with `bun:sqlite` (`src/db/`), at `${BEA_DATA_DIR}/email-gateway.sqlite`. Migrations (`src/db/migrations.ts`) run automatically on first use, tracked via `PRAGMA user_version`.
 
 Tables:
 

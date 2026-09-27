@@ -31,7 +31,7 @@ function getDefaultDatabase(): Database {
     const path =
       env.BEA_DATA_DIR === ":memory:"
         ? ":memory:"
-        : join(env.BEA_DATA_DIR, "bun-email-api.sqlite");
+        : join(env.BEA_DATA_DIR, "email-gateway.sqlite");
     defaultDatabase = openDatabase(path);
   }
   return defaultDatabase;

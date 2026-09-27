@@ -173,7 +173,7 @@ export function createAdminRoutes({
 
       if (!isValidBasicAuth(headers.authorization, password)) {
         return textResponse("Unauthorized", 401, {
-          "www-authenticate": `Basic realm="bun-email-api admin", charset="UTF-8"`,
+          "www-authenticate": `Basic realm="email-gateway admin", charset="UTF-8"`,
         });
       }
 

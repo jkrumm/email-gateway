@@ -1,10 +1,10 @@
 name: Deploy
 
-# Continuous deployment of bun-email-api to the VPS via RollHook.
+# Continuous deployment of email-gateway to the VPS via RollHook.
 #
 # Auth: GitHub OIDC → RollHook exchanges for short-lived registry creds.
 # No secrets in CI. RollHook authorizes by reading the rollhook.allowed_repos
-# label off the running container (see vps/apps/bun-email-api/compose.yml).
+# label off the running container (see vps/apps/email-gateway/compose.yml).
 
 on:
   push:
@@ -20,8 +20,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  bun-email-api:
-    name: Deploy bun-email-api
+  email-gateway:
+    name: Deploy email-gateway
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -29,6 +29,6 @@ jobs:
       - uses: jkrumm/rollhook-action@v1
         with:
           url: https://rollhook.jkrumm.com
-          image_name: bun-email-api
+          image_name: email-gateway
           dockerfile: Dockerfile
           context: .

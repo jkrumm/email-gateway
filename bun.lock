@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "bun-email-api",
+      "name": "email-gateway",
       "dependencies": {
         "@ai-sdk/openai-compatible": "3.0.53",
         "@elysiajs/bearer": "1.4.4",
