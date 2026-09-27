@@ -36,7 +36,7 @@ steps: stop and hand back to the owner.
       `src/db`, `src/enrich`, `src/jev`, `src/spam`, `src/admin`, `src/api`) via
       `Explore`. Read the sibling gateways for house patterns
       (`~/SourceRoot/research-gateway`, `~/SourceRoot/audio-gateway`: AGENTS.md,
-      job queue, deploy shape) and `~/SourceRoot/dotfiles/docs/architecture.md`.
+      job queue, production layout) and `~/SourceRoot/dotfiles/docs/architecture.md`.
 - [ ] Draft `docs/architecture.md`: the provider port (list/read/search/flag/send
       over Bridge IMAP/SMTP, Gmail, Resend), the lean store (what is persisted,
       keyed how, what is only cached), the job model (generalise the Jev queue),
@@ -51,11 +51,11 @@ steps: stop and hand back to the owner.
       IMAP, and what happens to the full bodies already in SQLite. Wait for the
       answers; record them verbatim in `docs/architecture.md` §Decisions.
 - [ ] Add `AGENTS.md` (+ `CLAUDE.md` = `@AGENTS.md` shim) for this repo, matching
-      the sibling gateways: purpose, stack, commands, env, deploy, the
+      the sibling gateways: purpose, stack, commands, env, production setup, the
       architecture link. Keep it dense.
 - [ ] Rewrite Waves 2+ below into concrete waves (3–6 steps each) that follow
       the settled architecture. The provisional outline below is a starting
-      point, not a contract — reorder, split, merge or drop freely.
+      point, not a contract — reorder, split, combine or drop freely.
       **Left behind:**
 
 ## Wave 2 — Provider port + Proton adapter <!-- status: pending -->
