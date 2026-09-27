@@ -50,21 +50,15 @@ re-read cannot rebuild.
   Hermes: search, read, summarize a thread, list what needs action, draft a
   reply.
 
-## Decisions still open
+## Decided 2026-09-27
 
-- **Where it runs.** Leaning: the reading side belongs on the homelab next to
-  Bridge, tailnet-only, because a personal mailbox has no business behind a
-  public hostname. The VPS keeps only the public, stateless send routes
-  (`/fpp`, `/sy-serendipity`, …). That split is either one service deployed
-  twice with feature flags or a thin public relay; decide it before the client
-  is built.
-- **Mirror or mail client?** Today's sync is read-only. Marking mail read,
-  archiving or replying from the dashboard needs write access (IMAP
-  flags/moves through Bridge, the Gmail API). Leaning: read-only first, then
-  flags and moves, and sending as me last.
-- **Gmail access.** The Gmail API with OAuth gives push, labels and history
-  IDs. IMAP with an app password is simpler and fits the existing IMAP port.
-  Leaning: the Gmail API.
-- **What happens to today's stored mail.** The current SQLite holds full
-  bodies of synced mail. Under the lean model it shrinks to derived data plus
-  the Resend send log, which exists nowhere else.
+The four open questions were settled with the owner; the verbatim answers and
+what they bind are in [docs/architecture.md](architecture.md) §Decisions.
+
+- **Where it runs:** one VPS container, two hostnames — the public tunnel door
+  serves only the send routes, a tailnet-only door serves the mail surface.
+- **Mirror or mail client:** flags and moves, no sending as the owner yet.
+- **Gmail access:** IMAP with an app password through the same adapter as
+  Proton; argo's Gmail reads move here, argo keeps Calendar.
+- **Today's stored mail:** disposable — the lean store is built fresh, the old
+  file is left aside for the owner to delete.
