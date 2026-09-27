@@ -1,12 +1,13 @@
 import type { Database } from "bun:sqlite";
 import type { GetEmailResponseSuccess } from "resend";
-import type { AdminResend } from "../admin/types";
+import type { ResendClient } from "../providers/resend/client";
 import {
   createEmailsRepo,
   type EmailAttachment,
   type UpsertEmailInput,
 } from "../db/emails";
 import { createSyncStateRepo } from "../db/sync-state";
+import { toIsoTimestamp } from "../utils/date";
 import type {
   SyncDirectionSummary,
   SyncInboundSummary,
@@ -37,14 +38,6 @@ async function withRetry<T extends { error: { name?: string } | null }>(
   return result;
 }
 
-// Resend timestamps look like "2026-09-15 07:15:57.115000+00". The store
-// compares created_at as ISO strings, so normalize before upserting.
-export function toIsoTimestamp(value: string): string {
-  const normalized = value.replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00");
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? value : date.toISOString();
-}
-
 function toOutboundUpsert(
   full: GetEmailResponseSuccess,
   { withBody }: { withBody: boolean },
@@ -67,7 +60,7 @@ function toOutboundUpsert(
 
 async function syncOutbound(
   emails: ReturnType<typeof createEmailsRepo>,
-  resend: AdminResend,
+  resend: ResendClient,
   errors: string[],
   // Only trust the "known id → stop" pagination shortcut when the previous
   // run for this direction completed without errors — otherwise a prior
@@ -145,7 +138,7 @@ async function syncOutbound(
 
 async function syncInbound(
   emails: ReturnType<typeof createEmailsRepo>,
-  resend: AdminResend,
+  resend: ResendClient,
   errors: string[],
   trustKnownIdShortcut: boolean,
 ): Promise<SyncInboundSummary> {
@@ -217,7 +210,7 @@ export async function syncEmails({
   resend,
 }: {
   db: Database;
-  resend: AdminResend;
+  resend: ResendClient;
 }): Promise<SyncSummary> {
   const emails = createEmailsRepo(db);
   const syncState = createSyncStateRepo(db);

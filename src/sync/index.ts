@@ -4,12 +4,12 @@ import { errorMessage } from "../utils/error";
 import { runEnrichmentBatch } from "../enrich/worker";
 import { kickJevWorker } from "../jev/worker";
 import { adminResend } from "../utils/resend";
-import { imapConfigFromEnv } from "./imap-config";
-import { createImapflowPort, type ImapPort } from "./imap-port";
+import { imapConfigFromEnv } from "../providers/imap/config";
+import { createImapflowPort, type ImapPort } from "../providers/imap/adapter";
 import { syncImap } from "./imap-sync";
 import { syncEmails } from "./resend-sync";
 import type { SyncSummary } from "./types";
-import type { AdminResend } from "../admin/types";
+import type { ResendClient } from "../providers/resend/client";
 
 const SYNC_INTERVAL_MS = 5 * 60_000;
 const FIRST_RUN_DELAY_MS = 5_000;
@@ -25,7 +25,7 @@ export function createSyncRunner({
   kickJev = kickJevWorker,
 }: {
   db: Database;
-  resend: AdminResend;
+  resend: ResendClient;
   imap?: { port: ImapPort; mailboxes: string[] };
   enrich: () => Promise<void>;
   kickJev?: () => void;

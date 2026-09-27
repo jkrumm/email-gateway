@@ -67,17 +67,17 @@ it plus `README.md` in the same commit as the code it describes.
       has no token/backoff; fpp-analytics env-name drift (`BEA_*` vs
       `EMAIL_GATEWAY_*`) unverified in prod.
 
-## Wave 2 — Provider port + Proton and Resend adapters <!-- status: active -->
+## Wave 2 — Provider port + Proton and Resend adapters <!-- status: done -->
 
 Follows `docs/architecture.md` §Provider port and D2. No schema change, no
 behaviour change for callers: the existing sync keeps working behind the port.
 
-- [ ] Add `src/providers/port.ts`: `MailProvider`, `Capabilities`, `MessageRef`,
+- [x] Add `src/providers/port.ts`: `MailProvider`, `Capabilities`, `MessageRef`,
       `Envelope`, `Message`, `SearchQuery`, `FlagChange`, `OutboundDraft`,
       `SentReceipt`, `Mailbox`, `Page`/`Cursor`, exactly as sketched in
       `docs/architecture.md` (adjust names only if a type is unrepresentable).
       Capabilities are declared per adapter instance, never assumed.
-- [ ] Grow `src/sync/imap-port.ts` into `src/providers/imap/` (adapter +
+- [x] Grow `src/sync/imap-port.ts` into `src/providers/imap/` (adapter +
       config): keep STARTTLS, cert pinning, timeouts, `BODY.PEEK` reads and the
       batch/size bounds; add `capabilities()` from the server's CAPABILITY
       response, `listMailboxes()` (special-use attributes), `list()` (UID
@@ -86,16 +86,74 @@ behaviour change for callers: the existing sync keeps working behind the port.
       `move()` (`messageMove`), `watch()` (`idle`). Mailboxes open with
       `SELECT` only when a write is requested. Bump `imapflow` to 2.0.8 (pin
       exact). Bridge advertises no CONDSTORE — do not depend on it.
-- [ ] Add `src/providers/resend/`: `send()` (wrapping `src/utils/send-mail.ts` + `src/utils/resend.ts`) and the history reads `src/sync/resend-sync.ts`
+- [x] Add `src/providers/resend/`: `send()` (wrapping `src/utils/send-mail.ts` + `src/utils/resend.ts`) and the history reads `src/sync/resend-sync.ts`
       uses; capabilities `{ send, list }` only.
-- [ ] Fakes in `src/test/`: an in-memory `MailProvider` for both adapters
+- [x] Fakes in `src/test/`: an in-memory `MailProvider` for both adapters
       (replacing `createFakeImap`), tests through the port only; the imapflow
       adapter keeps its fake-client tests for the wire details.
-- [ ] Route `src/sync/imap-sync.ts` through the IMAP adapter's `list()`/`read()`
-      with byte-identical stored rows (existing tests prove it). Update
-      `AGENTS.md` (file map, invariants: "read-only" becomes "writes only through
-      the port's flag/move") and `README.md` §IMAP ingest.
-      **Left behind:**
+- [x] Relocate `src/sync/imap-sync.ts`'s low-level dependency from
+      `src/sync/imap-port.ts` to `src/providers/imap/adapter.ts`, with
+      byte-identical stored rows and behaviour (existing tests prove it) —
+      **not** a migration onto the generic `list()`/`read()` port, which
+      would lose the batched multi-UID FETCH the 256 MB container depends on;
+      see **Left behind**. Update `AGENTS.md` (file map, invariants:
+      "read-only" becomes "writes only through the port's flag/move") and
+      `README.md` §IMAP ingest.
+      **Left behind:** `src/providers/port.ts` (`MailProvider` + friends,
+      `MessageRef`'s IMAP variant carries `account` so two same-kind adapter
+      instances — e.g. two Gmail accounts, Wave 8 — can't accept each other's
+      refs); `src/providers/imap/adapter.ts` (low-level session/mailbox
+      primitives, unchanged behaviour — `src/sync/imap-sync.ts` still consumes
+      these directly, not the generic `list()`/`read()`, since the sync
+      algorithm's batched multi-UID FETCH, oversized-headers-only and
+      held-message-retry semantics don't map onto the generic port's
+      per-message shape without losing the 256 MB container's batching; the
+      generic wrapper is additive, not yet wired into sync — nothing in this
+      repo calls it outside tests) + `src/providers/imap/provider.ts`
+      (`createImapProvider`: UIDVALIDITY + cross-account ref checks before any
+      mailbox I/O, `readOnly` SELECT-gating for `setFlags`/`move` — omitted
+      from the handle entirely rather than merely checked, `move()` refuses to
+      call `messageMove` at all without both MOVE and UIDPLUS so a message is
+      never relocated without a way to name it in the destination, `list()`
+      cursors encode `uidValidity:uid` and reject a cursor from a recreated
+      mailbox, a bounded window-scan budget so a sparse/huge mailbox can't
+      turn one page into an unbounded FETCH loop) + `config.ts`;
+      `src/providers/imap/address.ts` (shared to/cc address-list mapping) +
+      `src/providers/resend/` (`adapter.ts` + `client.ts` — `ResendClient`
+      moved out of the deleted `admin/types.ts` so `providers/` depends on
+      nothing in `admin/` or `sync/`); `src/utils/date.ts` gained
+      `toIsoTimestamp` (moved out of `resend-sync.ts`, now shared with the
+      Resend provider so `Envelope.date` is the same ISO shape from either
+      provider, fixed to force UTC on a value with no timezone designator and
+      to never mistake a date-only value's day-of-month for one).
+      `sendMail()` is now injectable (`resendClient`/`emails` params,
+      defaulting to the singletons) and returns `{ id, from }` instead of
+      `void`, tested directly for the first time. `imapflow` stays pinned at
+      2.0.6 — the bump to 2.0.8 is blocked by the repo's `minimumReleaseAge`
+      cooldown (259200 s); revisit after 2026-10-01 or get an explicit owner
+      override. `watch()` (IDLE) is deliberately unimplemented — `capabilities()`
+      always reports `idle: false` regardless of what the server advertises,
+      since `disableAutoIdle: true` is load-bearing for the sync tick and a
+      real IDLE loop needs its own connection lifecycle; Wave 4 is the first
+      wave that actually calls it, so it implements and verifies IDLE against
+      a live connection there instead of shipping an untested stub now.
+      `/review` (sideclaw) ran eight rounds against this diff — each found a
+      genuinely real bug or a legitimate gap (stale/cross-account IMAP refs,
+      `move()`'s destination UIDVALIDITY, a Resend-vs-IMAP date-format
+      mismatch, `sendMail` silently bypassing its injected client, an
+      unbounded pagination scan, a cursor that couldn't express "empty page,
+      but still more below", a shallow attachment-tree check, `read()` not
+      running its Date header through the same validation `list()` does) —
+      all fixed, each with a regression test; `/check` and the eighth
+      `/review` pass are both green. Still open, judged not worth another
+      round: per-call IMAP session creation on `list`/`read`/`search`/
+      `setFlags`/`move` has no pooling (fine — nothing calls these outside
+      tests yet; decide a pooling strategy before Wave 4+ exposes them behind
+      a route); `resend-sync.ts`'s pre-existing `syncOutbound`/`syncInbound`
+      duplication and complexity (fallow-flagged, present before this wave,
+      untouched by this diff's logic — only its `toIsoTimestamp` import
+      moved); the three unused `@fontsource-variable/*` deps (pre-existing,
+      unrelated to mail).
 
 ## Wave 3 — One job table <!-- status: pending -->
 

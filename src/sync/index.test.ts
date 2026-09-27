@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { AdminResend } from "../admin/types";
+import type { ResendClient } from "../providers/resend/client";
 import { openDatabase } from "../db/client";
-import type { ImapPort, ImapSession } from "./imap-port";
+import type { ImapPort, ImapSession } from "../providers/imap/adapter";
 import { createSyncRunner } from "./index";
 
 const emptyList = async () => ({
@@ -9,22 +9,22 @@ const emptyList = async () => ({
   error: null,
 });
 
-function healthyResend(): AdminResend {
+function healthyResend(): ResendClient {
   return {
     emails: {
       list: emptyList,
       receiving: { list: emptyList },
     },
-  } as unknown as AdminResend;
+  } as unknown as ResendClient;
 }
 
-function failingResend(): AdminResend {
+function failingResend(): ResendClient {
   const boom = async () => {
     throw new Error("resend down");
   };
   return {
     emails: { list: boom, receiving: { list: boom } },
-  } as unknown as AdminResend;
+  } as unknown as ResendClient;
 }
 
 function imapWithMessages(count: number): ImapPort {
@@ -75,7 +75,7 @@ function setup({
   resend = healthyResend(),
   imap,
 }: {
-  resend?: AdminResend;
+  resend?: ResendClient;
   imap?: { port: ImapPort; mailboxes: string[] };
 }) {
   const db = openDatabase(":memory:");
@@ -207,7 +207,7 @@ describe("createSyncRunner.runAllSources", () => {
         },
         receiving: { list: emptyList },
       },
-    } as unknown as AdminResend;
+    } as unknown as ResendClient;
     const { runner } = setup({ resend: slowResend });
 
     const first = runner.runAllSources();

@@ -9,7 +9,11 @@ import {
 import { createImapStateRepo, type ImapStateRepo } from "../db/imap-state";
 import { validDate } from "../utils/date";
 import { errorMessage } from "../utils/error";
-import type { ImapMailbox, ImapMessageInfo, ImapPort } from "./imap-port";
+import type {
+  ImapMailbox,
+  ImapMessageInfo,
+  ImapPort,
+} from "../providers/imap/adapter";
 import type { ImapSyncSummary } from "./types";
 
 // The container has 256 MB: bigger messages are stored headers-only, and one

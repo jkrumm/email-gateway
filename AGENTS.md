@@ -51,9 +51,11 @@ then `/review` on code. There is no lint script; prettier is the formatter.
   a short overlap — every queue needs an atomic claim with a token and stale
   takeover (`src/db/jev-queue.ts` is the reference), never an in-memory lock
   alone.
-- **IMAP is read-only today**: `EXAMINE` + `BODY.PEEK`, STARTTLS required, cert
-  pinned by SHA-256 when `IMAP_TLS_CERT` is set. Widening it is a
-  `docs/architecture.md` decision, not a local edit.
+- **IMAP sync stays read-only**: `EXAMINE` + `BODY.PEEK`, STARTTLS required,
+  cert pinned by SHA-256 when `IMAP_TLS_CERT` is set. The IMAP adapter
+  (`src/providers/imap/adapter.ts`) does expose `setFlags`/`move`
+  (`SELECT`, per D2) for future callers — the sync tick itself never opens a
+  mailbox for write.
 - **Rows are insert-only for IMAP** — a sender-controlled Message-ID must never
   overwrite a stored row. Row ids never derive from the UID.
 - **Fail open on the submission path.** The gate never 500s after delivery; DB
@@ -99,9 +101,19 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   model factories (`model.ts`, `jev.ts`)
 - `src/jev/worker.ts` drains both Jev queues; `src/db/jev-queue.ts` the generic
   claim/backoff queue (table-parameterised, despite the name)
+- `src/providers/port.ts` the `MailProvider` interface (capabilities, list,
+  read, search, setFlags, move, send, watch) every mailbox sits behind;
+  `src/providers/imap/adapter.ts` grows the old IMAP port with Bridge/Gmail
+  capability detection, `listMailboxes`, flags/move (`SELECT`, gated on
+  MOVE+UIDPLUS together), `search` — plus the batched low-level
+  session/mailbox primitives `src/sync/imap-sync.ts` still consumes directly;
+  `src/providers/imap/provider.ts` wraps that into the generic `MailProvider`
+  (UIDVALIDITY + cross-provider ref checks); `config.ts` reads env into
+  `ImapConfig`. `src/providers/resend/` wraps `send-mail.ts`/`utils/resend.ts`
+  as a send+list-only provider
 - `src/sync/` `index.ts` composition root + schedule, `resend-sync.ts`,
-  `imap-sync.ts` (cursor, batches, holds), `imap-port.ts` (the read-only port,
-  imapflow adapter), `imap-config.ts`
+  `imap-sync.ts` (cursor, batches, holds) — both consume their adapter from
+  `src/providers/`
 - `src/db/` `client.ts` (lazy singleton, pragmas), `migrations.ts`,
   repositories `emails.ts`, `submissions.ts`, `imap-state.ts`, `sync-state.ts`
 - `src/admin/` SSR admin (`plugin.tsx` routes + Basic auth + same-origin POSTs,

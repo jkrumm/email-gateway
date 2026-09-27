@@ -1,9 +1,15 @@
 import type { ReactElement } from "react";
+import type { Resend } from "resend";
 import { resend } from "./resend";
 import { emailsRepo, type EmailsRepo, type UpsertEmailInput } from "../db";
 
 const DEFAULT_FROM =
   "Free-Planning-Poker.com <no-reply@free-planning-poker.com>";
+
+// Only what sendMail actually calls — narrower than the full SDK so any
+// provider-scoped client that also offers `.emails.send` can be injected
+// (e.g. the Resend provider's own read client, once it can send too).
+type SendCapableResend = { emails: Pick<Resend["emails"], "send"> };
 
 // A DB error here must never turn an already-sent email into a failed
 // response for the caller (that would make them retry and send a
@@ -29,6 +35,8 @@ export async function sendMail({
   subject,
   template,
   source,
+  resendClient = resend,
+  emails = emailsRepo,
 }: {
   from?: string;
   to: string;
@@ -38,8 +46,12 @@ export async function sendMail({
   // Our template/route id, e.g. "fpp-sender" — stored on the email row so
   // the admin API can filter sent mail by what generated it.
   source?: string;
-}): Promise<void> {
-  const email = await resend.emails.send({
+  // Injectable for tests, or a provider-scoped client; defaults to the real
+  // singletons in production.
+  resendClient?: SendCapableResend;
+  emails?: Pick<EmailsRepo, "upsertEmail">;
+}): Promise<{ id: string; from: string }> {
+  const email = await resendClient.emails.send({
     from,
     to,
     replyTo,
@@ -70,7 +82,7 @@ export async function sendMail({
 
   // Minimal row now; the next sync fills html/last_event once Resend has
   // fully processed the send (src/sync/resend-sync.ts).
-  recordOutboundEmail(emailsRepo, {
+  recordOutboundEmail(emails, {
     id: email.data.id,
     direction: "outbound",
     fromAddress: from,
@@ -80,4 +92,8 @@ export async function sendMail({
     createdAt: new Date().toISOString(),
     source: source ?? null,
   });
+
+  // The resolved sender (DEFAULT_FROM when the caller passed none) — so a
+  // caller building a receipt from this never has to re-derive the default.
+  return { id: email.data.id, from };
 }

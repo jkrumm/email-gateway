@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { imapConfigFromEnv } from "./imap-config";
+import { imapConfigFromEnv } from "./config";
 
 const base = {
   IMAP_HOST: "bridge.example",

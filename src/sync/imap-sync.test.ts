@@ -8,7 +8,7 @@ import type {
   ImapMessageInfo,
   ImapPort,
   ImapSession,
-} from "./imap-port";
+} from "../providers/imap/adapter";
 import {
   BATCH_BYTES,
   BATCH_MESSAGES,

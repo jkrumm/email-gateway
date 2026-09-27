@@ -1,5 +1,5 @@
-import { env } from "../env";
-import type { ImapConfig } from "./imap-port";
+import { env } from "../../env";
+import type { ImapConfig } from "./adapter";
 
 type ImapEnv = Pick<
   typeof env,
