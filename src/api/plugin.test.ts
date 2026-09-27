@@ -52,7 +52,7 @@ function authHeaders(key = API_KEY) {
 }
 
 describe("API auth", () => {
-  test("BEA_API_KEY unset -> every /api route 404s", async () => {
+  test("API_KEY unset -> every /api route 404s", async () => {
     const { app } = testApp(undefined);
 
     const response = await app.handle(

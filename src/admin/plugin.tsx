@@ -159,7 +159,7 @@ export function createAdminRoutes({
 
   if (!passwordValid) {
     console.log(
-      "[admin] BEA_ADMIN_PASSWORD unset or shorter than 12 chars — /admin routes disabled",
+      "[admin] ADMIN_PASSWORD unset or shorter than 12 chars — /admin routes disabled",
     );
   }
 
@@ -426,7 +426,7 @@ export function createAdminRoutes({
 }
 
 export const adminRoutes = createAdminRoutes({
-  password: env.BEA_ADMIN_PASSWORD,
+  password: env.ADMIN_PASSWORD,
   emails: emailsRepo,
   submissions: submissionsRepo,
   imapState: imapStateRepo,

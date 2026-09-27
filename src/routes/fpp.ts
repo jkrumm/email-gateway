@@ -38,7 +38,7 @@ export const fppRoutes = withBearerAuth(new Elysia())
           }).catch(() => ({}));
 
           await sendMail({
-            to: env.BEA_RECEIVER_EMAIL,
+            to: env.RECEIVER_EMAIL,
             replyTo: `${body.name} <${body.email}>`,
             subject: `${subjectPrefix}Free-Planning-Poker.com - Contact Form Submission`,
             template: FppReceiverMail(body),
@@ -55,7 +55,7 @@ export const fppRoutes = withBearerAuth(new Elysia())
     "/fpp-daily-analytics",
     async ({ body }) => {
       await sendMail({
-        to: env.BEA_RECEIVER_EMAIL,
+        to: env.RECEIVER_EMAIL,
         subject: "Free-Planning-Poker.com - Daily Analytics",
         template: FppDailyAnalytics(body),
         source: "fpp-daily-analytics",

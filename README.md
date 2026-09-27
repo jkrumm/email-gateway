@@ -31,23 +31,23 @@ This project was created using `bun init` in bun v1.0.7. [Bun](https://bun.sh) i
 
 ## Endpoints
 
-- `POST /fpp` — bearer `BEA_SECRET_KEY`. Body: `{ name, email, subject, message }`. Sends a contact-form confirmation to the sender and forwards it to `BEA_RECEIVER_EMAIL`.
-- `POST /fpp-daily-analytics` — bearer `BEA_SECRET_KEY`. Body: `{ votes, estimations, rooms, unique_users, page_views }`. Sends a daily analytics summary to `BEA_RECEIVER_EMAIL`.
-- `POST /sy-serendipity` — bearer `BEA_SECRET_KEY`. Body: `{ firstName, lastName, email, numberOfPeople, destination, duration, arrivalDate, departureDate, phone, message }` (all fields except `email` are nullable). Sends a charter-request email to `BEA_SY_SERENDIPITY_RECEIVER_EMAIL`; uses `BEA_SY_SERENDIPITY_FROM_EMAIL` as the sender when set, otherwise falls back to the default `sendMail` sender.
+- `POST /fpp` — bearer `SECRET_KEY`. Body: `{ name, email, subject, message }`. Sends a contact-form confirmation to the sender and forwards it to `RECEIVER_EMAIL`.
+- `POST /fpp-daily-analytics` — bearer `SECRET_KEY`. Body: `{ votes, estimations, rooms, unique_users, page_views }`. Sends a daily analytics summary to `RECEIVER_EMAIL`.
+- `POST /sy-serendipity` — bearer `SECRET_KEY`. Body: `{ firstName, lastName, email, numberOfPeople, destination, duration, arrivalDate, departureDate, phone, message }` (all fields except `email` are nullable). Sends a charter-request email to `SY_SERENDIPITY_RECEIVER_EMAIL`; uses `SY_SERENDIPITY_FROM_EMAIL` as the sender when set, otherwise falls back to the default `sendMail` sender.
 
 ## Spam filter
 
 Both `/fpp` and `/sy-serendipity` run each submission through an LLM classifier (`src/spam/classify.ts`) before sending any mail. It sorts submissions into `legit`, `spam`, or `marketing` (unsolicited SEO/link-building/web-design/lead-gen/dev-outsourcing pitches), biased towards `legit` when unsure. Submissions classified as `spam`/`marketing` with confidence ≥ `0.7` are silently dropped — no emails are sent, but the caller still gets the normal success response so bots aren't tipped off. Below that threshold, the receiver mail subject is prefixed with `[Possible spam]` instead. Every decision is recorded in SQLite (`src/db/submissions.ts`) for the admin UI and `/api/submissions` to review.
 
-The classifier fails open: if `BEA_LLM_BASE_URL`, `BEA_LLM_API_KEY`, or `BEA_LLM_MODEL` is unset, or the LLM call fails, the submission is treated as `legit` and delivered normally.
+The classifier fails open: if `LLM_BASE_URL`, `LLM_API_KEY`, or `LLM_MODEL` is unset, or the LLM call fails, the submission is treated as `legit` and delivered normally.
 
 Neither endpoint waits on the classifier synchronously: `src/spam/gate.ts` races it against an 8s decision deadline, so a slow model never times out the caller (a Netlify function or Cloudflare edge). If the deadline wins, the mail is delivered immediately and the still-running classification is recorded once it lands, with its reason prefixed `Decided after deadline:` for the admin Filtered page.
 
 New env vars:
 
-- `BEA_LLM_BASE_URL` — OpenAI-compatible base URL for the classifier model.
-- `BEA_LLM_API_KEY` — API key for that endpoint.
-- `BEA_LLM_MODEL` — model id to use. Pick a fast/cheap model — form submitters wait on this call synchronously (bounded only by a 30-minute hang guard, not a tight timeout).
+- `LLM_BASE_URL` — OpenAI-compatible base URL for the classifier model.
+- `LLM_API_KEY` — API key for that endpoint.
+- `LLM_MODEL` — model id to use. Pick a fast/cheap model — form submitters wait on this call synchronously (bounded only by a 30-minute hang guard, not a tight timeout).
 
 ### Jev shadow mode
 
@@ -62,7 +62,7 @@ The worker (`src/jev/worker.ts`) runs every 60s and on demand after an enqueue. 
 | `done`    | Decision stored                                                                      |
 | `failed`  | Gave up after 8 failed attempts (last error kept in `jev_error`)                     |
 
-A failed call (e.g. the gateway's upstream 429 "high demand") increments `jev_attempts`, stores the error and reschedules with backoff 1m, 5m, 15m, 1h, 3h, 6h, 12h, 24h; the 9th failure is terminal. The AI SDK's default retries still apply inside one call. If Jev is not configured the worker does nothing and rows simply stay `pending` (never `failed`), so setting `BEA_JEV_API_KEY` later drains them. Migration 6 queued every existing row without a successful Jev result (submissions carry their raw payload, so they can be judged now).
+A failed call (e.g. the gateway's upstream 429 "high demand") increments `jev_attempts`, stores the error and reschedules with backoff 1m, 5m, 15m, 1h, 3h, 6h, 12h, 24h; the 9th failure is terminal. The AI SDK's default retries still apply inside one call. If Jev is not configured the worker does nothing and rows simply stay `pending` (never `failed`), so setting `JEV_API_KEY` later drains them. Migration 6 queued every existing row without a successful Jev result (submissions carry their raw payload, so they can be judged now).
 
 Stored on each `submissions` row: `llm_latency_ms` (classifier latency, for comparison) and `jev_status`, `jev_attempts`, `jev_next_attempt_at`, `jev_claimed_at`, `jev_verdict`, `jev_confidence`, `jev_probabilities` (JSON), `jev_latency_ms` (the successful call), `jev_model`, `jev_error`. `/api/submissions` returns them as `jev: { status, attempts, nextAttemptAt, verdict, confidence, probabilities, latencyMs, model, error }` (`null` when Jev was disabled at record time; the verdict fields are `null` until `done`). The admin Spam filter page shows Jev's verdict next to the LLM's with an agrees/differs marker, or `pending` (with the next attempt time) / `failed after N attempts: <error>`. Agreement rate and median latencies (`jevComparison` in `/api/stats`, Overview tile) count only `done` rows; `jevQueue: { pending, failed }` in `/api/stats` (Overview "Jev queue" tile) counts the whole queue.
 
@@ -70,8 +70,8 @@ Inbound emails get two Jev decisions in one request: a `spam_probability` (yes/n
 
 Env vars (all optional):
 
-- `BEA_JEV_API_KEY` — Vercel AI Gateway key. Unset disables Jev everywhere, silently.
-- `BEA_JEV_MODEL` — gateway evaluation model id, default `typesafe-ai/jev`.
+- `JEV_API_KEY` — Vercel AI Gateway key. Unset disables Jev everywhere, silently.
+- `JEV_MODEL` — gateway evaluation model id, default `typesafe-ai/jev`.
 
 Jev is called through the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) with the AI SDK's experimental `evaluate` (`src/llm/jev.ts`); no extra dependency. Choice confidence comes from the provider metadata Jev returns (falling back to the chosen option's probability).
 
@@ -79,12 +79,12 @@ Jev is called through the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway
 
 `GET /admin` — a server-rendered, zero-JS dashboard behind HTTP Basic auth (user `admin`), styled with `basalt-ui` tokens (automatic light/dark via `prefers-color-scheme`). Pages: Overview (stats, 14-day activity chart, category breakdown, needs-action and recently-blocked panels), Inbox (filterable/searchable list of every stored email, keyset-paginated), an email detail page (meta, AI enrichment, HTML/text content, a "Re-run AI" action), Spam filter (every judged submission), and Templates (previews of the registered email templates). All filtering happens through GET query params; the two POST actions (`Sync now`, `Re-run AI`) are guarded by a same-origin check. Dates are formatted in German (`Europe/Berlin`).
 
-- `BEA_ADMIN_PASSWORD` — Basic auth password, min 12 chars. Unset → every `/admin` route returns 404.
-- `bun run seed:demo` (refuses to run with `NODE_ENV=production`) seeds `$BEA_DATA_DIR` with realistic fake emails and submissions for exploring the dashboard locally.
+- `ADMIN_PASSWORD` — Basic auth password, min 12 chars. Unset → every `/admin` route returns 404.
+- `bun run seed:demo` (refuses to run with `NODE_ENV=production`) seeds `$DATA_DIR` with realistic fake emails and submissions for exploring the dashboard locally.
 
 ## Storage
 
-Every email (sent and received via Resend, plus the human inbox via IMAP) and every contact-form submission is persisted in a SQLite database opened with `bun:sqlite` (`src/db/`), at `${BEA_DATA_DIR}/email-gateway.sqlite`. Migrations (`src/db/migrations.ts`) run automatically on first use, tracked via `PRAGMA user_version`.
+Every email (sent and received via Resend, plus the human inbox via IMAP) and every contact-form submission is persisted in a SQLite database opened with `bun:sqlite` (`src/db/`), at `${DATA_DIR}/email-gateway.sqlite`. Migrations (`src/db/migrations.ts`) run automatically on first use, tracked via `PRAGMA user_version`.
 
 Tables:
 
@@ -96,7 +96,7 @@ Tables:
 
 New env var:
 
-- `BEA_DATA_DIR` — directory for the SQLite file. Defaults to `./data`. In the Docker image this is `/data`, which `docker-compose` mounts as a volume.
+- `DATA_DIR` — directory for the SQLite file. Defaults to `./data`. In the Docker image this is `/data`, which `docker-compose` mounts as a volume.
 
 ## Sync
 
@@ -104,18 +104,18 @@ New env var:
 
 Sync self-heals after a partial failure: a `sync_state` table (per direction) only marks a run complete when it drained without errors, so the next run only trusts the "known id → stop" shortcut after a clean run — otherwise it pages through the full history again rather than permanently skipping older emails.
 
-- `BEA_RESEND_ADMIN_API_KEY` — optional full-access Resend key used for sync. Without it, sync falls back to the sending-only `BEA_RESEND_API_KEY`, and Received emails additionally need inbound receiving enabled on the domain.
+- `RESEND_ADMIN_API_KEY` — optional full-access Resend key used for sync. Without it, sync falls back to the sending-only `RESEND_API_KEY`, and Received emails additionally need inbound receiving enabled on the domain.
 
 ## IMAP ingest
 
 `src/sync/imap-sync.ts` pulls the human inbox (e.g. `hello@` on Proton Mail via Proton Mail Bridge, which is the only way into Proton) into the same `emails` table, so it gets the same enrichment and is served by the same `/api`. `src/sync/index.ts` is the composition root: one lock and one 5-minute schedule for both Resend and IMAP, shared by `POST /api/sync` and the admin "Sync now" button (409 while a run is in progress). Each source fails in isolation — a Resend outage doesn't block IMAP and vice versa — and the enrichment worker is kicked after any new rows.
 
-Env vars (all optional; unset `BEA_IMAP_HOST` → IMAP ingest is off):
+Env vars (all optional; unset `IMAP_HOST` → IMAP ingest is off):
 
-- `BEA_IMAP_HOST`, `BEA_IMAP_PORT` (default `1143`), `BEA_IMAP_USER`, `BEA_IMAP_PASSWORD` — Bridge's per-address credentials. A host without user/password fails fast at startup.
-- `BEA_IMAP_MAILBOXES` — comma-separated, default `INBOX,Spam`. Syncing Proton's Spam folder lets you compare its filter against our classifier; filter with `?mailbox=Spam` (case-insensitive).
-- `BEA_IMAP_TLS_CERT` — PEM of Bridge's self-signed certificate (`\n`-escaped newlines are accepted, so it fits a one-line secret). The cert is the sole trust anchor **and** the presented certificate's SHA-256 fingerprint must equal the pinned one, so a CA certificate configured by mistake can't vouch for anything else. Hostname matching is skipped: Bridge issues for localhost while we connect over the tailnet.
-- `BEA_IMAP_TLS_INSECURE=true` — accept any certificate (one warning at startup). Only acceptable because the path is WireGuard (Tailscale); prefer `BEA_IMAP_TLS_CERT`. Ignored when a cert is set.
+- `IMAP_HOST`, `IMAP_PORT` (default `1143`), `IMAP_USER`, `IMAP_PASSWORD` — Bridge's per-address credentials. A host without user/password fails fast at startup.
+- `IMAP_MAILBOXES` — comma-separated, default `INBOX,Spam`. Syncing Proton's Spam folder lets you compare its filter against our classifier; filter with `?mailbox=Spam` (case-insensitive).
+- `IMAP_TLS_CERT` — PEM of Bridge's self-signed certificate (`\n`-escaped newlines are accepted, so it fits a one-line secret). The cert is the sole trust anchor **and** the presented certificate's SHA-256 fingerprint must equal the pinned one, so a CA certificate configured by mistake can't vouch for anything else. Hostname matching is skipped: Bridge issues for localhost while we connect over the tailnet.
+- `IMAP_TLS_INSECURE=true` — accept any certificate (one warning at startup). Only acceptable because the path is WireGuard (Tailscale); prefer `IMAP_TLS_CERT`. Ignored when a cert is set.
 
 The connection is `STARTTLS` (login is refused if the upgrade fails) and has plain network timeouts (30 s connect, 15 s greeting, 60 s socket inactivity), after which the client is closed, so a stalled Bridge fails the tick instead of holding the sync lock.
 
@@ -129,13 +129,13 @@ The connection is `STARTTLS` (login is refused if the upgrade fails) and has pla
 
 ## Enrichment
 
-Every email is enriched once by the LLM (`src/enrich/`): `category`, `priority`, `actionRequired`, a short `summary`, a `suggestedAction`, `language`, and up to 8 extracted `facts`. A background worker (`src/enrich/worker.ts`) claims up to 10 pending/retryable rows every 30s and enriches them sequentially; it's also kicked immediately after a sync that added new rows. Enrichment reuses the same LLM configuration as the spam classifier (`BEA_LLM_BASE_URL`/`BEA_LLM_API_KEY`/`BEA_LLM_MODEL`, see above) and fails the same way: rows stay `pending` if the LLM isn't configured, and a failed attempt is retried up to 3 times before being left `failed`.
+Every email is enriched once by the LLM (`src/enrich/`): `category`, `priority`, `actionRequired`, a short `summary`, a `suggestedAction`, `language`, and up to 8 extracted `facts`. A background worker (`src/enrich/worker.ts`) claims up to 10 pending/retryable rows every 30s and enriches them sequentially; it's also kicked immediately after a sync that added new rows. Enrichment reuses the same LLM configuration as the spam classifier (`LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL`, see above) and fails the same way: rows stay `pending` if the LLM isn't configured, and a failed attempt is retried up to 3 times before being left `failed`.
 
-`BEA_LLM_*` env vars are read once at process start — changing them requires a restart to take effect.
+`LLM_*` env vars are read once at process start — changing them requires a restart to take effect.
 
 ## API
 
-`GET`/`POST /api/*` — bearer-authenticated JSON API over the stored emails and submissions. Unset `BEA_API_KEY` → every `/api/*` route 404s; a wrong/missing bearer token → `401 { "error": "unauthorized" }`.
+`GET`/`POST /api/*` — bearer-authenticated JSON API over the stored emails and submissions. Unset `API_KEY` → every `/api/*` route 404s; a wrong/missing bearer token → `401 { "error": "unauthorized" }`.
 
 | Method & path                 | Query params                                                                                                                                                                                           | Notes                                                                                                                                               |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -147,9 +147,9 @@ Every email is enriched once by the LLM (`src/enrich/`): `category`, `priority`,
 | `POST /api/sync`              | —                                                                                                                                                                                                      | Runs a Resend + IMAP sync now; `409` if one is already running.                                                                                     |
 
 ```bash
-curl -H "Authorization: Bearer $BEA_API_KEY" "https://<host>/api/emails?direction=inbound&limit=10"
+curl -H "Authorization: Bearer $API_KEY" "https://<host>/api/emails?direction=inbound&limit=10"
 ```
 
 New env var:
 
-- `BEA_API_KEY` — bearer key for `/api/*`, min 16 chars. Unset → the whole `/api/*` prefix 404s.
+- `API_KEY` — bearer key for `/api/*`, min 16 chars. Unset → the whole `/api/*` prefix 404s.

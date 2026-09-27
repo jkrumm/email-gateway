@@ -27,5 +27,5 @@ coverage
 .turbo
 .cache
 
-# SQLite data directory (src/db/client.ts, BEA_DATA_DIR) — compose mounts a volume here
+# SQLite data directory (src/db/client.ts, DATA_DIR) — compose mounts a volume here
 data/

@@ -21,41 +21,50 @@ Renamed from `bun-email-api` on 2026-09-27 to match `research-gateway` and
 
 ## Target
 
-- **Providers as ports.** Proton (Bridge IMAP/SMTP), Gmail, and Resend each
-  sit behind one provider interface for sync, send, and flag changes. A new
-  mailbox means a new adapter, not a new code path.
-- **Postgres, own schema.** Move from SQLite to the shared VPS Postgres under
-  an `email_gateway` schema with its own least-privilege role, following the
-  `argo` pattern (`vps/scripts/sync-pg-schema-from-vps.sh SCHEMA=…`).
-- **Durable jobs.** Sync, enrichment, Jev and outbound sends all run as
-  Postgres-backed jobs with claim, backoff and a terminal state. The Jev queue
-  already works this way, so it becomes the template.
-- **Classification that earns attention.** Each mail gets a category, a spam
-  probability and an importance score. The inbox sorts by "needs me" rather
-  than by date. The LLM and Jev stay side by side until Jev's agreement rate
-  justifies promoting it.
+**The providers stay the source of truth.** Proton (through Bridge) and Gmail
+own the mail. The gateway reads through them live and keeps only what they
+don't have: classifications, the send log, templates and job state. There is
+no full mirror. If the gateway's store is wiped, nothing is lost that a
+re-read cannot rebuild.
+
+- **Providers as ports.** Proton (Bridge IMAP/SMTP), Gmail and Resend each
+  sit behind one provider interface covering list, read, search, flag and
+  send. A new mailbox means a new adapter, not a new code path.
+- **A lean store.** Rows are keyed by provider message ID and hold only
+  derived data: category, spam probability, importance, summary, and the
+  model that decided it. Bodies stay with the provider, with at most a short
+  cache for the reading view. That volume is small enough that SQLite is
+  enough. Postgres earns its place only if another app has to query the data
+  directly.
+- **Durable jobs.** Classification, Jev and outbound sends run as persisted
+  jobs with claim, backoff and a terminal state. The Jev queue already works
+  this way, so it becomes the template.
+- **Classification that earns attention.** The inbox sorts by "needs me"
+  rather than by date. The LLM and Jev stay side by side until Jev's agreement
+  rate justifies promoting it.
 - **Templates managed in the dashboard.** Templates can be previewed and
   test-sent from the UI, and every send is recorded against its template.
 - **A real client.** A React + basalt-ui SPA built with Vite and served by the
   Elysia server itself, so it stays one deployable. It replaces the SSR admin.
 - **An API for agents.** Typed endpoints (and likely an MCP surface) for
-  Hermes: search, read, summarize a thread, list what needs action, draft
-  a reply.
+  Hermes: search, read, summarize a thread, list what needs action, draft a
+  reply.
 
 ## Decisions still open
 
+- **Where it runs.** Leaning: the reading side belongs on the homelab next to
+  Bridge, tailnet-only, because a personal mailbox has no business behind a
+  public hostname. The VPS keeps only the public, stateless send routes
+  (`/fpp`, `/sy-serendipity`, …). That split is either one service deployed
+  twice with feature flags or a thin public relay; decide it before the client
+  is built.
 - **Mirror or mail client?** Today's sync is read-only. Marking mail read,
-  archiving or replying from the dashboard needs write access to the mailbox
-  (IMAP flags/moves through Bridge, the Gmail API). That changes the security
-  model more than any other choice here. Leaning: read-only first, then flags
-  and moves, and sending as me last.
-- **Where it runs.** The whole personal mailbox would live on the public VPS
-  behind Cloudflare. The Bridge is already on the homelab, so a homelab or
-  mini deployment behind the tailnet, with only the Resend send routes public,
-  is worth weighing before the Postgres move pins it down.
+  archiving or replying from the dashboard needs write access (IMAP
+  flags/moves through Bridge, the Gmail API). Leaning: read-only first, then
+  flags and moves, and sending as me last.
 - **Gmail access.** The Gmail API with OAuth gives push, labels and history
   IDs. IMAP with an app password is simpler and fits the existing IMAP port.
   Leaning: the Gmail API.
-- **Env prefix.** `BEA_*` survives the rename on purpose. It goes when
-  `env.ts` is rebuilt for Postgres, at the same point the callers
-  (FPP `BEA_BASE_URL`, sy-serendipity) move to the new hostname.
+- **What happens to today's stored mail.** The current SQLite holds full
+  bodies of synced mail. Under the lean model it shrinks to derived data plus
+  the Resend send log, which exists nowhere else.

@@ -201,7 +201,7 @@ export function createApiRoutes({
 }
 
 export const apiRoutes = createApiRoutes({
-  apiKey: env.BEA_API_KEY,
+  apiKey: env.API_KEY,
   emails: emailsRepo,
   submissions: submissionsRepo,
   imapState: imapStateRepo,

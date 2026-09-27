@@ -20,7 +20,7 @@ COPY --from=builder --chown=app:app /app/src /app/src
 COPY --from=builder --chown=app:app /app/package.json /app/package.json
 
 ENV NODE_ENV=production
-ENV BEA_DATA_DIR=/data
+ENV DATA_DIR=/data
 EXPOSE 3010
 
 USER app

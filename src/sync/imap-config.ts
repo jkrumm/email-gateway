@@ -3,13 +3,13 @@ import type { ImapConfig } from "./imap-port";
 
 type ImapEnv = Pick<
   typeof env,
-  | "BEA_IMAP_HOST"
-  | "BEA_IMAP_PORT"
-  | "BEA_IMAP_USER"
-  | "BEA_IMAP_PASSWORD"
-  | "BEA_IMAP_MAILBOXES"
-  | "BEA_IMAP_TLS_CERT"
-  | "BEA_IMAP_TLS_INSECURE"
+  | "IMAP_HOST"
+  | "IMAP_PORT"
+  | "IMAP_USER"
+  | "IMAP_PASSWORD"
+  | "IMAP_MAILBOXES"
+  | "IMAP_TLS_CERT"
+  | "IMAP_TLS_INSECURE"
 >;
 
 // Undefined when IMAP ingest isn't configured. env.ts already rejected a host
@@ -17,23 +17,19 @@ type ImapEnv = Pick<
 export function imapConfigFromEnv(
   source: ImapEnv = env,
 ): ImapConfig | undefined {
-  if (
-    !source.BEA_IMAP_HOST ||
-    !source.BEA_IMAP_USER ||
-    !source.BEA_IMAP_PASSWORD
-  ) {
+  if (!source.IMAP_HOST || !source.IMAP_USER || !source.IMAP_PASSWORD) {
     return undefined;
   }
 
   return {
-    host: source.BEA_IMAP_HOST,
-    port: source.BEA_IMAP_PORT,
-    user: source.BEA_IMAP_USER,
-    password: source.BEA_IMAP_PASSWORD,
-    mailboxes: source.BEA_IMAP_MAILBOXES.split(",")
+    host: source.IMAP_HOST,
+    port: source.IMAP_PORT,
+    user: source.IMAP_USER,
+    password: source.IMAP_PASSWORD,
+    mailboxes: source.IMAP_MAILBOXES.split(",")
       .map((mailbox) => mailbox.trim())
       .filter(Boolean),
-    tlsCert: source.BEA_IMAP_TLS_CERT,
-    tlsInsecure: source.BEA_IMAP_TLS_INSECURE,
+    tlsCert: source.IMAP_TLS_CERT,
+    tlsInsecure: source.IMAP_TLS_INSECURE,
   };
 }

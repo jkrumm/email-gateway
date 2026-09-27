@@ -1,10 +1,10 @@
 /**
- * Seeds `$BEA_DATA_DIR` with ~40 realistic fake emails (mixed inbound/
+ * Seeds `$DATA_DIR` with ~40 realistic fake emails (mixed inbound/
  * outbound, spread over the last 14 days, done enrichments — a few pending
  * or failed) and ~12 spam-filter submissions, for exercising the admin
  * dashboard locally. Refuses to run against a production database.
  *
- * Usage: BEA_DATA_DIR=/tmp/bea-demo bun run seed:demo
+ * Usage: DATA_DIR=/tmp/bea-demo bun run seed:demo
  */
 import { emailsRepo, submissionsRepo } from "../src/db";
 import type { EnrichmentResult } from "../src/db/emails";
@@ -483,6 +483,4 @@ for (const submission of submissionScenarios) {
 }
 
 console.log(`[seed-demo] seeded ${submissionScenarios.length} submissions`);
-console.log(
-  `[seed-demo] done — data dir: ${process.env.BEA_DATA_DIR ?? "./data"}`,
-);
+console.log(`[seed-demo] done — data dir: ${process.env.DATA_DIR ?? "./data"}`);

@@ -17,7 +17,7 @@ export function timingSafeEqualStrings(a: string, b: string): boolean {
 function isValidBearer(token: string | undefined): boolean {
   if (!token) return false;
 
-  return timingSafeEqualStrings(token, env.BEA_SECRET_KEY);
+  return timingSafeEqualStrings(token, env.SECRET_KEY);
 }
 
 /**

@@ -31,8 +31,8 @@ export const sySerendipityRoutes = withBearerAuth(new Elysia()).post(
       submission: body,
       deliver: async ({ subjectPrefix }) => {
         await sendMail({
-          to: env.BEA_SY_SERENDIPITY_RECEIVER_EMAIL,
-          from: env.BEA_SY_SERENDIPITY_FROM_EMAIL,
+          to: env.SY_SERENDIPITY_RECEIVER_EMAIL,
+          from: env.SY_SERENDIPITY_FROM_EMAIL,
           replyTo: replyToName ? `${replyToName} <${body.email}>` : body.email,
           subject: `${subjectPrefix}SY Serendipity I - Charter Request`,
           template: SySerendipityRequestMail(body),

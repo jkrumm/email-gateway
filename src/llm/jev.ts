@@ -42,9 +42,9 @@ const confidenceSchema = z.object({
 });
 
 export function getJevConfig(): JevConfig | null {
-  const { BEA_JEV_API_KEY, BEA_JEV_MODEL } = env;
-  if (!BEA_JEV_API_KEY) return null;
-  return { apiKey: BEA_JEV_API_KEY, model: BEA_JEV_MODEL };
+  const { JEV_API_KEY, JEV_MODEL } = env;
+  if (!JEV_API_KEY) return null;
+  return { apiKey: JEV_API_KEY, model: JEV_MODEL };
 }
 
 export async function decide<

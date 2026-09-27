@@ -9,12 +9,12 @@ export function getLlmConfig(): {
   apiKey: string;
   model: string;
 } | null {
-  const { BEA_LLM_BASE_URL, BEA_LLM_API_KEY, BEA_LLM_MODEL } = env;
-  if (!BEA_LLM_BASE_URL || !BEA_LLM_API_KEY || !BEA_LLM_MODEL) return null;
+  const { LLM_BASE_URL, LLM_API_KEY, LLM_MODEL } = env;
+  if (!LLM_BASE_URL || !LLM_API_KEY || !LLM_MODEL) return null;
   return {
-    baseURL: BEA_LLM_BASE_URL,
-    apiKey: BEA_LLM_API_KEY,
-    model: BEA_LLM_MODEL,
+    baseURL: LLM_BASE_URL,
+    apiKey: LLM_API_KEY,
+    model: LLM_MODEL,
   };
 }
 

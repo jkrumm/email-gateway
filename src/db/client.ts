@@ -26,12 +26,12 @@ let defaultDatabase: Database | null = null;
 
 function getDefaultDatabase(): Database {
   if (!defaultDatabase) {
-    // Tests set BEA_DATA_DIR=":memory:" so the default singleton never
+    // Tests set DATA_DIR=":memory:" so the default singleton never
     // touches disk; every other value is a directory to store the file in.
     const path =
-      env.BEA_DATA_DIR === ":memory:"
+      env.DATA_DIR === ":memory:"
         ? ":memory:"
-        : join(env.BEA_DATA_DIR, "email-gateway.sqlite");
+        : join(env.DATA_DIR, "email-gateway.sqlite");
     defaultDatabase = openDatabase(path);
   }
   return defaultDatabase;

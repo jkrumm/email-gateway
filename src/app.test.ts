@@ -33,7 +33,7 @@ describe("app", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${process.env.BEA_SECRET_KEY}`,
+          authorization: `Bearer ${process.env.SECRET_KEY}`,
         },
         body: JSON.stringify({}),
       }),

@@ -99,7 +99,7 @@ function getDefaultRunner() {
   const config = imapConfigFromEnv();
   if (config?.tlsInsecure && !config.tlsCert) {
     console.warn(
-      "[imap] BEA_IMAP_TLS_INSECURE=true — the IMAP server certificate is not verified. Only acceptable over a WireGuard/Tailscale path; prefer BEA_IMAP_TLS_CERT.",
+      "[imap] IMAP_TLS_INSECURE=true — the IMAP server certificate is not verified. Only acceptable over a WireGuard/Tailscale path; prefer IMAP_TLS_CERT.",
     );
   }
 
