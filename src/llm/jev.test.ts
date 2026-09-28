@@ -60,6 +60,22 @@ describe("decide", () => {
     expect(answers.tone.score).toBe(1);
   });
 
+  test("never retries at the SDK level — the durable job queue owns retries", async () => {
+    const { model, calls } = fakeJevModel(() => {
+      throw new Error(
+        "The upstream provider is currently experiencing high demand",
+      );
+    });
+
+    await expect(
+      decide({ config, model, state: { subject: "x" }, questions }),
+    ).rejects.toThrow("high demand");
+
+    // maxRetries: 0 means exactly one HTTP-equivalent attempt; a leftover
+    // SDK-level retry would show up here as more than one call.
+    expect(calls).toHaveLength(1);
+  });
+
   test("falls back to the choice's probability when no confidence is reported", async () => {
     for (const providerMetadata of [
       undefined,

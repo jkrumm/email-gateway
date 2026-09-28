@@ -69,6 +69,13 @@ export async function decide<
       createGateway({ apiKey: config.apiKey }).evaluation(config.model),
     state,
     questions,
+    // The durable job queue owns retries and backoff (src/db/jev-queue.ts
+    // today, src/db/jobs.ts from Wave 4) — the SDK's own default (2 retries,
+    // i.e. 3 HTTP requests per judge attempt) tripled the request volume a
+    // Jev 429 burst produced, burning through the queue's attempt budget
+    // faster than the burst itself (2026-09-28 incident). Zero SDK retries:
+    // exactly one HTTP request per attempt.
+    maxRetries: 0,
     abortSignal: AbortSignal.timeout(JEV_HANG_GUARD_MS),
   });
 
