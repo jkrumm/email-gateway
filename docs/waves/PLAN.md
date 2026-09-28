@@ -155,7 +155,7 @@ behaviour change for callers: the existing sync keeps working behind the port.
       moved); the three unused `@fontsource-variable/*` deps (pre-existing,
       unrelated to mail).
 
-## Wave 3 — Jobs module, schema-neutral <!-- status: active -->
+## Wave 3 — Jobs module, schema-neutral <!-- status: done -->
 
 Follows §Jobs, narrowed per the 2026-09-28 validation: the `jobs` table is
 **not** a migration on the live `email-gateway.sqlite` — it would live for
@@ -165,7 +165,7 @@ Wave 4 is the first wave that creates the table for real, in its fresh schema,
 and is also where every consumer (enrichment, both Jev queues, the sync tick,
 sends) actually moves onto it.
 
-- [ ] `src/db/jobs.ts` generalised from `src/db/jev-queue.ts` (same claim-token,
+- [x] `src/db/jobs.ts` generalised from `src/db/jev-queue.ts` (same claim-token,
       backoff ladder, 35-min stale takeover, nine attempts), generic over
       `kind`/`subject_key`/`payload_json`. The module owns its own
       `CREATE TABLE IF NOT EXISTS jobs (...)` DDL and issues it against
@@ -181,29 +181,60 @@ sends) actually moves onto it.
       all-failures-count-an-attempt semantics let a 429 burst burn 17
       submissions to `jev_attempts=8` in 24h. The caller decides what counts
       as rate-limited; jobs.ts stays domain-agnostic.
-- [ ] `src/llm/jev.ts`: set `maxRetries: 0` on the `evaluate()` call — the
+- [x] `src/llm/jev.ts`: set `maxRetries: 0` on the `evaluate()` call — the
       durable queue owns retries, so the AI SDK's own default (2 retries, 3
       HTTP requests per judge attempt) was tripling the request volume a 429
       burst produced. Live fix, independent of the jobs module cutover.
-- [ ] `src/jobs/runner.ts`: one loop, kinds registered as handlers; idle
+- [x] `src/jobs/runner.ts`: one loop, kinds registered as handlers; idle
       watchdog on LLM calls modelled on `research-gateway/src/lib/idle-watchdog.ts`
       (no wall clock, per `rules/agent-limits.md`).
-- [ ] Tests only, against `openDatabase(":memory:")` running the module's own
+- [x] Tests only, against `openDatabase(":memory:")` running the module's own
       DDL: claim/complete/fail, backoff ladder to terminal `failed`, stale
       takeover, boot reap, runner dispatch by kind, jitter bounds, and
       `rateLimited` never spending an attempt regardless of how many times it
       recurs; `src/llm/jev.test.ts` covers `maxRetries: 0` the only way it's
       observable — a rejecting fake model is called exactly once.
-- [ ] README/`AGENTS.md`: note the jobs module exists and is tested but not yet
+- [x] README/`AGENTS.md`: note the jobs module exists and is tested but not yet
       wired to any consumer or to the production schema; point the "two
       containers, one SQLite" invariant at `src/db/jobs.ts` for the future —
       today's queues (`src/db/jev-queue.ts`, the enrichment column-queue, the
       in-memory sync lock) stay authoritative until Wave 4 cuts them over.
       README §Jev shadow mode gets a line on the `maxRetries: 0` fix and the
       429 incident.
-      **Left behind:**
+      **Left behind:** `/review` ran four rounds against this diff.
+      Genuinely real bugs it caught, each fixed with a regression test: a
+      completion-write failure retrying already-succeeded work (the write
+      moved outside the handler's own try/catch, mirroring
+      `src/jev/worker.ts`'s `drainQueue`); claims never renewed, so any
+      handler outliving `JOB_STALE_CLAIM_MS` lost its claim mid-run (added
+      `renewClaim` + a runner-side lease-renewal interval); a single corrupt
+      `payload_json` row aborting an entire drain pass (parsing moved inside
+      `claimNext`'s own guarded loop); `next_attempt_at`/`finished_at`
+      computed from claim time instead of actual completion time for a
+      long-running handler (the post-handler write now reads a fresh clock);
+      every DB write in the runner left unguarded against `SQLITE_BUSY`
+      during the documented two-container deploy overlap (renewal, fail,
+      complete, and the corrupt-payload fail are all try/catch, log-and-
+      continue now); `claimNext({ kinds: [] })` silently matching any kind
+      instead of none; a missing `renewIntervalMs` sanity check against
+      `JOB_STALE_CLAIM_MS`; the idle watchdog not arming until the caller's
+      first `arm()` call, missing a hang before any progress signal.
+      `src/jobs/runner.ts`'s `runOnce` grew complex enough from these guards
+      that fallow flagged it (cyclomatic 10, 96 lines) — extracted
+      `startClaimRenewal`/`recordOutcome`/`claimForHandlers` as named helpers,
+      no behaviour change, complexity finding cleared. One finding
+      (`escapeLikePattern` allegedly not escaping its matched character) was
+      raised by three separate review rounds and is **false** — verified
+      directly against `bun:sqlite` with a real `LIKE ... ESCAPE` query
+      matching only the intended rows; kept as-is. Still open, judged
+      Wave-4-scoped rather than Wave-3 bugs: splitting the pure backoff/jitter
+      functions into their own module ahead of the `jev-queue.ts` dedup;
+      typing job payloads per kind (zod is already in the stack); whether a
+      permanently rate-limited job should ever escalate past its 1-minute
+      floor; and `reapOwnStaleClaims`'s hostname-only matching, which is why
+      Wave 4's header below makes hostname uniqueness a named prerequisite.
 
-## Wave 4 — Lean store cutover <!-- status: pending -->
+## Wave 4 — Lean store cutover <!-- status: active -->
 
 Follows §Lean store and D4. The new store is a **new file**
 `${DATA_DIR}/mail.sqlite` with its own migrations from version 1; the old
