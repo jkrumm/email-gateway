@@ -6,8 +6,8 @@
     "client"
   ],
   "scripts": {
-    "start": "doppler run -- bun run src/index.ts",
-    "dev": "doppler run -- bun run --watch src/index.ts",
+    "start": "secrets-run run --env-file=.env.tpl -- bun run src/index.ts",
+    "dev": "secrets-run run --env-file=.env.tpl -- bun run --watch src/index.ts",
     "email": "email dev --dir src/emails",
     "seed:demo": "bun run scripts/seed-demo.ts",
     "import-legacy": "bun run scripts/import-legacy.ts",

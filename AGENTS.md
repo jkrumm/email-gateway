@@ -33,7 +33,7 @@ by Elysia at `/app` from `client/dist` · zod 4 · TypeScript strict,
 
 ```bash
 bun install --frozen-lockfile
-bun run dev            # watch mode (doppler run — dev secrets, see Local dev)
+bun run dev            # watch mode (secrets-run + .env.tpl — dev secrets, see Local dev)
 bun run typecheck      # tsc --noEmit for the server, then the client workspace
 bun test               # bun test, preload src/test/setup.ts (in-memory DB, dummy env)
 bun run test               # bun test, preload src/test/setup.ts (in-memory DB, dummy env)
@@ -43,6 +43,7 @@ bun run format:check   # prettier — the gate runs this, run `bun run format` b
 bun run email          # react-email preview of src/emails
 bun run seed:demo      # fake submissions into the old email-gateway.sqlite (refuses NODE_ENV=production)
 bun run import-legacy  # one-shot: copy the old store's submissions into mail.sqlite
+make check             # format:check + typecheck + test in one shot; `make help` lists every target
 ```
 
 Gate for every change: `/check` (format:check, typecheck, `bun test`, fallow),
@@ -105,16 +106,29 @@ security-headers middlewares, `/health` check, Uptime Kuma monitor). Secrets:
 lives on the homelab (`homelab/docs/proton-bridge.md`), IMAP only, on the
 tailnet; the tailnet ACL grants VPS → homelab `tcp:1143`. Gmail joins directly
 from the container (`imap.gmail.com:993`, app password). **No backup covers
-`/var/lib/email-gateway` yet.** Not wired in prod today: `RESEND_ADMIN_API_KEY`,
-`IMAP_TLS_CERT` (runs `IMAP_TLS_INSECURE=true`), `IMAP_MAILBOXES`,
-`GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` (awaiting the app password).
+`/var/lib/email-gateway` yet** — `scripts/backup.ts` (VACUUM INTO snapshot +
+prune, warden's pattern) is unit-tested; `scripts/backup.sh` (container
+discovery + the off-box rsync) has no test harness in this repo and needs a
+manual dry-run before trusting it unattended. Neither is installed on the
+VPS: the cron entry needs a tailnet ACL
+grant (`tag:vps → tag:homelab tcp:22`) this repo cannot add on its own. See
+`docs/vps-cutover.md` for the exact grant and cron entry. Not wired in prod
+today: `RESEND_ADMIN_API_KEY`, `IMAP_TLS_CERT` (runs `IMAP_TLS_INSECURE=true`),
+`IMAP_MAILBOXES`, `GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` (awaiting the app
+password) — `docs/vps-cutover.md` has the ready-to-apply `.env.tpl`/
+`compose.yml` changes for all of these plus the tailnet-only `MAIL_HOST` door.
 
 ## Local dev
 
-`doppler.yaml` (project `email-gateway`, config `dev`) feeds `bun run dev` — the
-only repo in the workspace still on Doppler; the siblings use `secrets-run` +
-`.env.tpl`, and the move is a planned wave. `src/test/setup.ts` sets dummy
-required env and `DATA_DIR=":memory:"`, so tests never need secrets.
+`.env.tpl` + `secrets-run` (same vault the VPS deploy reads —
+`vps/apps/email-gateway/.env.tpl` — since this is a solo project with no
+separate dev secret set) feeds `bun run dev` / `make dev`, matching the
+siblings. Proton IMAP ingest is deliberately unreachable from here: the
+tailnet ACL grants only VPS → homelab `tcp:1143`, not the mini — verify
+IMAP-touching changes against the live production container instead (Wave
+4/5's `ssh vps` + `docker exec` probe pattern in `docs/waves/PLAN.md`).
+`src/test/setup.ts` sets dummy required env and `DATA_DIR=":memory:"`, so
+tests never need secrets.
 
 ## File map
 
@@ -244,7 +258,9 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   singletons, `createApiRoutes`'s own DI style). `src/test/` fakes and setup;
   `scripts/seed-demo.ts` (submissions-only fixtures for the old store),
   `scripts/import-legacy.ts` (one-shot: old store's `submissions` →
-  `mail.sqlite`)
+  `mail.sqlite`), `scripts/backup.ts` + `scripts/backup.sh` (Wave 9: VACUUM
+  INTO snapshot + off-box rsync — runs on the VPS via cron, not from a dev
+  checkout; see `docs/vps-cutover.md`)
 - `src/mcp/plugin.ts` (`createMcpRoutes`/`mcpRoutes`, Wave 8): the `/mcp` door
   onto the same `createAgentApi` service layer, `@modelcontextprotocol/server`
   2.0.0 `createMcpHandler` (per-request `McpServer`, `responseMode: 'sse'`,

@@ -11,10 +11,18 @@ Bun workspace of this package, so one install covers both):
 bun install --frozen-lockfile
 ```
 
+Secrets are resolved from 1Password via `secrets-run` (the `.env.tpl` at the
+repo root — a plain KEY=op://ref list, same vault the VPS deploy reads since
+this is a solo project with no separate dev secret set). Proton IMAP ingest
+stays disabled locally: the tailnet ACL only grants the VPS reaching Bridge,
+not the mini — see `.env.tpl`'s comment and `AGENTS.md`.
+
 To run:
 
 ```bash
 bun run start
+# or
+make dev
 ```
 
 Other scripts:
@@ -29,6 +37,9 @@ bun run client:dev        # Vite dev server for the client (proxies /api to bun 
 bun run format             # prettier --write .
 bun run format:check       # prettier --check .
 ```
+
+`make check` runs format:check + typecheck + test in one shot; `make help`
+lists every target.
 
 This project was created using `bun init` in bun v1.0.7. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
 
