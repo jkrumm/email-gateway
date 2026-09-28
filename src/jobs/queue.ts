@@ -33,8 +33,8 @@ export const jobQueue: JobQueue = new Proxy({} as JobQueue, {
 });
 
 // The literal `{ kind: "sync_tick", payload: {}, subjectKey: "tick" }` is
-// duplicated across src/jobs/register.ts's periodic timer, the admin
-// `POST /admin/sync` route and the API `POST /api/sync` route. The "tick"
+// duplicated across src/jobs/register.ts's periodic timer and the API
+// `POST /api/sync` route. The "tick"
 // subjectKey is load-bearing (docs/architecture.md §Jobs's "only one
 // sync_tick ever pending" invariant) — one shared helper keeps every call
 // site from drifting.

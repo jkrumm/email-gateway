@@ -1,0 +1,124 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Alert,
+  Badge,
+  Card,
+  Group,
+  Loader,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  Title,
+} from "@mantine/core";
+import { getStats, listAccounts } from "../lib/api";
+import { formatDate } from "../lib/format";
+
+export const Route = createFileRoute("/accounts")({ component: AccountsPage });
+
+function AccountsPage() {
+  const accountsQuery = useQuery({
+    queryKey: ["accounts"],
+    queryFn: listAccounts,
+  });
+  const statsQuery = useQuery({ queryKey: ["stats"], queryFn: getStats });
+
+  if (accountsQuery.isError || statsQuery.isError) {
+    return <Alert color="red">Could not load account health.</Alert>;
+  }
+  if (accountsQuery.isLoading || statsQuery.isLoading) return <Loader />;
+
+  const accounts = accountsQuery.data ?? [];
+  const stats = statsQuery.data;
+
+  return (
+    <Stack>
+      <Title order={2}>Accounts &amp; health</Title>
+
+      {stats ? (
+        <SimpleGrid cols={{ base: 1, sm: 3 }}>
+          <Card withBorder padding="md">
+            <Text size="sm" c="dimmed">
+              Messages (30d)
+            </Text>
+            <Text fz={28} fw={600}>
+              {stats.messages.total}
+            </Text>
+            <Text size="xs" c="dimmed">
+              {stats.messages.inbound} in / {stats.messages.outbound} out
+            </Text>
+          </Card>
+          <Card withBorder padding="md">
+            <Text size="sm" c="dimmed">
+              Jobs pending
+            </Text>
+            <Text fz={28} fw={600}>
+              {stats.jobs.pending}
+            </Text>
+            <Text size="xs" c="dimmed">
+              {stats.jobs.failed} failed
+            </Text>
+          </Card>
+          <Card withBorder padding="md">
+            <Text size="sm" c="dimmed">
+              Accounts
+            </Text>
+            <Text fz={28} fw={600}>
+              {accounts.length}
+            </Text>
+          </Card>
+        </SimpleGrid>
+      ) : null}
+
+      <Card withBorder padding="md">
+        <Group justify="space-between" mb="sm">
+          <Title order={4}>Configured accounts</Title>
+        </Group>
+        <Table>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Provider</Table.Th>
+              <Table.Th>Address</Table.Th>
+              <Table.Th>Last success</Table.Th>
+              <Table.Th>Last error</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {accounts.map((account) => {
+              const stored = stats?.accounts.find(
+                (entry) => entry.id === account.id,
+              );
+              return (
+                <Table.Tr key={account.id}>
+                  <Table.Td>
+                    <Badge variant="light">{account.provider}</Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">{account.address}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">
+                      {formatDate(stored?.lastSuccessAt ?? null)}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    {stored?.lastError ? (
+                      <Text size="sm" c="red">
+                        {stored.lastError}
+                      </Text>
+                    ) : (
+                      <Text size="sm" c="dimmed">
+                        none
+                      </Text>
+                    )}
+                  </Table.Td>
+                </Table.Tr>
+              );
+            })}
+          </Table.Tbody>
+        </Table>
+      </Card>
+    </Stack>
+  );
+}

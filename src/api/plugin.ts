@@ -2,6 +2,13 @@ import { Elysia, t } from "elysia";
 import { timingSafeEqualStrings } from "../auth";
 import { env } from "../env";
 import {
+  handleCookieSignatureError,
+  isSameOrigin,
+  isSessionValue,
+  sessionCookieOptions,
+  sessionSecret,
+} from "../session";
+import {
   accountsRepo as defaultAccounts,
   messagesRepo as defaultMessages,
   mailSubmissionsRepo as defaultMailSubmissions,
@@ -220,6 +227,7 @@ const moveBody = t.Object({
 
 export function createApiRoutes({
   apiKey,
+  session,
   messages = defaultMessages,
   mailSubmissions = defaultMailSubmissions,
   accounts = defaultAccounts,
@@ -228,6 +236,10 @@ export function createApiRoutes({
   configuredProviders = defaultConfiguredProviders,
 }: {
   apiKey: string | undefined;
+  // When set, a same-origin request carrying the /app session cookie is
+  // accepted as an alternative to the bearer — that is how the browser client
+  // reads data. The bearer contract for agents is unchanged.
+  session?: { secret: string; now?: () => number };
   messages?: MessagesRepo;
   mailSubmissions?: MailSubmissionsRepo;
   accounts?: AccountsRepo;
@@ -235,7 +247,7 @@ export function createApiRoutes({
   providerFor?: (accountId: string) => MailProvider | null;
   configuredProviders?: () => MailProvider[];
 }) {
-  const configured = apiKey !== undefined;
+  const configured = apiKey !== undefined || session !== undefined;
 
   // Shared by /messages/:key/flags and /messages/:key/move: both need the
   // same message → location → provider chain before doing anything specific.
@@ -261,8 +273,15 @@ export function createApiRoutes({
     return { ok: true, location, provider };
   }
 
-  return new Elysia({ prefix: "/api" })
-    .onBeforeHandle(({ headers, set }) => {
+  return new Elysia(
+    session
+      ? {
+          prefix: "/api",
+          cookie: sessionCookieOptions(session.secret),
+        }
+      : { prefix: "/api" },
+  )
+    .onBeforeHandle(({ headers, request, cookie, set }) => {
       if (!configured) {
         set.status = 404;
         return { error: "not_found" };
@@ -273,13 +292,29 @@ export function createApiRoutes({
         ? authorization.slice("Bearer ".length)
         : undefined;
 
-      if (!token || !timingSafeEqualStrings(token, apiKey)) {
-        set.status = 401;
-        set.headers["WWW-Authenticate"] =
-          `Bearer realm='api', error="invalid_token"`;
-        return { error: "unauthorized" };
+      if (
+        token &&
+        apiKey !== undefined &&
+        timingSafeEqualStrings(token, apiKey)
+      )
+        return;
+
+      // Browser door: the signed /app session cookie, same-origin only. A
+      // tampered cookie is rejected by Elysia before this runs (see onError).
+      if (
+        session &&
+        isSameOrigin(request) &&
+        isSessionValue(cookie?.session?.value, (session.now ?? Date.now)())
+      ) {
+        return;
       }
+
+      set.status = 401;
+      set.headers["WWW-Authenticate"] =
+        `Bearer realm='api', error="invalid_token"`;
+      return { error: "unauthorized" };
     })
+    .onError(({ error, set }) => handleCookieSignatureError(error, set))
     .get("/accounts", () =>
       configuredProviders().map((provider) => ({
         id: accountIdFor(provider),
@@ -547,4 +582,9 @@ export function createApiRoutes({
     );
 }
 
-export const apiRoutes = createApiRoutes({ apiKey: env.API_KEY });
+const apiSessionSecret = sessionSecret(env.ADMIN_PASSWORD, env.COOKIE_SECRET);
+
+export const apiRoutes = createApiRoutes({
+  apiKey: env.API_KEY,
+  session: apiSessionSecret ? { secret: apiSessionSecret } : undefined,
+});

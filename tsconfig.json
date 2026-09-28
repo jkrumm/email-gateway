@@ -16,5 +16,6 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true
-  }
+  },
+  "exclude": ["client", "node_modules", "data"]
 }

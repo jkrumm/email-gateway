@@ -2,8 +2,8 @@ import type { Resend } from "resend";
 
 // The subset of the Resend SDK this repo's send + history-read paths use.
 // Defined via Pick against the real SDK class so the response/option types
-// stay in sync with whatever `resend` (or a test fake) provides. Named here,
-// not in src/admin/, so the provider layer doesn't depend upward on admin.
+// stay in sync with whatever `resend` (or a test fake) provides. Named in the
+// provider layer, so it never depends upward on the web/api layer.
 export type ResendClient = {
   emails: Pick<Resend["emails"], "list" | "get"> & {
     receiving: Pick<Resend["emails"]["receiving"], "list" | "get">;

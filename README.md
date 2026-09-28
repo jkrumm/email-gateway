@@ -4,7 +4,8 @@ The single door to all of my email: Proton Mail (Bridge), Gmail (IMAP) and Resen
 
 ## Local Development
 
-To install dependencies (uses the committed `bun.lock`):
+To install dependencies (uses the committed `bun.lock`; the `client/` SPA is a
+Bun workspace of this package, so one install covers both):
 
 ```bash
 bun install --frozen-lockfile
@@ -21,8 +22,10 @@ Other scripts:
 ```bash
 bun run dev              # watch mode
 bun run email             # preview email templates (src/emails)
-bun run typecheck         # tsc --noEmit
+bun run typecheck         # tsc --noEmit for the server and the client workspace
 bun test                  # run tests
+bun run build             # build the client SPA into client/dist
+bun run client:dev        # Vite dev server for the client (proxies /api to bun run dev)
 bun run format             # prettier --write .
 bun run format:check       # prettier --check .
 ```
@@ -68,13 +71,30 @@ Env vars (all optional):
 
 Jev is called through the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) with the AI SDK's experimental `evaluate` (`src/llm/jev.ts`); no extra dependency. Choice confidence comes from the provider metadata Jev returns (falling back to the chosen option's probability).
 
-## Admin UI
+## Client
 
-`GET /admin` — a server-rendered, zero-JS dashboard behind HTTP Basic auth (user `admin`), styled with `basalt-ui` tokens (automatic light/dark via `prefers-color-scheme`). The Overview, Inbox and email-detail pages were retired in Wave 4's lean-store cutover along with the old `emails`/`email_enrichments` tables they read from; what's left until Wave 6 replaces the SSR admin with the React client (`docs/architecture.md` §Client): Spam filter (every judged submission, `POST /admin/sync` enqueues a `sync_tick` job) and Templates (previews of the registered email templates). `GET /admin` redirects to `/admin/submissions`. All filtering happens through GET query params; the `Sync now` POST is guarded by a same-origin check. Dates are formatted in German (`Europe/Berlin`).
+`GET /app` — the React SPA (Vite + React 19 + basalt-ui) served by the same Elysia process from `client/dist` (built by the Dockerfile's client stage, never a dev server). It replaces the retired SSR admin; `/admin` now 302s to `/app`. Pages:
 
-- `ADMIN_PASSWORD` — Basic auth password, min 12 chars. Unset → every `/admin` route returns 404.
-- `bun run seed:demo` (refuses to run with `NODE_ENV=production`) seeds `$DATA_DIR`'s old `email-gateway.sqlite` with fake spam-filter submissions for exploring the Submissions page locally.
-- `bun run import-legacy` (`scripts/import-legacy.ts`) is a one-shot, idempotent copy of `email-gateway.sqlite`'s `submissions` table into the new `mail.sqlite` — see §Storage below. Not run automatically; invoke it once during the cutover.
+- **Inbox** — messages across every account, sorted by "needs me" first, with an account chip per row and category / priority / unread / action-required filters.
+- **Message view** — live read through the provider (`GET /api/messages/:key?include=body`), the HTML body rendered in a sandboxed `<iframe sandbox="">`, the classification panel, and mark read/unread, star, archive, spam and trash via the flag/move endpoints.
+- **Submissions** — the spam-filter decisions (`getJevComparison` verdicts beside the LLM's), ported from the old SSR page.
+- **Accounts & health** — every configured account plus per-account sync health and the job queue counts.
+
+Auth: `POST /app/login` with `{ password }` checks `ADMIN_PASSWORD` and sets a signed, HttpOnly, `SameSite=Strict` session cookie (Elysia core cookie, signed with `COOKIE_SECRET` or, when unset or shorter than 12 chars, `ADMIN_PASSWORD`); the signed payload carries its own 30-day expiry, validated server-side by both `/app` and `/api`; `POST /app/logout` clears it. The browser's same-origin `/api` calls are accepted through that cookie; agent bearer auth is unchanged. Session mutations require a same-origin request (`Sec-Fetch-Site` / `Origin`), the same check the SSR admin used. `/api` and future `/mcp` stay bearer-first.
+
+`MAIL_HOST` — when set, `/app` and `/api` answer only on that hostname; the send routes and `/health` stay reachable on any Host. Unset in dev and in prod until Wave 9 sets it, so today it is a no-op. A mismatching Host 404s the mail surface.
+
+Client build:
+
+```bash
+bun run build           # cd client && vite build  -> client/dist
+bun run client:dev      # Vite dev server on 5173, proxying /api and the /app session routes
+```
+
+- `COOKIE_SECRET` — optional signing secret for the session cookie. Defaults to `ADMIN_PASSWORD` when unset or shorter than 12 chars.
+- `MAIL_HOST` — optional; the only hostname allowed to serve `/app` and `/api`.
+
+`bun run seed:demo` (refuses to run with `NODE_ENV=production`) seeds `$DATA_DIR`'s old `email-gateway.sqlite` with fake spam-filter submissions for exploring the Submissions page locally. `bun run import-legacy` (`scripts/import-legacy.ts`) is the one-shot legacy import — see §Storage below.
 
 ## Storage
 

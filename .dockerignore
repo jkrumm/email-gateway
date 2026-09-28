@@ -5,6 +5,9 @@
 # Dependencies (reinstalled in the builder stage)
 **/node_modules
 
+# The client SPA is rebuilt in its own stage; never ship a stale local build.
+client/dist
+
 # VCS — nothing reads git metadata at build time
 .git
 .gitignore

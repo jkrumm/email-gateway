@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { envSchema } from "./env";
+import { envSchema, parseEnv } from "./env";
 import { CERT_A } from "./test/certs";
 
 const base = {
@@ -74,6 +74,27 @@ describe("IMAP env validation", () => {
       );
     }
     expect(envSchema.parse({ ...base, IMAP_PORT: "993" }).IMAP_PORT).toBe(993);
+  });
+});
+
+describe("MAIL_HOST validation", () => {
+  test("unset is allowed, but an empty string is not", () => {
+    expect(envSchema.safeParse(base).success).toBe(true);
+
+    const empty = envSchema.safeParse({ ...base, MAIL_HOST: "" });
+    expect(empty.success).toBe(false);
+    expect(empty.error?.issues.map((issue) => issue.path.join("."))).toEqual([
+      "MAIL_HOST",
+    ]);
+  });
+
+  test("parseEnv fails a present-but-empty MAIL_HOST, yet an absent one is unset", () => {
+    // The schema's min(1) alone is not enough: parseEnv strips "" to unset
+    // before parsing, so this is the guard that actually fires on the raw env.
+    expect(() => parseEnv({ ...base, MAIL_HOST: "" })).toThrow(
+      "MAIL_HOST must not be empty",
+    );
+    expect(parseEnv(base).MAIL_HOST).toBeUndefined();
   });
 });
 

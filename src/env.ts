@@ -56,6 +56,15 @@ export const envSchema = z
     JEV_API_KEY: z.string().optional(),
     JEV_MODEL: z.string().default("typesafe-ai/jev"),
     ADMIN_PASSWORD: z.string().optional(),
+    // Signing secret for the /app session cookie. Falls back to
+    // ADMIN_PASSWORD when unset or shorter than 12 chars (src/session.ts's
+    // sessionSecret), so there is no new required secret and a weak override
+    // can't become the signing key.
+    COOKIE_SECRET: z.string().optional(),
+    // When set, the mail surface (/app, /api) answers only on this hostname;
+    // unset -> reachable on any Host. Dev and prod leave it unset until Wave 9.
+    // An empty string must be a validation error, not a silent gate bypass.
+    MAIL_HOST: z.string().min(1).optional(),
     // Full-access key for the admin UI's list/get calls; the send path keeps
     // the sending-only RESEND_API_KEY.
     RESEND_ADMIN_API_KEY: z.string().optional(),
@@ -130,11 +139,23 @@ export const envSchema = z
     }
   });
 
-function parseEnv() {
+export function parseEnv(
+  environment: Record<string, string | undefined> = process.env,
+) {
   // Compose interpolates an unset `${VAR}` to "", which must read as unset —
-  // otherwise optional vars with a min length crash-loop the container.
+  // otherwise optional vars with a min length crash-loop the container. The
+  // one exception is MAIL_HOST: a present-but-empty value would read as unset
+  // and silently disable the mail-surface host gate (src/host-gate.ts), which
+  // is exactly the bypass the schema's min(1) cannot catch once the strip has
+  // run, so it is checked against the raw env before the generic strip.
+  if (environment.MAIL_HOST === "") {
+    throw new Error(
+      "Invalid environment variables:\n  - MAIL_HOST: MAIL_HOST must not be empty",
+    );
+  }
+
   const definedEnv = Object.fromEntries(
-    Object.entries(process.env).filter(([, value]) => value !== ""),
+    Object.entries(environment).filter(([, value]) => value !== ""),
   );
   const result = envSchema.safeParse(definedEnv);
 

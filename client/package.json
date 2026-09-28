@@ -1,0 +1,36 @@
+{
+  "name": "email-gateway-client",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "pretypecheck": "tsr generate",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@elysia/eden": "1.4.10",
+    "@fontsource-variable/hubot-sans": "5.2.8",
+    "@fontsource-variable/jetbrains-mono": "5.2.8",
+    "@fontsource-variable/nunito-sans": "5.2.7",
+    "@mantine/core": "9.6.2",
+    "@mantine/hooks": "9.6.2",
+    "@tanstack/react-query": "5.103.2",
+    "@tanstack/react-router": "1.170.39",
+    "@tanstack/react-router-devtools": "1.167.2",
+    "basalt-ui": "1.30.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tanstack/router-cli": "1.167.38",
+    "@tanstack/router-plugin": "1.168.40",
+    "@types/bun": "1.4.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.1"
+  }
+}

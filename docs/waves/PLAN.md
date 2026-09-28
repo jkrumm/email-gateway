@@ -557,7 +557,7 @@ verification against a real Gmail mailbox is not a checkbox step of this wave
       Gmail mailbox, once the app password is in 1Password — not a blocker,
       per this wave's own header.
 
-## Wave 6 — Client shell + the tailnet host gate <!-- status: active -->
+## Wave 6 — Client shell + the tailnet host gate <!-- status: done -->
 
 Moved down from Wave 5 (validation 2026-09-28) so the inbox is built against
 both Proton and Gmail from the start. Follows §Client. Pattern:
@@ -572,32 +572,119 @@ hostname for three more waves. Only the code moves — the tailnet DNS record,
 the second Traefik router and publishing the hostname stay Wave 9
 (outward-facing, another repo's deploy path).
 
-- [ ] `MAIL_HOST` env: the app serves `/app`, `/api` (and `/mcp` once it
+- [x] `MAIL_HOST` env: the app serves `/app`, `/api` (and `/mcp` once it
       exists, Wave 8) only when `Host` matches it, and serves the send routes + `/health` on any host; tests for both doors. Unset in dev and in prod
       until Wave 9 sets it, so this is a no-op until then.
-- [ ] `client/` Vite + React + basalt-ui app: `basaltViteConfig` from
+- [x] `client/` Vite + React + basalt-ui app: `basaltViteConfig` from
       `basalt-ui/vite`, TanStack Router (file routes) + TanStack Query, Eden
       Treaty typed against the Elysia app, `BasaltProvider` with the
       `.layer.css` import order; a `.test` port in `dotfiles/config/Caddyfile`
       (own commit there is outward-facing → note it, do not push dotfiles).
-- [ ] Serve `client/dist` from Elysia at `/app` (`@elysia/static`,
+- [x] Serve `client/dist` from Elysia at `/app` (`@elysia/static`,
       `alwaysStatic`, explicit `/app/*` catch-all → `index.html`; hashed assets
       long-cached, `index.html` not); Dockerfile gains the client build stage.
-- [ ] Session auth: `POST /app/login` with `ADMIN_PASSWORD` → signed HttpOnly
+- [x] Session auth: `POST /app/login` with `ADMIN_PASSWORD` → signed HttpOnly
       `SameSite=Strict` cookie (Elysia core cookie), same-origin check on
       mutations, logout; `/api` and later `/mcp` stay bearer.
-- [ ] Pages: Inbox sorted by "needs me", merged across both accounts with an
+- [x] Pages: Inbox sorted by "needs me", merged across both accounts with an
       account chip (category, priority, action_required, unread) with filters;
       Message view (live read, sandboxed HTML iframe, classification panel,
       mark read/unread, star, archive, spam, trash via the flag/move
       endpoints); Submissions; Accounts/health (sync state per account, queue
       by kind, IMAP health).
-- [ ] Delete the remaining SSR admin (`src/admin/`), `/admin` → 302 `/app`;
+- [x] Delete the remaining SSR admin (`src/admin/`), `/admin` → 302 `/app`;
       README §Admin UI → §Client, `MAIL_HOST` documented; `AGENTS.md` stack +
       file map.
-      **Left behind:**
+      **Left behind:** Built across four in-place `mcp__sideclaw__dispatch`
+      episodes plus two rounds of hand fixes (the fastest lane the `/wave`
+      skill names still needed real iteration here — a new subproject with a
+      typed cross-package client is a different risk profile than the
+      schema/backend waves before it). Three `/review` rounds ran: round 1
+      (5 blocking) caught the Eden-typed-client premise being broken at three
+      layers at once — `createApp`'s `AnyElysia` widening threw away `App`'s
+      route types, `client/`'s own separate `elysia` install made
+      `treaty<App>()` structurally fail even at the same version (no
+      workspace relationship to root), and the client was never typechecked
+      anywhere so neither was caught — plus a session cookie with no
+      server-side expiry and an empty-`COOKIE_SECRET` edge case that desynced
+      `/app` and `/api` auth. Round 2 (5 more) was mostly round 1's own
+      fallout: `src/web/plugin.ts` built its routes as separate statements
+      instead of one chained expression (Elysia route methods return a new
+      typed instance per call, so `webRoutes` still carried zero route types
+      into `App` even after the `createApp` fix), the client's route tree
+      (`routeTree.gen.ts`, gitignored) isn't generated before a bare `tsc`
+      run on a clean checkout, no Bun ambient types for the client's
+      transitive server imports, a bare `React.FormEvent` UMD reference, and
+      — the one with real security weight — `MAIL_HOST`'s new `.min(1)`
+      validation never actually fired, because `parseEnv()` strips every
+      empty-string env var to "unset" _before_ schema validation (deliberate,
+      for Compose's `${VAR}`→`""` interpolation of unset vars), so a
+      Compose-interpolated empty `MAIL_HOST=` still silently disabled the
+      host gate exactly as the added comment claimed it wouldn't; fixed by
+      special-casing `MAIL_HOST=""` in `parseEnv` ahead of the generic strip.
+      Round 3 came back `actionable` (not `needs-human` — the structural
+      Eden-typing fix held) with 5 more findings, two fixed by hand after the
+      round: Inbox defaulted `needsMe` to `true`, filtering the list down to
+      only action-required mail instead of the plan's actual ask ("sorted by
+      needs me" — the comparator already ranked it first, the default just
+      needed to flip to `false`); and `/api`'s `configured` guard only
+      checked `apiKey !== undefined`, so a deployment with `ADMIN_PASSWORD`/
+      `COOKIE_SECRET` set but no agent `API_KEY` could log into `/app` and
+      then get a 404 on every `/api` read the SPA makes — fixed to
+      `apiKey !== undefined || session !== undefined` (and the resulting
+      `apiKey: string | undefined` passed into `timingSafeEqualStrings`,
+      which takes `string`, needed an explicit guard once `configured` could
+      be true with `apiKey` still unset).
 
-## Wave 7 — Templates and the send log <!-- status: pending -->
+      Three findings from round 3 are accepted as known gaps, matching this
+      plan's own pattern (Wave 4/5's "Known gaps" in `docs/architecture.md`)
+      rather than open-ended this wave further — each was already flagged as
+      a **design decision**, not a regression, back in round 1's discussions:
+      (1) Inbox/Submissions fetch a flat `limit: 100`/`50` page and never
+      follow `nextCursor`, so an account whose matching set exceeds that is
+      silently truncated with no "more below" indicator — needs a
+      cursor-pagination or infinite-scroll design, not a one-line fix.
+      (2) Message-view move targets (`Archive`/`Spam`/`Trash`) are literal
+      IMAP paths; Gmail's are localized (`[Gmail]/…`, per `src/env.ts`'s own
+      comment), so moving a Gmail message today targets a folder that
+      doesn't exist — needs a special-use mapping or deriving targets from
+      the account's own mailbox list. (3) `POST /app/login` has no rate
+      limiting, and `sessionSecret` falls back to signing cookies with the
+      same `ADMIN_PASSWORD` when `COOKIE_SECRET` is unset — a successful
+      brute force both authenticates and lets the attacker mint session
+      cookies. Not a regression (the retired SSR admin's Basic auth had the
+      same unthrottled exposure on the same public-tunnel hostname), and
+      `MAIL_HOST` moving this surface off the tunnel is explicitly Wave 9's
+      job — worth adding a throttle (the existing `jobs`-rate-limit machinery
+      is queue-shaped, not request-shaped, so this needs its own design) no
+      later than Wave 9, sooner if the mail surface stays on the tunnel
+      longer than expected.
+
+      Also accepted, not fixed: several `/review` "improvements" votes for
+      tightening the Eden client further (drop the `as unknown as X` double
+      casts in `client/src/lib/api.ts` once trusting Eden's own narrowing;
+      reuse the server's exported types instead of the small remaining
+      hand-duplicated ones in `client/src/lib/types.ts`), missing `onError`
+      handlers on the flag/move mutations (silent failure, no UI feedback),
+      and the Dockerfile's runner-stage comment claiming a slim runtime that
+      Bun's workspace hoisting doesn't actually produce (client deps still
+      land in the one shared `node_modules` the runner copies — correct
+      behaviourally, misleading comment). None block the surface working
+      correctly today; picked up whenever someone is next in these files.
+
+      `fallow`'s residual findings — the two pre-existing, in-code-documented
+      duplicate query-schema clone groups in `src/api/plugin.ts`
+      (`messagesListQuery`/`emailsListQuery`, `/flags`/`/move` validation,
+      unchanged by this wave) and moderate (cyclomatic 5-7) complexity on the
+      four route-page components (`InboxPage`, `AccountsPage`,
+      `SubmissionsPage`, `MessagePage`, all well under the CRITICAL threshold
+      the first fixup round brought `MessagePage` down from) — are triaged as
+      not worth another round, matching every prior wave's own precedent in
+      this plan (Wave 2/3/4/5) for `fallow` output specifically. `/check` is
+      green on format, typecheck (now covering the client too — new since
+      this wave), and `bun test` (416 pass).
+
+## Wave 7 — Templates and the send log <!-- status: active -->
 
 - [ ] `templates` table seeded from `src/emails/registry.ts` (id, name, preview
       props); the routes' `source` ids come from the registry, not hand-typed

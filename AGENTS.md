@@ -5,7 +5,7 @@ app mail through Resend (`/fpp`, `/fpp-daily-analytics`, `/sy-serendipity`),
 syncs Resend history and two IMAP accounts — Proton `hello@` through Bridge on
 the homelab (tailnet, STARTTLS) and Gmail through its IMAP endpoint (implicit
 TLS, app password) — into SQLite, classifies with an LLM plus Jev in shadow
-mode, and serves an SSR admin at `/admin` and a bearer JSON API at `/api/*`.
+mode, and serves a React client at `/app` plus a bearer JSON API at `/api/*`.
 **README.md is the contract** (endpoints, env vars, storage, sync rules); this
 file is what a dispatched agent needs before touching code.
 
@@ -21,17 +21,23 @@ file is what a dispatched agent needs before touching code.
 Bun 1.4 · Elysia 1.4 (`@elysiajs/bearer`) · `bun:sqlite` (WAL, migrations by
 `PRAGMA user_version`, append-only) · imapflow 2 + postal-mime · resend 6 +
 react-email 6 · AI SDK 7 (`@ai-sdk/openai-compatible` for the LLM, the Vercel AI
-Gateway `evaluation` for Jev) · React 19 SSR for `/admin` with `basalt-ui`
-tokens · zod 4 · TypeScript strict, `verbatimModuleSyntax`. No build step: the
-image runs `src/index.ts` directly.
+Gateway `evaluation` for Jev) · a Vite 8 + React 19 + basalt-ui SPA in `client/`
+(TanStack Router + Query, Eden Treaty typed against `src/app.ts`'s `App`) served
+by Elysia at `/app` from `client/dist` · zod 4 · TypeScript strict,
+`verbatimModuleSyntax`. One small build step now: the client is built into
+`client/dist` by the Dockerfile's client stage; the server itself still runs
+`src/index.ts` directly.
 
 ## Commands
 
 ```bash
 bun install --frozen-lockfile
 bun run dev            # watch mode (doppler run — dev secrets, see Local dev)
-bun run typecheck      # tsc --noEmit
+bun run typecheck      # tsc --noEmit for the server, then the client workspace
 bun test               # bun test, preload src/test/setup.ts (in-memory DB, dummy env)
+bun run test               # bun test, preload src/test/setup.ts (in-memory DB, dummy env)
+bun run build          # build the client SPA into client/dist (cd client && vite build)
+bun run client:dev     # Vite dev server, proxies /api and the /app session routes
 bun run format:check   # prettier — the gate runs this, run `bun run format` before committing
 bun run email          # react-email preview of src/emails
 bun run seed:demo      # fake submissions into the old email-gateway.sqlite (refuses NODE_ENV=production)
@@ -39,7 +45,8 @@ bun run import-legacy  # one-shot: copy the old store's submissions into mail.sq
 ```
 
 Gate for every change: `/check` (format:check, typecheck, `bun test`, fallow),
-then `/review` on code. There is no lint script; prettier is the formatter.
+then `/review` on code. `typecheck` now covers both the server and the client
+workspace. There is no lint script; prettier is the formatter.
 
 ## Invariants that change a decision
 
@@ -81,6 +88,11 @@ uidValidity:uid)`, never attacker-influenced, so `ON CONFLICT DO UPDATE`ing
   new provider is a migration.
 - **No timeouts on agent-style work** (`rules/agent-limits.md`): the LLM calls
   carry a 30-min hang guard, not a budget.
+- **The mail surface is host-gated and bearer-first.** `/app` and `/api` sit
+  behind `MAIL_HOST` (`src/host-gate.ts`) — no-op while it is unset, 404 on any
+  other Host once set; the send routes and `/health` are never gated. The
+  browser door is the signed `/app` session cookie, accepted by `/api` only for
+  same-origin requests; the bearer contract for agents does not change.
 
 ## Production
 
@@ -109,10 +121,11 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   `src/app.ts` mounts routes; `src/env.ts` zod env (parsed at import — modules
   that import it are untestable by design, factor pure logic out)
 - `src/routes/{fpp,sy-serendipity}.ts` + `src/auth.ts` — the public send routes
-- `src/emails/` React Email templates + `registry.ts` (admin preview only);
-  `src/layouts/`; `src/utils/send-mail.ts` (Resend send + a `send_log` row via
+- `src/emails/` React Email templates + `registry.ts`; `src/layouts/`;
+  `src/utils/send-mail.ts` (Resend send + a `send_log` row via
   `src/db/mail-index.ts`'s `sendLogRepo` — no longer touches the old `emails`
-  table)
+  table). The registry's preview page was retired with the SSR admin; the
+  Templates page returns in Wave 7
 - `src/spam/` contact-form gate (`gate.ts` deadline race, enqueues a
   `jev_submission` job on the new `mail.sqlite` `submissions` table instead of
   the old in-memory kick; `classify.ts`, `jev-judge.ts`)
@@ -185,15 +198,33 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   `migrations.ts`, `submissions.ts` + `jev-queue.ts` (the queue module
   `submissions.ts` still depends on) — every other old-store repo
   (`emails.ts`, `imap-state.ts`, `sync-state.ts`) is deleted
-- `src/admin/` SSR admin: `plugin.tsx` routes (Basic auth, same-origin POSTs),
-  `layout.tsx`/`ui.tsx`/`styles.ts`/`assets.ts`. Only `pages/submissions.tsx`
-  and `pages/templates.tsx` remain — Overview/Inbox/email-detail were deleted
-  in Wave 4's lean-store cutover along with the old `emails`/`email_enrichments`
-  tables they read; `/admin` redirects to `/admin/submissions` until Wave 6
-  replaces this with the React client
-- `src/api/plugin.ts` bearer JSON API; `src/test/` fakes and setup;
-  `scripts/seed-demo.ts` (submissions-only fixtures for the old store),
-  `scripts/import-legacy.ts` (one-shot: old store's `submissions` → `mail.sqlite`)
+- `client/` the Vite 8 + React 19 + basalt-ui SPA (a Bun workspace of the root
+  package — one hoisted `node_modules` and lockfile, so the client's `elysia`
+  and the server's are the same instance and Eden's `App` type resolves;
+  `basaltViteConfig` from `basalt-ui/vite`, TanStack Router file routes in
+  `client/src/routes`, TanStack Query, `client/src/lib/eden.ts`'s Eden Treaty
+  typed against `src/app.ts`'s exported `App`). `bun run build` emits
+  `client/dist`; `client/src/routeTree.gen.ts` is generated and gitignored.
+- `src/web/plugin.ts` (`createWebRoutes`/`webRoutes`) serves `client/dist` at
+  `/app` (`@elysia/static`, `alwaysStatic`, hashed assets long-cached, an
+  explicit `/app` + `/app/*` catch-all returning `index.html` with no-store),
+  owns the session routes `POST /app/login`, `POST /app/logout` and
+  `GET /app/session` (signed HttpOnly `SameSite=Strict` cookie via Elysia's core
+  cookie config, `src/session.ts`'s `sessionSecret`), and `/admin` → 302 `/app`
+  only while enabled.
+  Disabled entirely (404, `/admin` included) when `ADMIN_PASSWORD` is unset/short.
+- `src/session.ts` shared session constants/helpers (`SESSION_COOKIE`,
+  `isSameOrigin`, `sessionValue`/`isSessionValue` — the signed payload carries
+  an absolute expiry both doors validate, `sessionSecret`) used by both `src/web`
+  and `src/api`; `src/host-gate.ts` the `MAIL_HOST` gate (`hostAllowed` +
+  `createApp`'s scoped `.guard`) — a mismatching Host 404s `/app` and `/api`
+  while the send routes and `/health` stay on any Host.
+- `src/api/plugin.ts` bearer JSON API; a same-origin request carrying the valid
+  `/app` session cookie is accepted as an alternative to the bearer (the browser
+  client's door) — bearer semantics for agents are unchanged. `src/test/` fakes
+  and setup; `scripts/seed-demo.ts` (submissions-only fixtures for the old
+  store), `scripts/import-legacy.ts` (one-shot: old store's `submissions` →
+  `mail.sqlite`)
 
 ## Conventions
 

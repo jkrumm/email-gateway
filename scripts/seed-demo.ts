@@ -1,9 +1,9 @@
 /**
  * Seeds `$DATA_DIR` with ~12 spam-filter submissions, for exercising the
- * admin Submissions page locally. Refuses to run against a production
- * database. The admin's Overview/Inbox/detail pages (and the old `emails`
- * store this script used to seed for them) are gone as of Wave 4's lean-store
- * cutover — nothing reads fake emails anymore.
+ * client Submissions page locally. Refuses to run against a production
+ * database. The old SSR admin's Overview/Inbox/detail pages (and the old
+ * `emails` store this script used to seed for them) are gone as of Wave 4's
+ * lean-store cutover — nothing reads fake emails anymore.
  *
  * Usage: DATA_DIR=/tmp/bea-demo bun run seed:demo
  */
