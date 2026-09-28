@@ -258,7 +258,15 @@ load-bearing for that:
    caller — implement and verify a real IDLE loop against a live Bridge
    connection (own connection lifecycle; `disableAutoIdle: true` stays
    load-bearing for the sync tick's own connection) before relying on it to
-   kick ticks.
+   kick ticks. **How to reach Bridge (verified 2026-09-28):** the tailnet ACL
+   grants only VPS → homelab `tcp:1143`; the mini cannot connect, and the
+   homelab host does not expose the port on localhost either. Verify from
+   inside the running production container instead: `ssh vps`, then
+   `docker cp` a read-only probe script (EXAMINE + IDLE, or the pooling
+   scenario) into the container and run it with `docker exec … bun <script>`
+   — the container carries bun 1.4.2, the source at `/app`, and the IMAP env
+   already set. Never print or persist the credentials; the probe is
+   read-only and runs against the live inbox.
 3. **Hostname uniqueness across a RollHook deploy overlap.** `src/db/jobs.ts`'s
    `reapOwnStaleClaims` matches `claimed_by` by hostname prefix with no
    claim-age check, so it can only run once at boot. If the old and new
@@ -266,9 +274,12 @@ load-bearing for that:
    (rather than Docker's default per-container random id), the new
    container's boot reap would release the still-draining old container's
    claims immediately — a second worker could then pick up a row mid-handler.
-   Verify the VPS compose setup gives each container a distinct hostname
-   before wiring the reap into boot; if it doesn't, scope the reap by an
-   exact boot-instance marker instead of the hostname wildcard.
+   **Verified 2026-09-28:** `vps/apps/email-gateway/compose.yml` sets no
+   `hostname:`, so each container's hostname is Docker's per-container id
+   (the running one reports a 12-hex id) — distinct across the overlap, the
+   hostname-prefix reap is safe as written. Leave a one-line note next to
+   `reapOwnStaleClaims` that this assumption holds only while compose sets
+   no `hostname:`.
 
 Also in scope: bump `imapflow` 2.0.6 → 2.0.8 (pin exact) — the
 `minimumReleaseAge` cooldown on 2.0.8 lifts 2026-09-30, no owner override
@@ -281,6 +292,15 @@ needed; do this once the cooldown has actually lifted, not before.
       Wave 3 runs its DDL against `mail.sqlite`), `messages_fts` (subject,
       addresses, summary — no bodies). Stable message key = sha256(Message-ID)
       scoped per account, fallback as today.
+- [ ] Rate-limit signal from handler to queue: `src/jobs/runner.ts`'s `runOnce`
+      always calls `fail()` without `rateLimited`, so no handler can reach
+      Wave 3's park-without-spending-an-attempt path yet. Add a typed signal
+      (a `RateLimitedError` the runner maps to `fail({ rateLimited: true })`,
+      or an equivalent handler outcome); the Jev handlers classify the
+      gateway's 429 / `rate_limit_exceeded` / "high demand" as rate-limited
+      and everything else as a normal failure. Tests in repo style. The
+      gateway-side route (provider `digitalocean`) is the owner's; Jev stays
+      shadow mode.
 - [ ] Cut every consumer over to `src/db/jobs.ts` (deferred from Wave 3 to land
       together with the schema that actually carries the table): enrichment
       (`classify`), both Jev queues (`jev_message`, `jev_submission`) and the
