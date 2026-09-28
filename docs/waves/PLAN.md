@@ -234,7 +234,7 @@ sends) actually moves onto it.
       floor; and `reapOwnStaleClaims`'s hostname-only matching, which is why
       Wave 4's header below makes hostname uniqueness a named prerequisite.
 
-## Wave 4 — Lean store cutover <!-- status: active -->
+## Wave 4 — Lean store cutover <!-- status: done -->
 
 Follows §Lean store and D4. The new store is a **new file**
 `${DATA_DIR}/mail.sqlite` with its own migrations from version 1; the old
@@ -285,14 +285,14 @@ Also in scope: bump `imapflow` 2.0.6 → 2.0.8 (pin exact) — the
 `minimumReleaseAge` cooldown on 2.0.8 lifts 2026-09-30, no owner override
 needed; do this once the cooldown has actually lifted, not before.
 
-- [ ] Schema per the §Lean store table: `accounts`, `messages`,
+- [x] Schema per the §Lean store table: `accounts`, `messages`,
       `message_locations`, `classifications` (LLM + Jev columns),
       `body_cache` (bounded, LRU by `fetched_at`), `send_log`, `submissions`,
       `templates`, `jobs` (real migration this time — `src/db/jobs.ts` from
       Wave 3 runs its DDL against `mail.sqlite`), `messages_fts` (subject,
       addresses, summary — no bodies). Stable message key = sha256(Message-ID)
       scoped per account, fallback as today.
-- [ ] Rate-limit signal from handler to queue: `src/jobs/runner.ts`'s `runOnce`
+- [x] Rate-limit signal from handler to queue: `src/jobs/runner.ts`'s `runOnce`
       always calls `fail()` without `rateLimited`, so no handler can reach
       Wave 3's park-without-spending-an-attempt path yet. Add a typed signal
       (a `RateLimitedError` the runner maps to `fail({ rateLimited: true })`,
@@ -301,7 +301,7 @@ needed; do this once the cooldown has actually lifted, not before.
       and everything else as a normal failure. Tests in repo style. The
       gateway-side route (provider `digitalocean`) is the owner's; Jev stays
       shadow mode.
-- [ ] Cut every consumer over to `src/db/jobs.ts` (deferred from Wave 3 to land
+- [x] Cut every consumer over to `src/db/jobs.ts` (deferred from Wave 3 to land
       together with the schema that actually carries the table): enrichment
       (`classify`), both Jev queues (`jev_message`, `jev_submission`) and the
       sync tick (`sync_tick`, a leased job so two containers never sync at
@@ -317,36 +317,121 @@ needed; do this once the cooldown has actually lifted, not before.
       while a tick holds the lease). Sends become `send` jobs: the
       contact-form routes run the first attempt inline (caller deadline) and
       enqueue only on provider failure; `GET /api/jobs/:id`.
-- [ ] Ingest through the port: envelope-only sync into `messages` +
+- [x] Ingest through the port: envelope-only sync into `messages` +
       `message_locations` with a flags snapshot; IDLE (`watch()`) kicks a tick;
       classification jobs fetch the body live via `read()`, never from the
       store; `body_cache` fills on read and on a `body_prefetch` job for
       "needs me" rows.
-- [ ] API v2 on the new tables: `GET /api/messages?needs_me=1`,
+- [x] API v2 on the new tables: `GET /api/messages?needs_me=1`,
       `GET /api/messages/:key` (live read + cache), `GET /api/threads/:key`,
       `GET /api/search?q=` (provider `search()` + FTS, response says which),
       `POST /api/messages/:key/flags`, `POST /api/messages/:key/move`,
       `GET /api/submissions`, `GET /api/stats` (queue by kind). Keep
       `GET /api/emails*` as aliases over the new tables until Wave 8 repoints
       Hermes.
-- [ ] `scripts/import-legacy.ts`: one-shot copy of `submissions` (and nothing
+- [x] `scripts/import-legacy.ts`: one-shot copy of `submissions` (and nothing
       else) from `email-gateway.sqlite` into `mail.sqlite`; the Resend send log
       rebuilds from Resend history on first sync.
-- [ ] Remove the SSR admin's Overview/Inbox/detail pages and their tests; keep
+- [x] Remove the SSR admin's Overview/Inbox/detail pages and their tests; keep
       Submissions and Templates (they do not touch mail tables) until Wave 6.
       README §Storage/§Sync/§API rewritten (Jev shadow mode → jobs, queue
       sections point at `src/db/jobs.ts`); `AGENTS.md` file map, invariants
       ("rows are insert-only" → "bodies are never stored", "two containers,
       one SQLite" → `src/db/jobs.ts`).
-      **Left behind:**
+      **Left behind:** All three prerequisites landed and were verified for
+      real, not just built: IMAP session pooling (one reused connection per
+      provider instance, serialized, idle-closed, one reconnect-and-retry for
+      read-only calls only — a mutating call whose connection dies mid-flight
+      is never replayed); `watch()`/IDLE on its own dedicated connection,
+      verified live against production Bridge (`ssh vps` + a throwaway
+      `docker cp` probe — connects, negotiates IDLE, enters/exits/re-enters
+      cleanly, no credentials logged, cleaned up after); the hostname-reap
+      assumption confirmed against the running container's actual 12-hex id
+      and noted in code. `imapflow` stays pinned at 2.0.6 — the 2.0.8 cooldown
+      lifts 2026-09-30, after this wave closed; bump it in Wave 5 or later.
+      **Four full `/check`+`/review` rounds ran against this diff** (this
+      wave's Gate, `/review` "on every wave that changed code" — the scale
+      warranted more than the usual one pass). Round 1 (8 blocking): a
+      non-atomic submission-insert-then-enqueue, a UID-derived `messages.key`
+      that update-on-conflict — contradicting the old insert-only invariant,
+      now rewritten in AGENTS.md to describe why it's safe (the key isn't
+      attacker-influenced, unlike the old Message-ID-derived one); an
+      unguarded `poll()` letting overlapping `drain()` calls race
+      `accounts.cursors`; `/api/stats` ignoring its own `since` filter; a
+      repo factory touching `mailDb`'s lazy Proxy at construction time,
+      opening the file on mere import; an IMAP reconnect loop that never
+      stops if the very first connect fails; a non-idempotent `send` job
+      risking a duplicate customer email; `import-legacy.ts` opening the
+      legacy file read-write and masking a missing path as "imported 0".
+      Round 2 (8 more): the eager-open bug resurfaced through
+      `src/jobs/queue.ts` (fixed for real with a lazy Proxy matching
+      `mailDb`'s own); `classify`/`jev_message` racing a full-row
+      classification replace (split into column-scoped
+      `saveEnrichment`/`saveJevClassification`, no read-merge-write left);
+      `accounts.updateCursor`'s hand-built JSON path breaking on mailbox
+      names with `.`/`[`/`]`; a stripped IMAP error listener that could crash
+      the process; `sync/composition.ts` not actually isolating a
+      provider/mailbox failure as documented; a legacy-import re-enqueue gate
+      missing "pending with a recorded error" rows; a bare `"429"` rate-limit
+      pattern risking a permanent non-terminal retry loop on an unrelated
+      error. Round 3 (8 more, smaller/subtler): the JSON-path fix still broke
+      on a literal backslash — replaced with `json_patch(cursors,
+    json_object(?, ?))`, no hand-built path string at all, verified against
+      `.`/`[`/`]`/`"`/`\`; a same-mailbox move deleting the location it just
+      wrote; a null-provider-date message drifting to "now" on every re-sight
+      forever (fixed via `COALESCE`/`CASE` in the upsert SQL, not a JS-level
+      substitution); `messages_fts`'s DELETE+INSERT pair not transactional
+      under concurrent classify/jev writers; and — a genuine judgment
+      reversal — round 1's fix wrapping the submission insert and the Jev
+      enqueue in one transaction was **undone**: AGENTS.md's own fail-open
+      invariant ("the gate never 500s after delivery... Jev is optional")
+      means the non-authoritative, shadow-only Jev enqueue must never be able
+      to roll back an already-delivered, authoritative submission row: the
+      enqueue is best-effort again, logged and moved on if it fails. Round 4
+      (5 more): `send_log`'s plain `INSERT` risking a UNIQUE violation on a
+      legitimate retry (now `INSERT OR IGNORE`); the `/api/emails*` legacy
+      alias's comment overclaiming byte-compatibility with the old shape —
+      narrowed to accurately list what's dropped, after confirming directly
+      against the hermes-agent repo that nothing calls this alias today (it
+      reads Gmail through argo, not email-gateway, until Wave 8's repoint) so
+      the gap has zero live blast radius; re-raised the atomicity question
+      from round 3 as a tension with no reconciliation scan — deliberately
+      NOT re-added, since AGENTS.md's own stated principle already settles it
+      in favour of never discarding a delivered submission. Two design gaps
+      surfaced across these rounds are accepted, not fixed, and documented in
+      `docs/architecture.md`'s new "Known gaps" section (zero live callers
+      before Wave 6/8 either way): moving a message across mailboxes doesn't
+      reconcile identity for the next sync (mints a second row under the new
+      mailbox+uid); a mailbox's backfill never resumes once marked "done", so
+      a backlog larger than one page (500 messages) accumulating after
+      extended downtime needs the head pass to walk adaptively instead of
+      always exactly one page — a real design change, not a bug fix.
+      `fallow`'s remaining findings (unused type exports that are legitimate
+      public repo-interface surface; the pre-existing `@fontsource-variable/*`
+      deps; a `SYSTEM_PROMPT` name collision between two unrelated prompts;
+      ~391 lines of deliberate duplication between `mail-submissions.ts` and
+      the frozen legacy `submissions.ts`, which exists only for
+      `import-legacy.ts` and is not worth a shared-base extraction before
+      it's eventually deleted; complexity scores on the new deep-module
+      repos, inherent to replacing `emails.ts`/`submissions.ts` with
+      something equally real) are judged not worth another round, matching
+      this plan's own Wave 2/3 precedent for triaging `fallow` output rather
+      than chasing every flag to zero.
 
-## Wave 5 — Gmail through the IMAP adapter <!-- status: pending -->
+## Wave 5 — Gmail through the IMAP adapter <!-- status: active -->
 
 Moved up from Wave 8 (validation 2026-09-28): reading Gmail ranks above UI and
 template polish for the owner, and the client (next wave) should be built
 against two accounts from day one rather than retrofitted for multi-account
 later. Follows D3. Gmail IMAP facts are in the `docs/architecture.md` research
 table; verify the authenticated CAPABILITY line at runtime, never assume it.
+
+**The Gmail app password arrives later and does NOT block this wave** (owner
+2026-09-28): build multi-account config, capability detection, fakes,
+sync/classification wiring and tests fully with the gate green; live
+verification against a real Gmail mailbox is not a checkbox step of this wave
+— it is a named open item the delivery lead pulls in once the password is in
+1Password, so the chain never stalls on it.
 
 - [ ] Multi-account config: `accounts` rows from env (`MAIL_ACCOUNTS` JSON or
       per-account `GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` — pick one, document
@@ -359,10 +444,13 @@ table; verify the authenticated CAPABILITY line at runtime, never assume it.
       through the API — there is no client yet (Wave 6 builds the inbox
       against both accounts from the start instead of retrofitting it); fakes
       cover the Gmail capability set.
-- [ ] Prepare argo's retirement of its Gmail routes: a patch for
-      `argo/apps/api` (delete `routes/gmail.ts`, the Gmail half of
-      `clients/google.ts`, keep Calendar + OAuth) in `docs/argo-gmail-retire.patch`.
-      Applying it deploys argo → outward-facing, hand back.
+- [ ] Retire argo Gmail for real, not as a patch file (owner approval
+      2026-09-28): in `~/SourceRoot/argo` create a branch and a **draft** PR
+      that deletes `apps/api/routes/gmail.ts` and the Gmail half of
+      `clients/google.ts`, keeping Calendar + OAuth; gate green there; record
+      the PR URL in `docs/architecture.md`. **Never merge, deploy, or apply
+      it** — until email-gateway reads Gmail live, argo is the only Gmail
+      source; applying stays an owner gate tied to Gmail-live.
       **Left behind:**
 
 ## Wave 6 — Client shell + the tailnet host gate <!-- status: pending -->
@@ -433,10 +521,11 @@ exactly as `research-gateway/src/routes/mcp.ts`.
 - [ ] Remove the `/api/emails*` aliases; `docs/agent-api.md` for Hermes
       (curl examples, the MCP client config) modelled on research-gateway's
       README "Clients" section.
-- [ ] Prepare the Hermes repoint: a ready-to-apply patch for
-      `hermes-agent/skills/argo-api/SKILL.md` + `references/schedule.md` (Gmail
-      reads → email-gateway) written to `docs/hermes-repoint.patch`. Applying it
-      in `hermes-agent` is outward-facing → hand back.
+- [ ] Build the Hermes repoint as a real branch + **draft** PR in
+      `~/SourceRoot/hermes-agent` (`skills/argo-api/SKILL.md` +
+      `references/schedule.md`, Gmail reads → email-gateway), gate green
+      there, PR URL in `docs/agent-api.md`. **Never merge/apply** — owner
+      gate.
       **Left behind:**
 
 ## Wave 9 — Topology cutover <!-- status: pending -->
