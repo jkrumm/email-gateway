@@ -101,6 +101,12 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   model factories (`model.ts`, `jev.ts`)
 - `src/jev/worker.ts` drains both Jev queues; `src/db/jev-queue.ts` the generic
   claim/backoff queue (table-parameterised, despite the name)
+- `src/db/jobs.ts` + `src/jobs/runner.ts` + `src/jobs/idle-watchdog.ts`: the
+  general one-table job queue from `docs/architecture.md` §Jobs (Wave 3).
+  Schema-neutral today — its DDL is **not** in `migrations.ts` and nothing on
+  the boot path imports it (`src/db/jobs-schema-isolation.test.ts` is the
+  tripwire); proven only against an in-memory DB until Wave 4 gives it a real
+  table and moves `jev-queue.ts`'s consumers onto it
 - `src/providers/port.ts` the `MailProvider` interface (capabilities, list,
   read, search, setFlags, move, send, watch) every mailbox sits behind;
   `src/providers/imap/adapter.ts` grows the old IMAP port with Bridge/Gmail

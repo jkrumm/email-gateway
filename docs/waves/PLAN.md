@@ -155,30 +155,52 @@ behaviour change for callers: the existing sync keeps working behind the port.
       moved); the three unused `@fontsource-variable/*` deps (pre-existing,
       unrelated to mail).
 
-## Wave 3 — One job table <!-- status: active -->
+## Wave 3 — Jobs module, schema-neutral <!-- status: active -->
 
-Follows §Jobs. Existing schema stays; only queue state moves.
+Follows §Jobs, narrowed per the 2026-09-28 validation: the `jobs` table is
+**not** a migration on the live `email-gateway.sqlite` — it would live for
+exactly one wave and risks a prod deploy running a double queue mid-cutover.
+This wave ships the module and proves it against an in-memory database only;
+Wave 4 is the first wave that creates the table for real, in its fresh schema,
+and is also where every consumer (enrichment, both Jev queues, the sync tick,
+sends) actually moves onto it.
 
-- [ ] Migration: `jobs` table (id, kind, subject_key, status, attempts,
-      next_attempt_at, claimed_at, claimed_by, payload_json, last_error,
-      created_at, finished_at) + indexes; `src/db/jobs.ts` generalised from
-      `src/db/jev-queue.ts` (same claim-token, backoff ladder, 35-min stale
-      takeover, nine attempts) with `claimed_by = "<hostname>:<pid>"` and a
-      boot reap of this host's stale claims.
+- [ ] `src/db/jobs.ts` generalised from `src/db/jev-queue.ts` (same claim-token,
+      backoff ladder, 35-min stale takeover, nine attempts), generic over
+      `kind`/`subject_key`/`payload_json`. The module owns its own
+      `CREATE TABLE IF NOT EXISTS jobs (...)` DDL and issues it against
+      whatever `Database` it is given — it is **not** registered in
+      `src/db/migrations.ts` and never runs against
+      `${DATA_DIR}/email-gateway.sqlite`. `claimed_by = "<hostname>:<pid>"`
+      and a boot reap of this host's stale claims. Backoff carries jitter
+      (up to +20%) so a burst failing in lockstep doesn't re-batch on the
+      same `next_attempt_at`; `fail()` also takes a `rateLimited` flag that
+      parks and reschedules on the first backoff rung **without** spending
+      one of the nine attempts — root-caused during this wave (2026-09-28
+      delivery-lead investigation): `src/db/jev-queue.ts`'s current
+      all-failures-count-an-attempt semantics let a 429 burst burn 17
+      submissions to `jev_attempts=8` in 24h. The caller decides what counts
+      as rate-limited; jobs.ts stays domain-agnostic.
+- [ ] `src/llm/jev.ts`: set `maxRetries: 0` on the `evaluate()` call — the
+      durable queue owns retries, so the AI SDK's own default (2 retries, 3
+      HTTP requests per judge attempt) was tripling the request volume a 429
+      burst produced. Live fix, independent of the jobs module cutover.
 - [ ] `src/jobs/runner.ts`: one loop, kinds registered as handlers; idle
       watchdog on LLM calls modelled on `research-gateway/src/lib/idle-watchdog.ts`
       (no wall clock, per `rules/agent-limits.md`).
-- [ ] Move enrichment (`classify`), both Jev queues (`jev_message`,
-      `jev_submission`) and the sync tick (`sync_tick`, a leased job so two
-      containers never sync at once) onto it; delete the in-memory locks in
-      `src/sync/index.ts`, `src/enrich/worker.ts`, `src/jev/worker.ts` and the
-      enrichment column-queue in `src/db/emails.ts`. `POST /api/sync` enqueues
-      and returns the job id (409 stays while a tick holds the lease).
-- [ ] Sends as `send` jobs: the contact-form routes run the first attempt inline
-      (caller deadline) and enqueue only on provider failure; `GET /api/jobs/:id`.
-- [ ] `/api/stats` reports the queue by kind; README §Jev shadow mode → §Jobs;
-      `AGENTS.md` invariants updated (the "two containers, one SQLite" rule now
-      points at `src/db/jobs.ts`).
+- [ ] Tests only, against `openDatabase(":memory:")` running the module's own
+      DDL: claim/complete/fail, backoff ladder to terminal `failed`, stale
+      takeover, boot reap, runner dispatch by kind, jitter bounds, and
+      `rateLimited` never spending an attempt regardless of how many times it
+      recurs; `src/llm/jev.test.ts` covers `maxRetries: 0` the only way it's
+      observable — a rejecting fake model is called exactly once.
+- [ ] README/`AGENTS.md`: note the jobs module exists and is tested but not yet
+      wired to any consumer or to the production schema; point the "two
+      containers, one SQLite" invariant at `src/db/jobs.ts` for the future —
+      today's queues (`src/db/jev-queue.ts`, the enrichment column-queue, the
+      in-memory sync lock) stay authoritative until Wave 4 cuts them over.
+      README §Jev shadow mode gets a line on the `maxRetries: 0` fix and the
+      429 incident.
       **Left behind:**
 
 ## Wave 4 — Lean store cutover <!-- status: pending -->
@@ -189,12 +211,61 @@ Follows §Lean store and D4. The new store is a **new file**
 is outward-facing, never done by a wave). The SSR admin's mail pages go away
 here; the API stays up. One wave of no inbox UI is accepted (D4).
 
+**Before any code in this wave:** three things carried over from Wave 2's
+"left open" list and Wave 3's `/review` must be settled — this wave is the
+first to put IMAP reads behind a route and the first to actually boot
+`src/db/jobs.ts`'s reap-on-boot against a real deploy, and all three are
+load-bearing for that:
+
+1. **IMAP session pooling strategy.** Today `list`/`read`/`search`/`setFlags`/
+   `move` each open a session per call (Wave 2, deliberate — nothing called
+   them outside tests yet). A route calling these per-request risks Bridge's
+   connection limit. Decide and verify a pooling/reuse approach before wiring
+   the API v2 routes below.
+2. **`watch()` / IDLE.** Deliberately unimplemented in Wave 2
+   (`capabilities()` always reports `idle: false`). This wave is the first
+   caller — implement and verify a real IDLE loop against a live Bridge
+   connection (own connection lifecycle; `disableAutoIdle: true` stays
+   load-bearing for the sync tick's own connection) before relying on it to
+   kick ticks.
+3. **Hostname uniqueness across a RollHook deploy overlap.** `src/db/jobs.ts`'s
+   `reapOwnStaleClaims` matches `claimed_by` by hostname prefix with no
+   claim-age check, so it can only run once at boot. If the old and new
+   container during the brief two-container overlap share the same hostname
+   (rather than Docker's default per-container random id), the new
+   container's boot reap would release the still-draining old container's
+   claims immediately — a second worker could then pick up a row mid-handler.
+   Verify the VPS compose setup gives each container a distinct hostname
+   before wiring the reap into boot; if it doesn't, scope the reap by an
+   exact boot-instance marker instead of the hostname wildcard.
+
+Also in scope: bump `imapflow` 2.0.6 → 2.0.8 (pin exact) — the
+`minimumReleaseAge` cooldown on 2.0.8 lifts 2026-09-30, no owner override
+needed; do this once the cooldown has actually lifted, not before.
+
 - [ ] Schema per the §Lean store table: `accounts`, `messages`,
       `message_locations`, `classifications` (LLM + Jev columns),
       `body_cache` (bounded, LRU by `fetched_at`), `send_log`, `submissions`,
-      `templates`, `jobs`, `messages_fts` (subject, addresses, summary — no
-      bodies). Stable message key = sha256(Message-ID) scoped per account,
-      fallback as today.
+      `templates`, `jobs` (real migration this time — `src/db/jobs.ts` from
+      Wave 3 runs its DDL against `mail.sqlite`), `messages_fts` (subject,
+      addresses, summary — no bodies). Stable message key = sha256(Message-ID)
+      scoped per account, fallback as today.
+- [ ] Cut every consumer over to `src/db/jobs.ts` (deferred from Wave 3 to land
+      together with the schema that actually carries the table): enrichment
+      (`classify`), both Jev queues (`jev_message`, `jev_submission`) and the
+      sync tick (`sync_tick`, a leased job so two containers never sync at
+      once) all move onto it; delete the in-memory locks in `src/sync/index.ts`,
+      `src/enrich/worker.ts`, `src/jev/worker.ts`, the enrichment column-queue
+      in `src/db/emails.ts`, and `src/db/jev-queue.ts` itself once nothing
+      calls it. The `jev_message`/`jev_submission` handlers classify a caught
+      error (429 / `GatewayRateLimitError` / `rate_limit_exceeded`) and call
+      `jobs.fail({ ..., rateLimited: true })` for it — replacing
+      `jev-queue.ts`'s current all-failures-count-an-attempt behaviour with
+      Wave 3's jitter + non-terminal-rate-limit semantics (2026-09-28 429
+      incident). `POST /api/sync` enqueues and returns the job id (409 stays
+      while a tick holds the lease). Sends become `send` jobs: the
+      contact-form routes run the first attempt inline (caller deadline) and
+      enqueue only on provider failure; `GET /api/jobs/:id`.
 - [ ] Ingest through the port: envelope-only sync into `messages` +
       `message_locations` with a flags snapshot; IDLE (`watch()`) kicks a tick;
       classification jobs fetch the body live via `read()`, never from the
@@ -204,24 +275,63 @@ here; the API stays up. One wave of no inbox UI is accepted (D4).
       `GET /api/messages/:key` (live read + cache), `GET /api/threads/:key`,
       `GET /api/search?q=` (provider `search()` + FTS, response says which),
       `POST /api/messages/:key/flags`, `POST /api/messages/:key/move`,
-      `GET /api/submissions`, `GET /api/stats`. Keep `GET /api/emails*` as
-      aliases over the new tables until Wave 7 repoints Hermes.
+      `GET /api/submissions`, `GET /api/stats` (queue by kind). Keep
+      `GET /api/emails*` as aliases over the new tables until Wave 8 repoints
+      Hermes.
 - [ ] `scripts/import-legacy.ts`: one-shot copy of `submissions` (and nothing
       else) from `email-gateway.sqlite` into `mail.sqlite`; the Resend send log
       rebuilds from Resend history on first sync.
 - [ ] Remove the SSR admin's Overview/Inbox/detail pages and their tests; keep
-      Submissions and Templates (they do not touch mail tables) until Wave 5.
-      README §Storage/§Sync/§API rewritten; `AGENTS.md` file map, invariants
-      ("rows are insert-only" → "bodies are never stored").
+      Submissions and Templates (they do not touch mail tables) until Wave 6.
+      README §Storage/§Sync/§API rewritten (Jev shadow mode → jobs, queue
+      sections point at `src/db/jobs.ts`); `AGENTS.md` file map, invariants
+      ("rows are insert-only" → "bodies are never stored", "two containers,
+      one SQLite" → `src/db/jobs.ts`).
       **Left behind:**
 
-## Wave 5 — Client shell <!-- status: pending -->
+## Wave 5 — Gmail through the IMAP adapter <!-- status: pending -->
 
-Follows §Client. Pattern: `argo/apps/dashboard` + the basalt-ui consumer rules
-in `~/.claude/CLAUDE.md`. Vite 8, `@elysia/static` 1.4.11, `@elysia/eden`
-1.4.10 (research table in `docs/architecture.md`; re-verify with `/research`
-before pinning).
+Moved up from Wave 8 (validation 2026-09-28): reading Gmail ranks above UI and
+template polish for the owner, and the client (next wave) should be built
+against two accounts from day one rather than retrofitted for multi-account
+later. Follows D3. Gmail IMAP facts are in the `docs/architecture.md` research
+table; verify the authenticated CAPABILITY line at runtime, never assume it.
 
+- [ ] Multi-account config: `accounts` rows from env (`MAIL_ACCOUNTS` JSON or
+      per-account `GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` — pick one, document
+      it) with secrets referenced, never stored; `/health` lists every account.
+- [ ] IMAP adapter capability detection per account: CONDSTORE `changedSince`
+      fast path when advertised (Gmail), UID-window fallback (Bridge);
+      `X-GM-THRID` as the thread key and `X-GM-LABELS` as labels when
+      `X-GM-EXT-1` is present; `[Gmail]/…` folder mapping for archive/spam/trash.
+- [ ] Sync + classification for the second account end to end, reachable
+      through the API — there is no client yet (Wave 6 builds the inbox
+      against both accounts from the start instead of retrofitting it); fakes
+      cover the Gmail capability set.
+- [ ] Prepare argo's retirement of its Gmail routes: a patch for
+      `argo/apps/api` (delete `routes/gmail.ts`, the Gmail half of
+      `clients/google.ts`, keep Calendar + OAuth) in `docs/argo-gmail-retire.patch`.
+      Applying it deploys argo → outward-facing, hand back.
+      **Left behind:**
+
+## Wave 6 — Client shell + the tailnet host gate <!-- status: pending -->
+
+Moved down from Wave 5 (validation 2026-09-28) so the inbox is built against
+both Proton and Gmail from the start. Follows §Client. Pattern:
+`argo/apps/dashboard` + the basalt-ui consumer rules in `~/.claude/CLAUDE.md`.
+Vite 8, `@elysia/static` 1.4.11, `@elysia/eden` 1.4.10 (research table in
+`docs/architecture.md`; re-verify with `/research` before pinning).
+
+This wave also pulls forward the in-repo half of Wave 9's host gate: the mail
+surface (`/app`, `/api`, and later `/mcp`) sits behind a `MAIL_HOST` check the
+moment the client exists, instead of staying reachable on the public tunnel
+hostname for three more waves. Only the code moves — the tailnet DNS record,
+the second Traefik router and publishing the hostname stay Wave 9
+(outward-facing, another repo's deploy path).
+
+- [ ] `MAIL_HOST` env: the app serves `/app`, `/api` (and `/mcp` once it
+      exists, Wave 8) only when `Host` matches it, and serves the send routes + `/health` on any host; tests for both doors. Unset in dev and in prod
+      until Wave 9 sets it, so this is a no-op until then.
 - [ ] `client/` Vite + React + basalt-ui app: `basaltViteConfig` from
       `basalt-ui/vite`, TanStack Router (file routes) + TanStack Query, Eden
       Treaty typed against the Elysia app, `BasaltProvider` with the
@@ -233,16 +343,18 @@ before pinning).
 - [ ] Session auth: `POST /app/login` with `ADMIN_PASSWORD` → signed HttpOnly
       `SameSite=Strict` cookie (Elysia core cookie), same-origin check on
       mutations, logout; `/api` and later `/mcp` stay bearer.
-- [ ] Pages: Inbox sorted by "needs me" (category, priority, action_required,
-      unread) with filters; Message view (live read, sandboxed HTML iframe,
-      classification panel, mark read/unread, star, archive, spam, trash via
-      the flag/move endpoints); Submissions; Accounts/health (sync state,
-      queue by kind, IMAP health).
+- [ ] Pages: Inbox sorted by "needs me", merged across both accounts with an
+      account chip (category, priority, action_required, unread) with filters;
+      Message view (live read, sandboxed HTML iframe, classification panel,
+      mark read/unread, star, archive, spam, trash via the flag/move
+      endpoints); Submissions; Accounts/health (sync state per account, queue
+      by kind, IMAP health).
 - [ ] Delete the remaining SSR admin (`src/admin/`), `/admin` → 302 `/app`;
-      README §Admin UI → §Client; `AGENTS.md` stack + file map.
+      README §Admin UI → §Client, `MAIL_HOST` documented; `AGENTS.md` stack +
+      file map.
       **Left behind:**
 
-## Wave 6 — Templates and the send log <!-- status: pending -->
+## Wave 7 — Templates and the send log <!-- status: pending -->
 
 - [ ] `templates` table seeded from `src/emails/registry.ts` (id, name, preview
       props); the routes' `source` ids come from the registry, not hand-typed
@@ -256,7 +368,7 @@ before pinning).
       template; README §Endpoints/§Templates; `AGENTS.md` file map.
       **Left behind:**
 
-## Wave 7 — Agent API: REST v2 complete + MCP + Hermes <!-- status: pending -->
+## Wave 8 — Agent API: REST v2 complete + MCP + Hermes <!-- status: pending -->
 
 Follows §Agent API. `@modelcontextprotocol/server` 2.0.0 via `createMcpHandler`
 exactly as `research-gateway/src/routes/mcp.ts`.
@@ -276,37 +388,13 @@ exactly as `research-gateway/src/routes/mcp.ts`.
       in `hermes-agent` is outward-facing → hand back.
       **Left behind:**
 
-## Wave 8 — Gmail through the IMAP adapter <!-- status: pending -->
-
-Follows D3. Gmail IMAP facts are in the `docs/architecture.md` research table;
-verify the authenticated CAPABILITY line at runtime, never assume it.
-
-- [ ] Multi-account config: `accounts` rows from env (`MAIL_ACCOUNTS` JSON or
-      per-account `GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` — pick one, document
-      it) with secrets referenced, never stored; `/health` and the Accounts page
-      list every account.
-- [ ] IMAP adapter capability detection per account: CONDSTORE `changedSince`
-      fast path when advertised (Gmail), UID-window fallback (Bridge);
-      `X-GM-THRID` as the thread key and `X-GM-LABELS` as labels when
-      `X-GM-EXT-1` is present; `[Gmail]/…` folder mapping for archive/spam/trash.
-- [ ] Sync + classification + client for the second account end to end; the
-      inbox merges accounts with an account chip; fakes cover the Gmail
-      capability set.
-- [ ] Prepare argo's retirement of its Gmail routes: a patch for
-      `argo/apps/api` (delete `routes/gmail.ts`, the Gmail half of
-      `clients/google.ts`, keep Calendar + OAuth) in `docs/argo-gmail-retire.patch`.
-      Applying it deploys argo → outward-facing, hand back.
-      **Left behind:**
-
 ## Wave 9 — Topology cutover <!-- status: pending -->
 
 Follows D1. Every step here touches production or another repo's deploy path:
 **prepare everything, verify locally, then hand back to the owner** — no push
-outside this repo, no hostname published by a wave.
+outside this repo, no hostname published by a wave. The `MAIL_HOST` code
+itself already shipped in Wave 6; this wave is what makes it live.
 
-- [ ] In this repo: `MAIL_HOST` env (the tailnet hostname); the app serves
-      `/app`, `/api`, `/mcp` only when `Host` matches it and serves the send
-      routes + `/health` on any host; tests for both doors.
 - [ ] Local dev off Doppler: `.env.tpl` + `secrets-run` like the siblings,
       `make dev/check/…` Makefile, `doppler.yaml` deleted; README §Local
       Development.
