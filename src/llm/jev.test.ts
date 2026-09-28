@@ -76,6 +76,20 @@ describe("decide", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("prefers typesafe-ai on the gateway, digitalocean as fallback", async () => {
+    const { model, calls } = fakeJevModel(() => ({
+      answers: rawAnswers,
+      warnings: [],
+      providerMetadata: typesafeConfidence({ verdict: 0.97 }),
+    }));
+
+    await decide({ config, model, state: { subject: "x" }, questions });
+
+    expect(calls[0]!.providerOptions).toEqual({
+      gateway: { order: ["typesafe-ai", "digitalocean"] },
+    });
+  });
+
   test("falls back to the choice's probability when no confidence is reported", async () => {
     for (const providerMetadata of [
       undefined,

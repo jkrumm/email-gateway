@@ -2,9 +2,26 @@ import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import { CATEGORIES } from "./categories";
 import { getLlmConfig, getModel, getModelId } from "../llm/model";
-import type { EmailDirection, EnrichmentResult } from "../db/emails";
 
 const MAX_PROMPT_TEXT_LENGTH = 12_000;
+
+export type EmailDirection = "inbound" | "outbound";
+
+export interface EmailFact {
+  label: string;
+  value: string;
+}
+
+export interface EnrichmentResult {
+  category: string;
+  priority: string;
+  actionRequired: boolean;
+  summary: string;
+  suggestedAction: string | null;
+  language: string;
+  facts: EmailFact[];
+  model: string;
+}
 
 const enrichmentSchema = z.object({
   category: z.enum(CATEGORIES),

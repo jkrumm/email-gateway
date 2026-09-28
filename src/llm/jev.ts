@@ -5,6 +5,7 @@ import {
   type Experimental_EvaluationModel as EvaluationModel,
   type Experimental_EvaluationQuestion as EvaluationQuestion,
 } from "ai";
+import type { GatewayProviderOptions } from "@ai-sdk/gateway";
 import { z } from "zod";
 import { env } from "../env";
 
@@ -40,6 +41,20 @@ const JEV_HANG_GUARD_MS = 30 * 60_000;
 const confidenceSchema = z.object({
   confidence: z.record(z.string(), z.number().min(0).max(1)),
 });
+
+// Prefer typesafe-ai on the gateway, digitalocean as fallback. Verified
+// against the live gateway (2026-09-28 prod probe): the option reaches the
+// gateway (its error changed from 403 to 429 once set) — but NOT that
+// typesafe-ai is actually healthier than digitalocean,
+// since both returned 429 during the probe and no call succeeded, so
+// resolvedProvider could not be confirmed as typesafe-ai. Which upstream
+// provider is behind the gateway route is the owner's/gateway-side concern,
+// not this repo's.
+const JEV_PROVIDER_OPTIONS = {
+  gateway: {
+    order: ["typesafe-ai", "digitalocean"],
+  } satisfies GatewayProviderOptions,
+};
 
 export function getJevConfig(): JevConfig | null {
   const { JEV_API_KEY, JEV_MODEL } = env;
@@ -77,6 +92,7 @@ export async function decide<
     // exactly one HTTP request per attempt.
     maxRetries: 0,
     abortSignal: AbortSignal.timeout(JEV_HANG_GUARD_MS),
+    providerOptions: JEV_PROVIDER_OPTIONS,
   });
 
   const confidences = confidenceSchema.safeParse(

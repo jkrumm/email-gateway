@@ -1,12 +1,12 @@
 import { classifySubmission, shouldSuppress } from "./classify";
 import { getJevConfig } from "../llm/jev";
-import { kickJevWorker } from "../jev/worker";
-import { submissionsRepo } from "../db";
+import { mailSubmissionsRepo } from "../db/mail-index";
+import { jobQueue } from "../jobs/queue";
 import type { ClassificationResult } from "./classify";
 import type {
-  RecordSubmissionInput,
+  InsertSubmissionInput,
   SubmissionSource,
-} from "../db/submissions";
+} from "../db/mail-submissions";
 
 // Callers of /fpp and /sy-serendipity are a Netlify function (~10-26s limit)
 // and Cloudflare edge (~100s) — waiting for the full classifySubmission call
@@ -15,20 +15,32 @@ import type {
 // running in the background and its verdict is recorded late.
 export const CLASSIFY_DECISION_DEADLINE_MS = 8_000;
 
-type RecordSubmission = typeof submissionsRepo.recordSubmission;
+type RecordSubmission = typeof mailSubmissionsRepo.insertSubmission;
 
-type Persist = (
-  input: Omit<RecordSubmissionInput, "llmLatencyMs" | "jevPending">,
-) => void;
+// The new `submissions` table (src/db/mail-submissions.ts) has no
+// jevPending/queue concept on the row itself — that state lives in `jobs`
+// (kind `jev_submission`, subject_key = the row id) instead.
+type Persist = (input: Omit<InsertSubmissionInput, "llmLatencyMs">) => void;
+
+// Replaces the old kickJevWorker() nudge: enqueues a durable `jev_submission`
+// job for the row insertSubmission() just created, instead of an in-memory
+// drain-queue kick.
+function defaultEnqueueJevSubmission(id: string): void {
+  jobQueue.enqueue({
+    kind: "jev_submission",
+    payload: { id },
+    subjectKey: id,
+  });
+}
 
 export async function gateSubmission({
   source,
   submission,
   deliver,
   classify = classifySubmission,
-  record = submissionsRepo.recordSubmission,
+  record = mailSubmissionsRepo.insertSubmission,
   jevEnabled = () => getJevConfig() !== null,
-  kickJev = kickJevWorker,
+  enqueueJevSubmission = defaultEnqueueJevSubmission,
   deadlineMs = CLASSIFY_DECISION_DEADLINE_MS,
 }: {
   source: SubmissionSource;
@@ -37,7 +49,7 @@ export async function gateSubmission({
   classify?: typeof classifySubmission;
   record?: RecordSubmission;
   jevEnabled?: () => boolean;
-  kickJev?: () => void;
+  enqueueJevSubmission?: (id: string) => void;
   deadlineMs?: number;
 }): Promise<{ delivered: boolean }> {
   const startedAt = Date.now();
@@ -50,14 +62,41 @@ export async function gateSubmission({
   // A DB write here must never turn an already-delivered (or intentionally
   // suppressed) submission into a 500 for the caller — that would make a
   // Netlify/Cloudflare retry and send a duplicate email. Log and move on.
-  // Jev is shadow-only and never on this path: the row is queued for the Jev
-  // worker (src/jev/worker.ts), which retries until it has a verdict.
+  // Jev is shadow-only and never on this path: the row is queued as a
+  // `jev_submission` job (src/jobs/jev.ts), which retries until it has a
+  // verdict.
+  //
+  // The insert and the enqueue are deliberately NOT one transaction: an
+  // earlier version wrapped both so an enqueue failure could never leave a
+  // submission row with no job behind it — but that means a failure in the
+  // non-authoritative, shadow-only Jev enqueue rolls back and discards the
+  // AUTHORITATIVE, already-delivered submission record too, inverting the
+  // fail-open invariant above (a missing Jev job is invisible and harmless;
+  // a missing submission row is a real, silent loss). The submission commits
+  // on its own; the enqueue is its own best-effort step, logged and moved on
+  // if it fails.
   const persist: Persist = (input) => {
+    let created: { id: string };
     try {
-      record({ ...input, llmLatencyMs, jevPending: jevEnabled() });
-      kickJev();
+      created = record({ ...input, llmLatencyMs });
     } catch (error) {
-      console.error("Failed to record submission", { error });
+      console.error("Failed to record submission", {
+        error,
+        source: input.source,
+        verdict: input.verdict,
+        delivered: input.delivered,
+      });
+      return;
+    }
+
+    if (!jevEnabled()) return;
+    try {
+      enqueueJevSubmission(created.id);
+    } catch (error) {
+      console.error("Failed to enqueue jev_submission", {
+        error,
+        id: created.id,
+      });
     }
   };
 

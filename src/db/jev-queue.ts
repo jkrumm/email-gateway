@@ -58,13 +58,6 @@ export interface JevQueueCounts {
   failed: number;
 }
 
-export function sumJevQueue(...counts: JevQueueCounts[]): JevQueueCounts {
-  return {
-    pending: counts.reduce((sum, count) => sum + count.pending, 0),
-    failed: counts.reduce((sum, count) => sum + count.failed, 0),
-  };
-}
-
 export interface JevClaim {
   id: string;
   // The `jev_claimed_at` value this claim wrote. Completing or failing the

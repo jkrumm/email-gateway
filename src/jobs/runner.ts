@@ -6,6 +6,7 @@ import {
   type JobQueue,
 } from "../db/jobs";
 import { errorMessage } from "../utils/error";
+import { isRateLimitError } from "./rate-limit";
 
 // A handler may be re-run in full for a job it already completed if the
 // completion write itself fails (DB busy during the RollHook deploy
@@ -171,6 +172,7 @@ export function createJobRunner({
             claimToken: renewal.currentToken(),
             error: errorMessage(error),
             now: new Date(),
+            rateLimited: isRateLimitError(error),
           }),
       });
       return true;

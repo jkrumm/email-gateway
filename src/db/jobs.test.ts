@@ -300,6 +300,41 @@ describe("createJobQueue", () => {
     expect(queue.counts()).toEqual({ pending: 1, failed: 0 });
   });
 
+  test("getJob returns null for an unknown id, then the job's public state", () => {
+    const db = openDatabase(":memory:");
+    ensureJobsSchema(db);
+    const queue = createJobQueue({ db, claimedBy: CLAIMED_BY });
+    expect(queue.getJob("missing")).toBeNull();
+
+    queue.enqueue({
+      kind: "classify",
+      payload: { key: "msg-1" },
+      subjectKey: "msg-1",
+      id: "job-1",
+      now: T0,
+    });
+    expect(queue.getJob("job-1")).toMatchObject({
+      id: "job-1",
+      kind: "classify",
+      subjectKey: "msg-1",
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: null,
+      lastError: null,
+      finishedAt: null,
+    });
+
+    const claim = queue.claimNext({ now: T0 })!;
+    queue.fail({ ...claim, error: "boom", now: T0, random: noJitter });
+    const afterFailure = queue.getJob("job-1");
+    expect(afterFailure).toMatchObject({
+      status: "pending",
+      attempts: 1,
+      lastError: "boom",
+    });
+    expect(afterFailure?.nextAttemptAt).not.toBeNull();
+  });
+
   test("a claim exactly at the stale threshold is not yet reclaimed", () => {
     const { queue } = setup();
     queue.claimNext({ now: T0 });

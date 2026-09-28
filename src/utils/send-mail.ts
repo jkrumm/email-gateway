@@ -1,7 +1,11 @@
 import type { ReactElement } from "react";
 import type { Resend } from "resend";
 import { resend } from "./resend";
-import { emailsRepo, type EmailsRepo, type UpsertEmailInput } from "../db";
+import {
+  sendLogRepo,
+  type InsertSendLogInput,
+  type SendLogRepo,
+} from "../db/mail-index";
 
 const DEFAULT_FROM =
   "Free-Planning-Poker.com <no-reply@free-planning-poker.com>";
@@ -13,15 +17,16 @@ type SendCapableResend = { emails: Pick<Resend["emails"], "send"> };
 
 // A DB error here must never turn an already-sent email into a failed
 // response for the caller (that would make them retry and send a
-// duplicate). The next sync backfills this row anyway once the DB is back.
-export function recordOutboundEmail(
-  emails: Pick<EmailsRepo, "upsertEmail">,
-  input: UpsertEmailInput,
+// duplicate). Replaces the old recordOutboundEmail/emailsRepo write: sendMail
+// no longer touches the old email-gateway.sqlite store at all.
+export function recordSendLog(
+  sendLog: Pick<SendLogRepo, "insertSendLog">,
+  input: InsertSendLogInput,
 ): void {
   try {
-    emails.upsertEmail(input);
+    sendLog.insertSendLog(input);
   } catch (error) {
-    console.error("Failed to persist outbound email row", {
+    console.error("Failed to persist send_log row", {
       error,
       id: input.id,
     });
@@ -36,20 +41,20 @@ export async function sendMail({
   template,
   source,
   resendClient = resend,
-  emails = emailsRepo,
+  sendLog = sendLogRepo,
 }: {
   from?: string;
   to: string;
   replyTo?: string;
   subject: string;
   template: ReactElement;
-  // Our template/route id, e.g. "fpp-sender" — stored on the email row so
+  // Our template/route id, e.g. "fpp-sender" — stored on the send_log row so
   // the admin API can filter sent mail by what generated it.
   source?: string;
   // Injectable for tests, or a provider-scoped client; defaults to the real
   // singletons in production.
   resendClient?: SendCapableResend;
-  emails?: Pick<EmailsRepo, "upsertEmail">;
+  sendLog?: Pick<SendLogRepo, "insertSendLog">;
 }): Promise<{ id: string; from: string }> {
   const email = await resendClient.emails.send({
     from,
@@ -80,17 +85,12 @@ export async function sendMail({
     subject,
   });
 
-  // Minimal row now; the next sync fills html/last_event once Resend has
-  // fully processed the send (src/sync/resend-sync.ts).
-  recordOutboundEmail(emails, {
+  recordSendLog(sendLog, {
     id: email.data.id,
-    direction: "outbound",
-    fromAddress: from,
-    toAddresses: [to],
-    replyTo: replyTo ? [replyTo] : null,
-    subject,
-    createdAt: new Date().toISOString(),
-    source: source ?? null,
+    templateId: source ?? null,
+    recipients: [to],
+    provider: "resend",
+    requestedBy: "route",
   });
 
   // The resolved sender (DEFAULT_FROM when the caller passed none) — so a

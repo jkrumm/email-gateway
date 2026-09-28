@@ -1,9 +1,5 @@
 import type { Database } from "bun:sqlite";
-
-interface Migration {
-  version: number;
-  up: string;
-}
+import { type Migration, applyMigrations } from "./migration-runner";
 
 // Ordered, idempotent migrations tracked via PRAGMA user_version. Add new
 // entries with the next integer version — never edit a migration that has
@@ -198,30 +194,7 @@ const migrations: Migration[] = [
 
 export function runMigrations(
   db: Database,
-  { targetVersion = Infinity }: { targetVersion?: number } = {},
+  opts?: { targetVersion?: number },
 ): void {
-  const { user_version: currentVersion } = db
-    .query<{ user_version: number }, []>("PRAGMA user_version")
-    .get()!;
-
-  const pending = migrations
-    .filter(
-      (migration) =>
-        migration.version > currentVersion &&
-        migration.version <= targetVersion,
-    )
-    .sort((a, b) => a.version - b.version);
-
-  if (pending.length === 0) return;
-
-  const applyPending = db.transaction(() => {
-    for (const migration of pending) {
-      db.run(migration.up);
-      // PRAGMA doesn't accept bound parameters; the version is our own
-      // integer literal, never user input.
-      db.run(`PRAGMA user_version = ${migration.version}`);
-    }
-  });
-
-  applyPending();
+  applyMigrations(db, migrations, opts);
 }

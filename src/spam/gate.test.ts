@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { gateSubmission } from "./gate";
 import type { ClassificationResult } from "./classify";
-import { openDatabase } from "../db/client";
-import { createSubmissionsRepo } from "../db/submissions";
+import { openMailDatabase } from "../db/mail-client";
+import { createMailSubmissionsRepo } from "../db/mail-submissions";
 
 function classifyResult(
   overrides: Partial<ClassificationResult> = {},
@@ -37,7 +37,7 @@ function deliverSpy(impl?: () => Promise<void>) {
 }
 
 function testSubmissionsRepo() {
-  return createSubmissionsRepo(openDatabase(":memory:"));
+  return createMailSubmissionsRepo(openMailDatabase(":memory:"));
 }
 
 describe("gateSubmission", () => {
@@ -57,7 +57,7 @@ describe("gateSubmission", () => {
       submission: { email: "a@b.com" },
       deliver,
       classify,
-      record: submissions.recordSubmission,
+      record: submissions.insertSubmission,
     });
 
     expect(result).toEqual({ delivered: false });
@@ -83,7 +83,7 @@ describe("gateSubmission", () => {
       submission: { email: "a@b.com" },
       deliver,
       classify,
-      record: submissions.recordSubmission,
+      record: submissions.insertSubmission,
     });
 
     expect(result).toEqual({ delivered: true });
@@ -102,7 +102,7 @@ describe("gateSubmission", () => {
       submission: { email: "a@b.com" },
       deliver,
       classify,
-      record: submissions.recordSubmission,
+      record: submissions.insertSubmission,
     });
 
     expect(result).toEqual({ delivered: true });
@@ -122,7 +122,7 @@ describe("gateSubmission", () => {
       submission: { email: "a@b.com" },
       deliver,
       classify,
-      record: submissions.recordSubmission,
+      record: submissions.insertSubmission,
       deadlineMs: 10,
     });
 
@@ -143,8 +143,8 @@ describe("gateSubmission", () => {
       classifyResult({ verdict: "legit", confidence: 0.95, reason: "genuine" }),
     );
     const record: ReturnType<
-      typeof createSubmissionsRepo
-    >["recordSubmission"] = () => {
+      typeof createMailSubmissionsRepo
+    >["insertSubmission"] = () => {
       throw new Error("unable to open database file");
     };
 
@@ -175,7 +175,7 @@ describe("gateSubmission", () => {
         submission: { email: "a@b.com" },
         deliver,
         classify,
-        record: submissions.recordSubmission,
+        record: submissions.insertSubmission,
       }),
     ).rejects.toThrow("resend down");
 
@@ -184,7 +184,7 @@ describe("gateSubmission", () => {
     expect(record?.reason).toBe("genuine · delivery failed");
   });
 
-  describe("Jev queue", () => {
+  describe("Jev enqueue", () => {
     const gate = (
       submissions: ReturnType<typeof testSubmissionsRepo>,
       overrides: Partial<Parameters<typeof gateSubmission>[0]> = {},
@@ -196,51 +196,48 @@ describe("gateSubmission", () => {
         classify: instantClassify(
           classifyResult({ verdict: "legit", confidence: 0.95 }),
         ),
-        record: submissions.recordSubmission,
+        record: submissions.insertSubmission,
         ...overrides,
       });
 
-    test("queues the recorded row for Jev and kicks the worker, without affecting delivery", async () => {
+    test("enqueues a jev_submission job for the recorded row, without affecting delivery", async () => {
       const { deliver, calls } = deliverSpy();
       const submissions = testSubmissionsRepo();
-      let kicks = 0;
+      const enqueued: string[] = [];
 
       const result = await gate(submissions, {
         deliver,
         jevEnabled: () => true,
-        kickJev: () => kicks++,
+        enqueueJevSubmission: (id) => enqueued.push(id),
       });
 
       expect(result).toEqual({ delivered: true });
       expect(calls).toEqual([{ subjectPrefix: "" }]);
-      expect(kicks).toBe(1);
-      expect(submissions.listSubmissions().data[0]?.jev).toMatchObject({
-        status: "pending",
-        attempts: 0,
-        verdict: null,
-      });
-      expect(submissions.claimNextJev()).not.toBeNull();
+      const [record] = submissions.listSubmissions().data;
+      expect(record?.jev).toBeNull();
+      expect(enqueued).toEqual([record!.id]);
     });
 
-    test("queues suppressed submissions too", async () => {
+    test("enqueues suppressed submissions too", async () => {
       const submissions = testSubmissionsRepo();
+      const enqueued: string[] = [];
 
       const result = await gate(submissions, {
         classify: instantClassify(
           classifyResult({ verdict: "spam", confidence: 0.99 }),
         ),
         jevEnabled: () => true,
-        kickJev: () => {},
+        enqueueJevSubmission: (id) => enqueued.push(id),
       });
 
       expect(result).toEqual({ delivered: false });
-      expect(submissions.listSubmissions().data[0]?.jev?.status).toBe(
-        "pending",
-      );
+      const [record] = submissions.listSubmissions().data;
+      expect(enqueued).toEqual([record!.id]);
     });
 
-    test("a verdict that lands after the deadline is queued when it is recorded", async () => {
+    test("a verdict that lands after the deadline is enqueued once it is recorded", async () => {
       const submissions = testSubmissionsRepo();
+      const enqueued: string[] = [];
 
       await gate(submissions, {
         classify: delayedClassify(
@@ -249,41 +246,46 @@ describe("gateSubmission", () => {
         ),
         deadlineMs: 5,
         jevEnabled: () => true,
-        kickJev: () => {},
+        enqueueJevSubmission: (id) => enqueued.push(id),
       });
       expect(submissions.listSubmissions().data).toHaveLength(0);
+      expect(enqueued).toEqual([]);
 
       await Bun.sleep(80);
 
-      expect(submissions.listSubmissions().data[0]?.jev?.status).toBe(
-        "pending",
-      );
+      const [record] = submissions.listSubmissions().data;
+      expect(enqueued).toEqual([record!.id]);
     });
 
-    test("leaves the Jev state empty when Jev is disabled", async () => {
+    test("never enqueues when Jev is disabled", async () => {
       const submissions = testSubmissionsRepo();
-      let kicks = 0;
+      const enqueued: string[] = [];
 
       await gate(submissions, {
         jevEnabled: () => false,
-        kickJev: () => kicks++,
+        enqueueJevSubmission: (id) => enqueued.push(id),
       });
 
-      expect(submissions.listSubmissions().data[0]?.jev).toBeNull();
-      expect(submissions.claimNextJev()).toBeNull();
+      expect(submissions.listSubmissions().data).toHaveLength(1);
+      expect(enqueued).toEqual([]);
     });
 
-    test("a throwing kick never breaks the gate", async () => {
+    test("a throwing enqueue never breaks the gate, and the submission still commits", async () => {
       const submissions = testSubmissionsRepo();
 
       const result = await gate(submissions, {
         jevEnabled: () => true,
-        kickJev: () => {
+        enqueueJevSubmission: () => {
           throw new Error("boom");
         },
       });
 
       expect(result).toEqual({ delivered: true });
+      // The enqueue is deliberately NOT transactional with the insert: the
+      // authoritative, already-delivered submission record must survive a
+      // failure in the non-authoritative, shadow-only Jev enqueue — only the
+      // Jev job is lost, invisibly and harmlessly (see the comment in
+      // gate.ts's `persist`).
       expect(submissions.listSubmissions().data).toHaveLength(1);
     });
   });

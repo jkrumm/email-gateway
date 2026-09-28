@@ -1,7 +1,15 @@
-import type { JevEmailResult } from "../db/emails";
 import { decideShadow, type JevConfig } from "../llm/jev";
 import { CATEGORY_CRITERIA } from "./categories";
 import { buildEmailPayload } from "./enrich-email";
+
+// A successful Jev call on an inbound email.
+export interface JevEmailResult {
+  spamProbability: number;
+  category: string;
+  categoryConfidence: number;
+  latencyMs: number;
+  model: string;
+}
 
 const questions = {
   spam: {

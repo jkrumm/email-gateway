@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { ReactElement } from "react";
 import type { Resend } from "resend";
-import { recordOutboundEmail, sendMail } from "./send-mail";
-import type { EmailsRepo, UpsertEmailInput } from "../db";
+import { recordSendLog, sendMail } from "./send-mail";
+import type { InsertSendLogInput, SendLogRepo } from "../db/mail-index";
 
 const FAKE_TEMPLATE = {} as ReactElement;
 
-function throwingRepo(): Pick<EmailsRepo, "upsertEmail"> {
+function throwingRepo(): Pick<SendLogRepo, "insertSendLog"> {
   return {
-    upsertEmail: () => {
+    insertSendLog: () => {
       throw new Error("unable to open database file");
     },
   };
@@ -27,41 +27,39 @@ function fakeResendClient({
 }
 
 function recordingRepo(): {
-  emails: Pick<EmailsRepo, "upsertEmail">;
-  rows: UpsertEmailInput[];
+  sendLog: Pick<SendLogRepo, "insertSendLog">;
+  rows: InsertSendLogInput[];
 } {
-  const rows: UpsertEmailInput[] = [];
+  const rows: InsertSendLogInput[] = [];
   return {
     rows,
-    emails: { upsertEmail: (input) => rows.push(input) },
+    sendLog: { insertSendLog: (input) => rows.push(input) },
   };
 }
 
-describe("recordOutboundEmail", () => {
+describe("recordSendLog", () => {
   test("a throwing repo is logged and swallowed, never thrown", () => {
     expect(() =>
-      recordOutboundEmail(throwingRepo(), {
+      recordSendLog(throwingRepo(), {
         id: "email_1",
-        direction: "outbound",
-        fromAddress: "no-reply@example.com",
-        toAddresses: ["guest@example.com"],
-        subject: "Hello",
-        createdAt: "2026-01-01T00:00:00.000Z",
+        recipients: ["guest@example.com"],
+        provider: "resend",
+        requestedBy: "route",
       }),
     ).not.toThrow();
   });
 });
 
 describe("sendMail", () => {
-  test("happy path: sends, records the outbound row and returns Resend's id + the resolved from", async () => {
-    const { emails, rows } = recordingRepo();
+  test("happy path: sends, records the send_log row and returns Resend's id + the resolved from", async () => {
+    const { sendLog, rows } = recordingRepo();
 
     const receipt = await sendMail({
       to: "guest@example.com",
       subject: "Hello",
       template: FAKE_TEMPLATE,
       resendClient: fakeResendClient({ id: "email_42" }),
-      emails,
+      sendLog,
     });
 
     expect(receipt).toEqual({
@@ -69,11 +67,15 @@ describe("sendMail", () => {
       from: "Free-Planning-Poker.com <no-reply@free-planning-poker.com>",
     });
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ id: "email_42", direction: "outbound" });
+    expect(rows[0]).toMatchObject({
+      id: "email_42",
+      provider: "resend",
+      recipients: ["guest@example.com"],
+    });
   });
 
   test("the returned from reflects an explicit from, not the default", async () => {
-    const { emails } = recordingRepo();
+    const { sendLog } = recordingRepo();
 
     const receipt = await sendMail({
       from: "Someone <someone@example.com>",
@@ -81,14 +83,14 @@ describe("sendMail", () => {
       subject: "Hello",
       template: FAKE_TEMPLATE,
       resendClient: fakeResendClient({ id: "email_43" }),
-      emails,
+      sendLog,
     });
 
     expect(receipt.from).toBe("Someone <someone@example.com>");
   });
 
   test("a Resend error throws and records nothing", async () => {
-    const { emails, rows } = recordingRepo();
+    const { sendLog, rows } = recordingRepo();
 
     await expect(
       sendMail({
@@ -98,7 +100,7 @@ describe("sendMail", () => {
         resendClient: fakeResendClient({
           error: { statusCode: 429, name: "rate_limit", message: "too fast" },
         }),
-        emails,
+        sendLog,
       }),
     ).rejects.toThrow("rate_limit");
     expect(rows).toHaveLength(0);

@@ -1,26 +1,14 @@
 import { Elysia, redirect } from "elysia";
 import { timingSafeEqualStrings } from "../auth";
 import { env } from "../env";
-import { emailsRepo, imapStateRepo, submissionsRepo } from "../db";
-import { runSyncNow } from "../sync";
-import { enrichEmail, type EnrichEmailOutcome } from "../enrich/enrich-email";
-import { reEnrichEmail } from "../enrich/re-enrich";
-import { safeBackPath } from "./safe-back-path";
+import { mailSubmissionsRepo } from "../db/mail-index";
+import { enqueueSyncTick, jobQueue } from "../jobs/queue";
 import type {
-  EmailDirection,
-  EmailsRepo,
-  EmailWithEnrichment,
-} from "../db/emails";
-import type { ImapStateRepo } from "../db/imap-state";
-import { sumJevQueue } from "../db/jev-queue";
-import type {
-  SubmissionsRepo,
+  MailSubmissionsRepo,
   SubmissionSource,
   Verdict,
-} from "../db/submissions";
-import type { SyncSummary } from "../sync/types";
+} from "../db/mail-submissions";
 import { emailRegistry } from "../emails/registry";
-import { berlinDayBoundaryToUtcIso } from "./format";
 import { APP_CSS, getFontAsset } from "./assets";
 import {
   assetResponse,
@@ -28,9 +16,6 @@ import {
   renderPage,
   textResponse,
 } from "./render";
-import { OverviewPage } from "./pages/overview";
-import { EmailsPage } from "./pages/emails";
-import { EmailDetailPage, EmailNotFoundPage } from "./pages/email-detail";
 import { SubmissionsPage } from "./pages/submissions";
 import {
   TemplateDetailPage,
@@ -40,7 +25,6 @@ import {
 } from "./pages/templates";
 
 const MIN_PASSWORD_LENGTH = 12;
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60_000;
 const PAGE_LIMIT = 25;
 
 function isValidBasicAuth(
@@ -104,54 +88,26 @@ function withParam(path: string, key: string, value: string): string {
   return `${url.pathname}${url.search}`;
 }
 
-type NoticeQuery = { notice?: string; new?: string };
+type NoticeQuery = { notice?: string };
 
 function noticeFor(
   query: NoticeQuery,
 ): { text: string; error?: boolean } | null {
   switch (query.notice) {
-    case "sync-running":
-      return { text: "A sync is already running.", error: true };
-    case "synced":
-      return { text: `Synced — ${query.new ?? "0"} new email(s).` };
-    case "enriched":
-      return { text: "AI enrichment re-run." };
-    case "enrich-not-configured":
-      return { text: "AI enrichment isn't configured.", error: true };
-    case "enrich-failed":
-      return {
-        text: "AI enrichment failed — see the error below.",
-        error: true,
-      };
-    case "enrich-busy":
-      return {
-        text: "AI enrichment is already running for this email.",
-        error: true,
-      };
+    case "sync-enqueued":
+      return { text: "Sync enqueued." };
     default:
       return null;
   }
 }
 
-function truthy(value: string | undefined): boolean {
-  return value === "true";
-}
-
 export function createAdminRoutes({
   password,
-  emails,
   submissions,
-  imapState,
-  runSync,
-  enrich,
   now,
 }: {
   password: string | undefined;
-  emails: EmailsRepo;
-  submissions: SubmissionsRepo;
-  imapState: ImapStateRepo;
-  runSync: () => Promise<SyncSummary | { busy: true }>;
-  enrich: (email: EmailWithEnrichment) => Promise<EnrichEmailOutcome>;
+  submissions: MailSubmissionsRepo;
   now?: () => Date;
 }) {
   const passwordValid =
@@ -192,139 +148,7 @@ export function createAdminRoutes({
       }
       return assetResponse(bytes, "font/woff2");
     })
-    .get("/", ({ query }) => {
-      const time = currentTime();
-      const since = new Date(time.getTime() - THIRTY_DAYS_MS).toISOString();
-      const stats = emails.emailStats({ since });
-
-      return renderPage(
-        <OverviewPage
-          stats={stats}
-          jevComparison={submissions.getJevComparison({ since })}
-          jevQueue={sumJevQueue(
-            emails.jevQueueCounts(),
-            submissions.jevQueueCounts(),
-          )}
-          needsAction={
-            emails.listEmails({ actionRequired: true, limit: 8 }).data
-          }
-          recentlyBlocked={
-            submissions.listSubmissions({ delivered: false, limit: 5 }).data
-          }
-          lastSyncedAt={emails.lastSyncedAt()}
-          imapHealth={imapState.listHealth()}
-          needsActionCount={emails.actionRequiredCount()}
-          now={time}
-          notice={noticeFor(query)}
-        />,
-      );
-    })
-    .get("/emails", ({ query }) => {
-      const direction =
-        query.direction === "inbound" || query.direction === "outbound"
-          ? (query.direction as EmailDirection)
-          : undefined;
-      const category = query.category || undefined;
-      const source = query.source || undefined;
-      const provider =
-        query.provider === "resend" || query.provider === "imap"
-          ? query.provider
-          : undefined;
-      const mailbox = query.mailbox || undefined;
-      const actionRequired = truthy(query.action_required) || undefined;
-      const from = query.from || undefined;
-      const to = query.to || undefined;
-      const cursor = query.cursor || undefined;
-
-      const result = emails.listEmails({
-        direction,
-        category: category ? [category] : undefined,
-        source,
-        provider,
-        mailbox,
-        q: query.q || undefined,
-        since: from ? berlinDayBoundaryToUtcIso(from, "start") : undefined,
-        until: to ? berlinDayBoundaryToUtcIso(to, "end") : undefined,
-        actionRequired,
-        cursor,
-        limit: PAGE_LIMIT,
-      });
-
-      return renderPage(
-        <EmailsPage
-          filters={{
-            q: query.q || undefined,
-            direction,
-            category,
-            source,
-            provider,
-            mailbox,
-            actionRequired,
-            from,
-            to,
-          }}
-          emails={result.data}
-          nextCursor={result.nextCursor}
-          hasCursor={Boolean(cursor)}
-          needsActionCount={emails.actionRequiredCount()}
-          now={currentTime()}
-          notice={noticeFor(query)}
-        />,
-      );
-    })
-    .get("/emails/:id", ({ params, query }) => {
-      const back = safeBackPath(query.back);
-      const email = emails.getEmail(params.id);
-      const needsActionCount = emails.actionRequiredCount();
-
-      if (!email) {
-        return renderPage(
-          <EmailNotFoundPage
-            id={params.id}
-            back={back}
-            needsActionCount={needsActionCount}
-          />,
-          { status: 404 },
-        );
-      }
-
-      return renderPage(
-        <EmailDetailPage
-          email={email}
-          view={query.view === "text" ? "text" : "html"}
-          back={back}
-          needsActionCount={needsActionCount}
-          now={currentTime()}
-          notice={noticeFor(query)}
-        />,
-      );
-    })
-    .post("/emails/:id/enrich", async ({ params, query }) => {
-      const back = safeBackPath(query.back);
-      const view = query.view === "text" ? "text" : "html";
-      const detailPath = `/admin/emails/${params.id}?back=${encodeURIComponent(back)}&view=${view}`;
-
-      const existing = emails.getEmail(params.id);
-      if (!existing) {
-        return redirect(back, 303);
-      }
-
-      const result = await reEnrichEmail({ emails, id: params.id, enrich });
-
-      if (result.status === "busy") {
-        return redirect(withParam(detailPath, "notice", "enrich-busy"), 303);
-      }
-
-      if (result.outcome.ok) {
-        return redirect(withParam(detailPath, "notice", "enriched"), 303);
-      }
-
-      const notice =
-        result.outcome.error === "Enrichment not configured"
-          ? "enrich-not-configured"
-          : "enrich-failed";
-      return redirect(withParam(detailPath, "notice", notice), 303);
-    })
+    .get("/", () => redirect("/admin/submissions", 302))
     .get("/submissions", ({ query }) => {
       const verdict = (["legit", "marketing", "spam"] as const).includes(
         query.verdict as Verdict,
@@ -358,57 +182,32 @@ export function createAdminRoutes({
           submissions={result.data}
           nextCursor={result.nextCursor}
           hasCursor={Boolean(cursor)}
-          needsActionCount={emails.actionRequiredCount()}
           now={currentTime()}
+          notice={noticeFor(query)}
         />,
       );
     })
-    .get("/sent", () => redirect("/admin/emails?direction=outbound", 302))
-    .get("/received", () => redirect("/admin/emails?direction=inbound", 302))
-    .get("/filtered", () => redirect("/admin/submissions", 302))
-    .post("/sync", async ({ request }) => {
-      const back = refererPathOrDefault(request, "/admin");
-      const result = await runSync();
-
-      if ("busy" in result) {
-        return redirect(withParam(back, "notice", "sync-running"), 303);
-      }
-
-      const newCount =
-        result.outbound.new + result.inbound.new + (result.imap?.new ?? 0);
-      const withNotice = withParam(back, "notice", "synced");
-      return redirect(withParam(withNotice, "new", String(newCount)), 303);
+    .post("/sync", ({ request }) => {
+      const back = refererPathOrDefault(request, "/admin/submissions");
+      enqueueSyncTick(jobQueue);
+      return redirect(withParam(back, "notice", "sync-enqueued"), 303);
     })
-    .get("/templates", () =>
-      renderPage(
-        <TemplatesListPage needsActionCount={emails.actionRequiredCount()} />,
-      ),
-    )
+    .get("/templates", () => renderPage(<TemplatesListPage />))
     .get("/templates/:id", async ({ params, query }) => {
       const entry = emailRegistry.find(
         (candidate) => candidate.id === params.id,
       );
-      const needsActionCount = emails.actionRequiredCount();
 
       if (!entry) {
-        return renderPage(
-          <TemplateNotFoundPage
-            id={params.id}
-            needsActionCount={needsActionCount}
-          />,
-          { status: 404 },
-        );
+        return renderPage(<TemplateNotFoundPage id={params.id} />, {
+          status: 404,
+        });
       }
 
       const width = query.width === "375" ? 375 : 600;
       const html = await renderTemplateHtml(entry);
       return renderPage(
-        <TemplateDetailPage
-          entry={entry}
-          html={html}
-          width={width}
-          needsActionCount={needsActionCount}
-        />,
+        <TemplateDetailPage entry={entry} html={html} width={width} />,
       );
     })
     .get("/templates/:id/raw", async ({ params }) => {
@@ -427,9 +226,5 @@ export function createAdminRoutes({
 
 export const adminRoutes = createAdminRoutes({
   password: env.ADMIN_PASSWORD,
-  emails: emailsRepo,
-  submissions: submissionsRepo,
-  imapState: imapStateRepo,
-  runSync: runSyncNow,
-  enrich: (email) => enrichEmail({ email }),
+  submissions: mailSubmissionsRepo,
 });

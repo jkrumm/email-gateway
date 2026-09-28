@@ -7,6 +7,7 @@
     "dev": "doppler run -- bun run --watch src/index.ts",
     "email": "email dev --dir src/emails",
     "seed:demo": "bun run scripts/seed-demo.ts",
+    "import-legacy": "bun run scripts/import-legacy.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "format": "prettier --write .",
@@ -21,6 +22,7 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
+    "@ai-sdk/gateway": "4.0.87",
     "@ai-sdk/openai-compatible": "3.0.53",
     "@elysiajs/bearer": "1.4.4",
     "@fontsource-variable/hubot-sans": "5.3.0",

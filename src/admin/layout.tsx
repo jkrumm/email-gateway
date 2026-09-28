@@ -2,8 +2,7 @@ import type { ReactNode } from "react";
 import { NavIcon } from "./ui";
 import { APP_CSS_VERSION } from "./assets";
 
-export type AdminNav =
-  "overview" | "inbox" | "needs-action" | "submissions" | "templates";
+export type AdminNav = "submissions" | "templates";
 
 const NAV_ITEMS: {
   id: AdminNav;
@@ -11,14 +10,6 @@ const NAV_ITEMS: {
   href: string;
   icon: Parameters<typeof NavIcon>[0]["name"];
 }[] = [
-  { id: "overview", label: "Overview", href: "/admin", icon: "overview" },
-  { id: "inbox", label: "Inbox", href: "/admin/emails", icon: "inbox" },
-  {
-    id: "needs-action",
-    label: "Needs action",
-    href: "/admin/emails?action_required=true",
-    icon: "action",
-  },
   {
     id: "submissions",
     label: "Spam filter",
@@ -36,13 +27,11 @@ const NAV_ITEMS: {
 export function AdminLayout({
   title,
   active,
-  needsActionCount,
   notice,
   children,
 }: {
   title: string;
   active: AdminNav;
-  needsActionCount?: number;
   notice?: { text: string; error?: boolean } | null;
   children: ReactNode;
 }) {
@@ -62,16 +51,6 @@ export function AdminLayout({
         <div className="app-shell">
           <header className="app-header">
             <span className="wordmark">Mail</span>
-            <form className="search-form" method="get" action="/admin/emails">
-              <input
-                className="control"
-                style={{ width: "100%" }}
-                type="search"
-                name="q"
-                placeholder="Search emails…"
-                aria-label="Search emails"
-              />
-            </form>
           </header>
           <div className="app-body">
             <nav className="app-sidebar">
@@ -87,9 +66,6 @@ export function AdminLayout({
                     >
                       <NavIcon name={item.icon} />
                       {item.label}
-                      {item.id === "needs-action" && needsActionCount ? (
-                        <span className="nav-badge">{needsActionCount}</span>
-                      ) : null}
                     </a>
                   </li>
                 ))}

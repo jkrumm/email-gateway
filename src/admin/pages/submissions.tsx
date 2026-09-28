@@ -3,15 +3,10 @@ import type {
   SubmissionRecord,
   SubmissionSource,
   Verdict,
-} from "../../db/submissions";
+} from "../../db/mail-submissions";
 import { AdminLayout } from "../layout";
 import { Badge, EmptyState } from "../ui";
-import {
-  formatJevQueueState,
-  formatLatency,
-  formatListDateTime,
-  formatPercent,
-} from "../format";
+import { formatLatency, formatListDateTime, formatPercent } from "../format";
 
 const VERDICT_COLOR: Record<Verdict, string> = {
   legit: "good",
@@ -21,15 +16,11 @@ const VERDICT_COLOR: Record<Verdict, string> = {
 
 function JevCell({ submission }: { submission: SubmissionRecord }) {
   const { jev } = submission;
-  if (!jev) return <span className="page-subtitle">—</span>;
-  if (jev.verdict === null || jev.confidence === null) {
+  if (!jev || jev.verdict === null || jev.confidence === null) {
     return (
-      <>
-        <Badge color={jev.status === "failed" ? "bad" : "outline"}>
-          {jev.status}
-        </Badge>
-        <p className="summary-line">{formatJevQueueState(jev)}</p>
-      </>
+      <span className="page-subtitle">
+        {jev?.error ? `error: ${jev.error}` : "not yet judged"}
+      </span>
     );
   }
 
@@ -60,15 +51,15 @@ export function SubmissionsPage({
   submissions,
   nextCursor,
   hasCursor,
-  needsActionCount,
   now,
+  notice,
 }: {
   filters: SubmissionsFilters;
   submissions: SubmissionRecord[];
   nextCursor: string | null;
   hasCursor: boolean;
-  needsActionCount: number;
   now: Date;
+  notice?: { text: string; error?: boolean } | null;
 }) {
   const persistedFields: [string, string | undefined][] = [
     ["verdict", filters.verdict],
@@ -84,17 +75,20 @@ export function SubmissionsPage({
     .join("&");
 
   return (
-    <AdminLayout
-      title="Spam filter"
-      active="submissions"
-      needsActionCount={needsActionCount}
-    >
+    <AdminLayout title="Spam filter" active="submissions" notice={notice}>
       <div className="page-header">
         <div>
           <h1 className="page-title">Spam filter</h1>
           <p className="page-subtitle">
             Every contact-form submission judged, persisted history.
           </p>
+        </div>
+        <div className="page-actions">
+          <form method="post" action="/admin/sync">
+            <button type="submit" className="btn btn-primary">
+              Sync now
+            </button>
+          </form>
         </div>
       </div>
 

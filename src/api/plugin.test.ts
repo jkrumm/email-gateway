@@ -1,54 +1,111 @@
 import { describe, expect, test } from "bun:test";
 import { createApiRoutes } from "./plugin";
-import { openDatabase } from "../db/client";
-import { createEmailsRepo } from "../db/emails";
-import { createImapStateRepo } from "../db/imap-state";
-import { createSubmissionsRepo } from "../db/submissions";
-import { JEV_MAX_ATTEMPTS } from "../db/jev-queue";
+import { openMailDatabase } from "../db/mail-client";
+import { createAccountsRepo } from "../db/accounts";
+import { createMessagesRepo, type MessageEnvelope } from "../db/messages";
+import { createMailSubmissionsRepo } from "../db/mail-submissions";
+import { createJobQueue } from "../db/jobs";
+import type { MailProvider, Message, MessageRef } from "../providers/port";
 
 const API_KEY = "local-api-key-1234567";
+const ACCOUNT_ID = "proton:hello@example.com";
+
+function envelope(overrides: Partial<MessageEnvelope> = {}): MessageEnvelope {
+  return {
+    key: "msg-1",
+    account: ACCOUNT_ID,
+    direction: "inbound",
+    fromAddress: "sender@example.com",
+    toAddresses: ["hello@example.com"],
+    cc: null,
+    bcc: null,
+    replyTo: null,
+    subject: "Hello there",
+    date: "2026-01-01T00:00:00.000Z",
+    size: 1024,
+    hasAttachments: false,
+    threadKey: null,
+    flags: [],
+    ...overrides,
+  };
+}
+
+function fakeProvider(overrides: Partial<MailProvider> = {}): MailProvider {
+  return {
+    id: "proton",
+    account: "hello@example.com",
+    capabilities: async () => ({
+      list: true,
+      read: true,
+      search: false,
+      flag: true,
+      move: true,
+      send: false,
+      idle: false,
+    }),
+    listMailboxes: async () => [],
+    list: async () => ({ items: [], cursor: undefined }),
+    read: async (ref: MessageRef): Promise<Message> => ({
+      ref,
+      from: "sender@example.com",
+      to: ["hello@example.com"],
+      subject: "Hello there",
+      date: "2026-01-01T00:00:00.000Z",
+      size: 1024,
+      hasAttachments: false,
+      flags: [],
+      html: null,
+      text: null,
+      attachments: [],
+    }),
+    search: async () => [],
+    setFlags: async () => {},
+    move: async (ref) => ref,
+    send: async () => {
+      throw new Error("not implemented in fake");
+    },
+    ...overrides,
+  };
+}
 
 // A default parameter would also fire for an *explicit* `undefined`, which
 // is exactly the case the "key unset" test needs to express — so this takes
 // a plain positional argument instead of a defaulted options object.
-function testApp(apiKey: string | undefined) {
-  const db = openDatabase(":memory:");
-  const emails = createEmailsRepo(db);
-  const submissions = createSubmissionsRepo(db);
+function testApp(
+  apiKey: string | undefined,
+  {
+    providerFor,
+  }: { providerFor?: (accountId: string) => MailProvider | null } = {},
+) {
+  const db = openMailDatabase(":memory:");
+  const accounts = createAccountsRepo(db);
+  const messages = createMessagesRepo(db);
+  const mailSubmissions = createMailSubmissionsRepo(db);
+  const jobs = createJobQueue({ db, claimedBy: "test:1" });
+  accounts.upsertAccount({
+    id: ACCOUNT_ID,
+    provider: "proton",
+    address: "hello@example.com",
+  });
 
   const app = createApiRoutes({
     apiKey,
-    emails,
-    submissions,
-    imapState: createImapStateRepo(db),
-    runSync: async () => ({
-      outbound: { new: 0, updated: 0 },
-      inbound: { new: 0 },
-      errors: [],
-    }),
+    messages,
+    mailSubmissions,
+    accounts,
+    jobs,
+    providerFor: providerFor ?? (() => null),
   });
 
-  return { app, emails, submissions };
-}
-
-function testAppWithDb(apiKey: string | undefined) {
-  const db = openDatabase(":memory:");
-  const app = createApiRoutes({
-    apiKey,
-    emails: createEmailsRepo(db),
-    submissions: createSubmissionsRepo(db),
-    imapState: createImapStateRepo(db),
-    runSync: async () => ({
-      outbound: { new: 0, updated: 0 },
-      inbound: { new: 0 },
-      errors: [],
-    }),
-  });
-  return { app, db };
+  return { app, messages, mailSubmissions, accounts, jobs };
 }
 
 function authHeaders(key = API_KEY) {
   return { authorization: `Bearer ${key}` };
+}
+
+async function json(response: Response): Promise<Record<string, unknown>> {
+  return (await response.json()) as Record<string, unknown>;
 }
 
 describe("API auth", () => {
@@ -72,7 +129,7 @@ describe("API auth", () => {
     );
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: "unauthorized" });
+    expect(await json(response)).toEqual({ error: "unauthorized" });
   });
 
   test("missing bearer -> 401", async () => {
@@ -86,148 +143,687 @@ describe("API auth", () => {
   });
 });
 
-describe("GET /api/emails", () => {
-  test("filters return the expected ids", async () => {
-    const { app, emails } = testApp(API_KEY);
-    emails.upsertEmail({
-      id: "in_1",
-      direction: "inbound",
-      fromAddress: "guest@example.com",
-      toAddresses: ["charter@example.com"],
-      subject: "Charter request",
-      createdAt: "2026-01-01T00:00:00.000Z",
+describe("GET /api/messages", () => {
+  test("needs_me=1 is sugar for actionRequired: true", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(envelope({ key: "msg-a" }));
+    messages.upsertMessage(envelope({ key: "msg-b" }));
+    messages.saveEnrichment("msg-a", {
+      category: "urgent",
+      priority: "high",
+      actionRequired: true,
+      summary: null,
+      suggestedAction: null,
+      language: null,
+      facts: null,
+      model: "m",
+      error: null,
     });
-    emails.upsertEmail({
-      id: "out_1",
-      direction: "outbound",
-      fromAddress: "no-reply@example.com",
-      toAddresses: ["guest@example.com"],
-      subject: "Confirmation",
-      createdAt: "2026-01-02T00:00:00.000Z",
+
+    const response = await app.handle(
+      new Request("http://localhost/api/messages?needs_me=1", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await json(response)) as { rows: { key: string }[] };
+    expect(body.rows.map((r) => r.key)).toEqual(["msg-a"]);
+  });
+
+  test("an unrecognized needs_me value applies no filter instead of silently filtering false", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(envelope({ key: "msg-a" }));
+    messages.upsertMessage(envelope({ key: "msg-b" }));
+    messages.saveEnrichment("msg-a", {
+      category: "urgent",
+      priority: "high",
+      actionRequired: true,
+      summary: null,
+      suggestedAction: null,
+      language: null,
+      facts: null,
+      model: "m",
+      error: null,
     });
+
+    for (const value of ["tru", ""]) {
+      const response = await app.handle(
+        new Request(`http://localhost/api/messages?needs_me=${value}`, {
+          headers: authHeaders(),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await json(response)) as { rows: { key: string }[] };
+      expect(body.rows.map((r) => r.key).sort()).toEqual(["msg-a", "msg-b"]);
+    }
+  });
+
+  test("needs_me=true is sugar for actionRequired: true", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(envelope({ key: "msg-a" }));
+    messages.upsertMessage(envelope({ key: "msg-b" }));
+    messages.saveEnrichment("msg-a", {
+      category: "urgent",
+      priority: "high",
+      actionRequired: true,
+      summary: null,
+      suggestedAction: null,
+      language: null,
+      facts: null,
+      model: "m",
+      error: null,
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/messages?needs_me=true", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await json(response)) as { rows: { key: string }[] };
+    expect(body.rows.map((r) => r.key)).toEqual(["msg-a"]);
+  });
+
+  test("needs_me=0 and needs_me=false filter for actionRequired: false", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(envelope({ key: "msg-a" }));
+    messages.upsertMessage(envelope({ key: "msg-b" }));
+    messages.saveEnrichment("msg-a", {
+      category: "urgent",
+      priority: "high",
+      actionRequired: true,
+      summary: null,
+      suggestedAction: null,
+      language: null,
+      facts: null,
+      model: "m",
+      error: null,
+    });
+    messages.saveEnrichment("msg-b", {
+      category: "newsletter",
+      priority: "low",
+      actionRequired: false,
+      summary: null,
+      suggestedAction: null,
+      language: null,
+      facts: null,
+      model: "m",
+      error: null,
+    });
+
+    for (const value of ["0", "false"]) {
+      const response = await app.handle(
+        new Request(`http://localhost/api/messages?needs_me=${value}`, {
+          headers: authHeaders(),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await json(response)) as { rows: { key: string }[] };
+      expect(body.rows.map((r) => r.key)).toEqual(["msg-b"]);
+    }
+  });
+
+  test("a garbage cursor is a clean 400, not a 500", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/messages?cursor=not-a-real-cursor", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toEqual({ error: "invalid_cursor" });
+  });
+});
+
+describe("GET /api/messages/:key", () => {
+  test("404 for an unknown key", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/messages/missing", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("merges the classification and omits body unless include=body", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(envelope());
+    messages.saveBody("msg-1", { html: "<p>hi</p>", text: "hi" });
+
+    const withoutBody = await json(
+      await app.handle(
+        new Request("http://localhost/api/messages/msg-1", {
+          headers: authHeaders(),
+        }),
+      ),
+    );
+    expect(withoutBody.body).toBeUndefined();
+    expect(withoutBody.classification).toBeNull();
+
+    const withBody = await json(
+      await app.handle(
+        new Request("http://localhost/api/messages/msg-1?include=body", {
+          headers: authHeaders(),
+        }),
+      ),
+    );
+    expect(withBody.body).toMatchObject({ html: "<p>hi</p>", text: "hi" });
+  });
+});
+
+describe("GET /api/threads/:key", () => {
+  test("404 for an unknown key", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/threads/missing", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("no threadKey returns just the one message", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(envelope({ key: "msg-1", threadKey: null }));
+
+    const response = await app.handle(
+      new Request("http://localhost/api/threads/msg-1", {
+        headers: authHeaders(),
+      }),
+    );
+    const body = (await json(response)) as { rows: { key: string }[] };
+    expect(body.rows.map((r) => r.key)).toEqual(["msg-1"]);
+  });
+
+  test("groups every message sharing the same threadKey", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(
+      envelope({
+        key: "msg-a",
+        threadKey: "thread-1",
+        date: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    messages.upsertMessage(
+      envelope({
+        key: "msg-b",
+        threadKey: "thread-1",
+        date: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+    messages.upsertMessage(
+      envelope({
+        key: "msg-c",
+        threadKey: "thread-2",
+        date: "2026-01-03T00:00:00.000Z",
+      }),
+    );
+
+    const response = await app.handle(
+      new Request("http://localhost/api/threads/msg-a", {
+        headers: authHeaders(),
+      }),
+    );
+    const body = (await json(response)) as { rows: { key: string }[] };
+    expect(body.rows.map((r) => r.key)).toEqual(["msg-b", "msg-a"]);
+  });
+});
+
+describe("GET /api/search", () => {
+  test("expands matched keys into full message summaries", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(
+      envelope({ key: "msg-1", subject: "Quarterly invoice attached" }),
+    );
+
+    const response = await app.handle(
+      new Request("http://localhost/api/search?q=invoice", {
+        headers: authHeaders(),
+      }),
+    );
+    const body = (await json(response)) as {
+      via: string;
+      keys: { key: string }[];
+    };
+    expect(body.via).toBe("fts");
+    expect(body.keys.map((r) => r.key)).toEqual(["msg-1"]);
+  });
+});
+
+describe("POST /api/messages/:key/flags", () => {
+  test("404 for an unknown message", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/messages/missing/flags", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ mailbox: "INBOX", add: ["\\Seen"] }),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("404 when the message has no location in that mailbox", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(envelope());
+
+    const response = await app.handle(
+      new Request("http://localhost/api/messages/msg-1/flags", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ mailbox: "INBOX", add: ["\\Seen"] }),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await json(response)).toEqual({ error: "location_not_found" });
+  });
+
+  test("501 when the provider does not support flags", async () => {
+    const { app, messages } = testApp(API_KEY, {
+      providerFor: () =>
+        fakeProvider({
+          capabilities: async () => ({
+            list: true,
+            read: true,
+            search: false,
+            flag: false,
+            move: false,
+            send: false,
+            idle: false,
+          }),
+        }),
+    });
+    messages.upsertMessage(envelope());
+    messages.upsertLocation("msg-1", {
+      mailbox: "INBOX",
+      uidValidity: "1",
+      uid: 1,
+      providerRef: {
+        provider: "proton",
+        account: "hello@example.com",
+        mailbox: "INBOX",
+        uidValidity: "1",
+        uid: 1,
+      },
+      lastSeenAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/messages/msg-1/flags", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ mailbox: "INBOX", add: ["\\Seen"] }),
+      }),
+    );
+
+    expect(response.status).toBe(501);
+  });
+
+  test("calls the provider's setFlags with the stored ref", async () => {
+    let calledWith: unknown;
+    const { app, messages } = testApp(API_KEY, {
+      providerFor: () =>
+        fakeProvider({
+          setFlags: async (ref, flags) => {
+            calledWith = { ref, flags };
+          },
+        }),
+    });
+    messages.upsertMessage(envelope());
+    const ref = {
+      provider: "proton" as const,
+      account: "hello@example.com",
+      mailbox: "INBOX",
+      uidValidity: "1",
+      uid: 1,
+    };
+    messages.upsertLocation("msg-1", {
+      mailbox: "INBOX",
+      uidValidity: "1",
+      uid: 1,
+      providerRef: ref,
+      lastSeenAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/messages/msg-1/flags", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ mailbox: "INBOX", add: ["\\Seen"] }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(calledWith).toEqual({
+      ref,
+      flags: { add: ["\\Seen"], remove: undefined, set: undefined },
+    });
+  });
+});
+
+describe("POST /api/messages/:key/move", () => {
+  test("moves and records the new location", async () => {
+    const { app, messages } = testApp(API_KEY, {
+      providerFor: () =>
+        fakeProvider({
+          move: async (ref, toMailbox) =>
+            ({ ...ref, mailbox: toMailbox, uid: 99 }) as MessageRef,
+        }),
+    });
+    messages.upsertMessage(envelope());
+    messages.upsertLocation("msg-1", {
+      mailbox: "INBOX",
+      uidValidity: "1",
+      uid: 1,
+      providerRef: {
+        provider: "proton",
+        account: "hello@example.com",
+        mailbox: "INBOX",
+        uidValidity: "1",
+        uid: 1,
+      },
+      lastSeenAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/messages/msg-1/move", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ mailbox: "INBOX", toMailbox: "Archive" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const locations = messages.getMessage("msg-1")?.locations ?? [];
+    expect(locations.find((l) => l.mailbox === "Archive")).toMatchObject({
+      uid: 99,
+    });
+    expect(locations.find((l) => l.mailbox === "INBOX")).toBeUndefined();
+  });
+
+  test("removes the old mailbox's location so a later call against it 404s instead of resolving a stale ref", async () => {
+    const { app, messages } = testApp(API_KEY, {
+      providerFor: () =>
+        fakeProvider({
+          move: async (ref, toMailbox) =>
+            ({ ...ref, mailbox: toMailbox, uid: 99 }) as MessageRef,
+        }),
+    });
+    messages.upsertMessage(envelope());
+    messages.upsertLocation("msg-1", {
+      mailbox: "INBOX",
+      uidValidity: "1",
+      uid: 1,
+      providerRef: {
+        provider: "proton",
+        account: "hello@example.com",
+        mailbox: "INBOX",
+        uidValidity: "1",
+        uid: 1,
+      },
+      lastSeenAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    await app.handle(
+      new Request("http://localhost/api/messages/msg-1/move", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ mailbox: "INBOX", toMailbox: "Archive" }),
+      }),
+    );
+
+    const staleFlagsResponse = await app.handle(
+      new Request("http://localhost/api/messages/msg-1/flags", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ mailbox: "INBOX", add: ["\\Seen"] }),
+      }),
+    );
+
+    expect(staleFlagsResponse.status).toBe(404);
+    expect(await json(staleFlagsResponse)).toEqual({
+      error: "location_not_found",
+    });
+  });
+
+  test("a same-mailbox move (toMailbox === mailbox) leaves the location intact", async () => {
+    const { app, messages } = testApp(API_KEY, {
+      providerFor: () =>
+        fakeProvider({
+          move: async (ref, toMailbox) =>
+            ({ ...ref, mailbox: toMailbox, uid: 99 }) as MessageRef,
+        }),
+    });
+    messages.upsertMessage(envelope());
+    messages.upsertLocation("msg-1", {
+      mailbox: "INBOX",
+      uidValidity: "1",
+      uid: 1,
+      providerRef: {
+        provider: "proton",
+        account: "hello@example.com",
+        mailbox: "INBOX",
+        uidValidity: "1",
+        uid: 1,
+      },
+      lastSeenAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/messages/msg-1/move", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ mailbox: "INBOX", toMailbox: "INBOX" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const locations = messages.getMessage("msg-1")?.locations ?? [];
+    expect(locations.find((l) => l.mailbox === "INBOX")).toMatchObject({
+      uid: 99,
+    });
+
+    const flagsResponse = await app.handle(
+      new Request("http://localhost/api/messages/msg-1/flags", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ mailbox: "INBOX", add: ["\\Seen"] }),
+      }),
+    );
+    expect(flagsResponse.status).toBe(200);
+  });
+});
+
+describe("GET /api/submissions", () => {
+  test("filters by verdict", async () => {
+    const { app, mailSubmissions } = testApp(API_KEY);
+    mailSubmissions.insertSubmission({
+      source: "fpp",
+      verdict: "legit",
+      confidence: 0.9,
+      reason: "r",
+      model: "m",
+      delivered: true,
+      submission: {},
+    });
+    mailSubmissions.insertSubmission({
+      source: "fpp",
+      verdict: "spam",
+      confidence: 0.9,
+      reason: "r",
+      model: "m",
+      delivered: false,
+      submission: {},
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/submissions?verdict=spam", {
+        headers: authHeaders(),
+      }),
+    );
+    const body = (await json(response)) as { data: { verdict: string }[] };
+    expect(body.data.map((r) => r.verdict)).toEqual(["spam"]);
+  });
+
+  test("a garbage cursor is a clean 400, not a 500", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/submissions?cursor=not-a-real-cursor", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toEqual({ error: "invalid_cursor" });
+  });
+});
+
+describe("GET /api/stats", () => {
+  test("returns messages, jevComparison, jobs and accounts", async () => {
+    const { app, messages } = testApp(API_KEY);
+    // Within the endpoint's default 30-day `since` window — getStats() now
+    // honours it (previously ignored), so a fixed old fixture date would
+    // fall outside the window and undercount.
+    messages.upsertMessage(envelope({ date: new Date().toISOString() }));
+
+    const response = await app.handle(
+      new Request("http://localhost/api/stats", { headers: authHeaders() }),
+    );
+    const body = (await json(response)) as {
+      messages: { total: number };
+      jevComparison: unknown;
+      jobs: { pending: number; failed: number };
+      accounts: { id: string }[];
+    };
+
+    expect(body.messages.total).toBe(1);
+    expect(body.jobs).toEqual({ pending: 0, failed: 0 });
+    expect(body.accounts.map((a) => a.id)).toEqual([ACCOUNT_ID]);
+  });
+});
+
+describe("POST /api/sync", () => {
+  test("enqueues a sync_tick job and returns immediately", async () => {
+    const { app, jobs } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/sync", {
+        method: "POST",
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toEqual({ enqueued: true });
+    expect(jobs.counts()).toEqual({ pending: 1, failed: 0 });
+  });
+});
+
+describe("GET /api/jobs/:id", () => {
+  test("404 for an unknown id, 200 with the job's state otherwise", async () => {
+    const { app, jobs } = testApp(API_KEY);
+
+    const missing = await app.handle(
+      new Request("http://localhost/api/jobs/missing", {
+        headers: authHeaders(),
+      }),
+    );
+    expect(missing.status).toBe(404);
+
+    const id = jobs.enqueue({ kind: "classify", payload: { key: "msg-1" } });
+    const response = await app.handle(
+      new Request(`http://localhost/api/jobs/${id}`, {
+        headers: authHeaders(),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(await json(response)).toMatchObject({
+      id,
+      kind: "classify",
+      status: "pending",
+    });
+  });
+});
+
+describe("GET /api/emails (legacy alias)", () => {
+  test("reshapes new-schema rows into the old field names", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(
+      envelope({
+        key: "in_1",
+        direction: "inbound",
+        date: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    messages.upsertMessage(
+      envelope({
+        key: "out_1",
+        direction: "outbound",
+        date: "2026-01-02T00:00:00.000Z",
+      }),
+    );
 
     const response = await app.handle(
       new Request("http://localhost/api/emails?direction=inbound", {
         headers: authHeaders(),
       }),
     );
-
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { data: { id: string }[] };
-    expect(body.data.map((e) => e.id)).toEqual(["in_1"]);
+    const body = (await json(response)) as { data: Record<string, unknown>[] };
+    expect(body.data).toEqual([
+      {
+        id: "in_1",
+        direction: "inbound",
+        fromAddress: "sender@example.com",
+        toAddresses: ["hello@example.com"],
+        subject: "Hello there",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        enrichment: null,
+      },
+    ]);
   });
 
-  test("provider and mailbox filters narrow the list and are returned", async () => {
-    const { app, emails } = testApp(API_KEY);
-    const base = {
-      direction: "inbound" as const,
-      fromAddress: "guest@example.com",
-      toAddresses: ["hello@example.com"],
-      subject: "Hi",
-    };
-    emails.upsertEmail({
-      ...base,
-      id: "resend_1",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    emails.upsertEmail({
-      ...base,
-      id: "imap_inbox",
-      provider: "imap",
-      mailbox: "INBOX",
-      messageId: "<a@x>",
-      createdAt: "2026-01-02T00:00:00.000Z",
-    });
-    emails.upsertEmail({
-      ...base,
-      id: "imap_spam",
-      provider: "imap",
-      mailbox: "Spam",
-      createdAt: "2026-01-03T00:00:00.000Z",
-    });
+  test("a status query param is accepted but has no effect", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(envelope());
 
-    const get = async (query: string) => {
-      const response = await app.handle(
-        new Request(`http://localhost/api/emails?${query}`, {
-          headers: authHeaders(),
-        }),
-      );
-      expect(response.status).toBe(200);
-      return (await response.json()) as {
-        data: { id: string; provider: string; mailbox: string | null }[];
-      };
-    };
-
-    expect((await get("provider=resend")).data.map((e) => e.id)).toEqual([
-      "resend_1",
-    ]);
-    const imap = await get("provider=imap");
-    expect(imap.data.map((e) => e.id)).toEqual(["imap_spam", "imap_inbox"]);
-    expect(imap.data[1]).toMatchObject({ provider: "imap", mailbox: "INBOX" });
-    expect(
-      (await get("provider=imap&mailbox=Spam")).data.map((e) => e.id),
-    ).toEqual(["imap_spam"]);
-
-    const invalid = await app.handle(
-      new Request("http://localhost/api/emails?provider=smtp", {
+    const response = await app.handle(
+      new Request("http://localhost/api/emails?status=pending", {
         headers: authHeaders(),
       }),
     );
-    expect(invalid.status).toBe(422);
-  });
-
-  test("no filters returns every direction and enrichment status", async () => {
-    const { app, emails } = testApp(API_KEY);
-    emails.upsertEmail({
-      id: "in_1",
-      direction: "inbound",
-      fromAddress: "guest@example.com",
-      toAddresses: ["charter@example.com"],
-      subject: "Charter request",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    emails.upsertEmail({
-      id: "out_1",
-      direction: "outbound",
-      fromAddress: "no-reply@example.com",
-      toAddresses: ["guest@example.com"],
-      subject: "Confirmation",
-      createdAt: "2026-01-02T00:00:00.000Z",
-    });
-    emails.saveEnrichment("out_1", {
-      category: "notification",
-      priority: "low",
-      actionRequired: false,
-      summary: "Confirmation.",
-      suggestedAction: null,
-      language: "en",
-      facts: [],
-      model: "test",
-    });
-
-    const response = await app.handle(
-      new Request("http://localhost/api/emails", { headers: authHeaders() }),
-    );
-
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { data: { id: string }[] };
-    expect(body.data.map((e) => e.id)).toEqual(["out_1", "in_1"]);
   });
 
-  test("category accepts a comma-separated list", async () => {
+  test("a garbage cursor is a clean 400, not a 500", async () => {
     const { app } = testApp(API_KEY);
 
     const response = await app.handle(
-      new Request("http://localhost/api/emails?category=spam,inquiry", {
+      new Request("http://localhost/api/emails?cursor=not-a-real-cursor", {
         headers: authHeaders(),
       }),
     );
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(400);
+    expect(await json(response)).toEqual({ error: "invalid_cursor" });
   });
 });
 
-describe("GET /api/emails/:id", () => {
+describe("GET /api/emails/:id (legacy alias)", () => {
   test("404 for an unknown id", async () => {
     const { app } = testApp(API_KEY);
 
@@ -236,238 +832,61 @@ describe("GET /api/emails/:id", () => {
         headers: authHeaders(),
       }),
     );
-
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: "not_found" });
   });
 
-  test("excludes html by default and includes it with ?include=html", async () => {
-    const { app, emails } = testApp(API_KEY);
-    emails.upsertEmail({
-      id: "email_1",
-      direction: "outbound",
-      fromAddress: "no-reply@example.com",
-      toAddresses: ["guest@example.com"],
-      subject: "Confirmation",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      html: "<p>hi</p>",
-      text: "hi",
-    });
+  test("excludes body by default and includes it with ?include=html", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(envelope());
+    messages.saveBody("msg-1", { html: "<p>hi</p>", text: "hi" });
 
-    const withoutHtml = await app.handle(
-      new Request("http://localhost/api/emails/email_1", {
-        headers: authHeaders(),
-      }),
+    const withoutHtml = await json(
+      await app.handle(
+        new Request("http://localhost/api/emails/msg-1", {
+          headers: authHeaders(),
+        }),
+      ),
     );
-    const withoutHtmlBody = (await withoutHtml.json()) as Record<
-      string,
-      unknown
-    >;
-    expect(withoutHtmlBody.html).toBeUndefined();
-    expect(withoutHtmlBody.text).toBe("hi");
+    expect(withoutHtml.html).toBeUndefined();
 
-    const withHtml = await app.handle(
-      new Request("http://localhost/api/emails/email_1?include=html", {
-        headers: authHeaders(),
-      }),
+    const withHtml = await json(
+      await app.handle(
+        new Request("http://localhost/api/emails/msg-1?include=html", {
+          headers: authHeaders(),
+        }),
+      ),
     );
-    const withHtmlBody = (await withHtml.json()) as Record<string, unknown>;
-    expect(withHtmlBody.html).toBe("<p>hi</p>");
+    expect(withHtml.html).toBe("<p>hi</p>");
+    expect(withHtml.text).toBe("hi");
   });
 });
 
-describe("POST /api/emails/:id/enrich", () => {
-  test("409 when another worker holds the claim", async () => {
-    const { app, emails } = testApp(API_KEY);
-    emails.upsertEmail({
-      id: "email_1",
-      direction: "outbound",
-      fromAddress: "no-reply@example.com",
-      toAddresses: ["guest@example.com"],
-      subject: "Confirmation",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    expect(emails.claimEnrichment("email_1")).toBe(true);
+describe("POST /api/emails/:id/enrich (legacy alias)", () => {
+  test("404 for an unknown id", async () => {
+    const { app } = testApp(API_KEY);
 
     const response = await app.handle(
-      new Request("http://localhost/api/emails/email_1/enrich", {
+      new Request("http://localhost/api/emails/missing/enrich", {
+        method: "POST",
+        headers: authHeaders(),
+      }),
+    );
+    expect(response.status).toBe(404);
+  });
+
+  test("enqueues a classify job and returns immediately", async () => {
+    const { app, messages, jobs } = testApp(API_KEY);
+    messages.upsertMessage(envelope());
+
+    const response = await app.handle(
+      new Request("http://localhost/api/emails/msg-1/enrich", {
         method: "POST",
         headers: authHeaders(),
       }),
     );
 
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({
-      error: "enrichment_in_progress",
-    });
-  });
-});
-
-describe("Jev shadow fields", () => {
-  const jev = {
-    verdict: "marketing" as const,
-    confidence: 0.9,
-    probabilities: { legit: 0.05, spam: 0.05, marketing: 0.9 },
-    latencyMs: 800,
-    model: "jev-test",
-  };
-  const get = async (app: ReturnType<typeof testApp>["app"], path: string) =>
-    (
-      await app.handle(
-        new Request(`http://localhost${path}`, { headers: authHeaders() }),
-      )
-    ).json();
-
-  test("GET /api/submissions and /api/stats expose Jev verdicts, queue state, agreement and latencies", async () => {
-    const { app, submissions } = testApp(API_KEY);
-    const base = {
-      source: "fpp" as const,
-      confidence: 0.9,
-      reason: "r",
-      model: "m",
-      delivered: true,
-      submission: {},
-      jevPending: true,
-    };
-    const completeNext = () =>
-      submissions.completeJev({
-        ...submissions.claimNextJev()!,
-        result: jev,
-      });
-    submissions.recordSubmission({
-      ...base,
-      verdict: "marketing",
-      llmLatencyMs: 2000,
-    });
-    completeNext();
-    submissions.recordSubmission({
-      ...base,
-      verdict: "legit",
-      llmLatencyMs: 4000,
-    });
-    completeNext();
-    // Fails on every attempt until it gives up.
-    submissions.recordSubmission({ ...base, verdict: "legit" });
-    let clock = Date.now();
-    for (let attempt = 0; attempt < JEV_MAX_ATTEMPTS; attempt++) {
-      const now = new Date(clock);
-      submissions.failJev({
-        ...submissions.claimNextJev({ now })!,
-        error: "429 high demand",
-        now,
-      });
-      clock += 2 * 24 * 60 * 60_000;
-    }
-    submissions.recordSubmission({ ...base, verdict: "legit" });
-    submissions.recordSubmission({
-      ...base,
-      verdict: "legit",
-      jevPending: false,
-    });
-
-    const list = (await get(app, "/api/submissions")) as {
-      data: {
-        jev: {
-          status: string;
-          attempts: number;
-          nextAttemptAt: string | null;
-          verdict: string | null;
-          latencyMs: number | null;
-          error: string | null;
-        } | null;
-        llmLatencyMs: number | null;
-      }[];
-    };
-    const byStatus = (status: string | null) =>
-      list.data.filter((row) => (row.jev?.status ?? null) === status);
-    expect(byStatus("done")).toHaveLength(2);
-    expect(byStatus("done")[0]!.jev).toMatchObject({
-      verdict: "marketing",
-      latencyMs: 800,
-      attempts: 1,
-    });
-    expect(byStatus("done")[0]!.llmLatencyMs).not.toBeNull();
-    expect(byStatus("pending")[0]!.jev).toMatchObject({
-      attempts: 0,
-      nextAttemptAt: null,
-      verdict: null,
-      latencyMs: null,
-    });
-    expect(byStatus("failed")[0]!.jev).toMatchObject({
-      attempts: JEV_MAX_ATTEMPTS,
-      nextAttemptAt: null,
-      error: "429 high demand",
-    });
-    expect(byStatus(null)).toHaveLength(1);
-
-    const stats = (await get(app, "/api/stats")) as {
-      jevComparison: unknown;
-      jevQueue: unknown;
-    };
-    expect(stats.jevComparison).toEqual({
-      compared: 2,
-      agreed: 1,
-      agreementRate: 0.5,
-      llmMedianLatencyMs: 3000,
-      jevMedianLatencyMs: 800,
-    });
-    expect(stats.jevQueue).toEqual({ pending: 1, failed: 1 });
-  });
-
-  test("GET /api/emails/:id exposes Jev's queue state, then its decision", async () => {
-    const { app, emails } = testApp(API_KEY);
-    emails.upsertEmail({
-      id: "in_1",
-      direction: "inbound",
-      fromAddress: "x@example.com",
-      toAddresses: ["me@example.com"],
-      subject: "Hi",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    emails.upsertEmail({
-      id: "out_1",
-      direction: "outbound",
-      fromAddress: "me@example.com",
-      toAddresses: ["x@example.com"],
-      subject: "Re: Hi",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    const jevOf = async (id: string) =>
-      (
-        (await get(app, `/api/emails/${id}`)) as {
-          enrichment: { jev: unknown };
-        }
-      ).enrichment.jev;
-
-    expect(await jevOf("in_1")).toMatchObject({
-      status: "pending",
-      attempts: 0,
-      nextAttemptAt: null,
-      spamProbability: null,
-    });
-    expect(await jevOf("out_1")).toBeNull();
-
-    emails.completeJev({
-      ...emails.claimNextJev()!,
-      result: {
-        spamProbability: 0.96,
-        category: "marketing",
-        categoryConfidence: 0.9,
-        latencyMs: 700,
-        model: "jev-test",
-      },
-    });
-
-    expect(await jevOf("in_1")).toEqual({
-      status: "done",
-      attempts: 1,
-      nextAttemptAt: null,
-      spamProbability: 0.96,
-      category: "marketing",
-      categoryConfidence: 0.9,
-      latencyMs: 700,
-      model: "jev-test",
-      error: null,
-    });
+    expect(response.status).toBe(200);
+    expect(await json(response)).toEqual({ enqueued: true });
+    expect(jobs.counts()).toEqual({ pending: 1, failed: 0 });
   });
 });

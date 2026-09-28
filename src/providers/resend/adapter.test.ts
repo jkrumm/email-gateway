@@ -59,7 +59,14 @@ function fakeResend({
       get: get(sentItems, {}),
       send: async (input: unknown) => {
         sendCalls.push(input);
-        return { data: { id: "email_sent_1" }, error: null };
+        // A fresh id per call: sendMail() writes a send_log row keyed by this
+        // id, and that repo is insert-only — a literal shared across tests
+        // would collide on the second send() in the same process (mailDb's
+        // singleton is shared across test files unless overridden).
+        return {
+          data: { id: `email_sent_${crypto.randomUUID()}` },
+          error: null,
+        };
       },
       receiving: {
         list: list(receivedItems),
@@ -284,7 +291,7 @@ describe("createResendProvider", () => {
       template: {} as ReactElement,
     });
 
-    expect(receipt.id).toBe("email_sent_1");
+    expect(receipt.id).toMatch(/^email_sent_/);
     expect(sendCalls).toHaveLength(1);
   });
 

@@ -123,6 +123,20 @@ export interface JobClaim {
   claimToken: string;
 }
 
+// One job's public state, for a status-lookup caller (e.g. GET /api/jobs/:id)
+// that has no business seeing claim tokens or raw payload_json.
+export interface JobRecord {
+  id: string;
+  kind: string;
+  subjectKey: string | null;
+  status: JobStatus;
+  attempts: number;
+  nextAttemptAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
 const JOBS_SCHEMA = `
   CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
@@ -210,6 +224,8 @@ export interface JobQueue {
   // out from under this same process's own in-flight handler.
   reapOwnStaleClaims(): number;
   counts(): JobCounts;
+  // Point lookup by id, for GET /api/jobs/:id — null when the id is unknown.
+  getJob(id: string): JobRecord | null;
 }
 
 export function createJobQueue({
@@ -386,51 +402,64 @@ export function createJobQueue({
   // ~18-line overlap; not worth sharing across a two-table jev_*-column
   // queue and this generic one-table queue for the one wave they coexist —
   // jev-queue.ts's consumers move onto this module in Wave 4).
-  const failTx = db.transaction(
-    ({
-      id,
-      claimToken,
-      error,
-      now,
-      rateLimited,
-      random,
-    }: {
-      id: string;
-      claimToken: string;
-      error: string;
-      now: Date;
-      rateLimited: boolean;
-      random: () => number;
-    }): boolean => {
-      const row = db
-        .query<{ attempts: number }, [string, string]>(
-          `SELECT attempts FROM jobs WHERE id = ? AND claimed_at = ?`,
-        )
-        .get(id, claimToken);
-      if (!row) return false;
+  //
+  // Built lazily on first use, not at createJobQueue() construction time:
+  // `db` can be mail.sqlite's lazy Proxy (src/db/mail-client.ts) once
+  // src/jobs/queue.ts binds this to it, and touching `db.transaction` eagerly
+  // here would open the real file (and run migrations) the moment anything
+  // merely imports that singleton, defeating the Proxy's whole point.
+  interface FailTxArgs {
+    id: string;
+    claimToken: string;
+    error: string;
+    now: Date;
+    rateLimited: boolean;
+    random: () => number;
+  }
+  function buildFailTx() {
+    return db.transaction(
+      ({
+        id,
+        claimToken,
+        error,
+        now,
+        rateLimited,
+        random,
+      }: FailTxArgs): boolean => {
+        const row = db
+          .query<{ attempts: number }, [string, string]>(
+            `SELECT attempts FROM jobs WHERE id = ? AND claimed_at = ?`,
+          )
+          .get(id, claimToken);
+        if (!row) return false;
 
-      const plan = rateLimited
-        ? planJobRateLimited({ attempts: row.attempts, now, random })
-        : planJobFailure({ attempts: row.attempts, now, random });
-      db.run(
-        `UPDATE jobs SET
-           status = ?, attempts = ?,
-           next_attempt_at = ?, claimed_at = NULL, claimed_by = NULL,
-           last_error = ?, finished_at = ?
-         WHERE id = ? AND claimed_at = ?`,
-        [
-          plan.status,
-          plan.attempts,
-          plan.nextAttemptAt,
-          error,
-          plan.status === "failed" ? now.toISOString() : null,
-          id,
-          claimToken,
-        ],
-      );
-      return true;
-    },
-  );
+        const plan = rateLimited
+          ? planJobRateLimited({ attempts: row.attempts, now, random })
+          : planJobFailure({ attempts: row.attempts, now, random });
+        db.run(
+          `UPDATE jobs SET
+             status = ?, attempts = ?,
+             next_attempt_at = ?, claimed_at = NULL, claimed_by = NULL,
+             last_error = ?, finished_at = ?
+           WHERE id = ? AND claimed_at = ?`,
+          [
+            plan.status,
+            plan.attempts,
+            plan.nextAttemptAt,
+            error,
+            plan.status === "failed" ? now.toISOString() : null,
+            id,
+            claimToken,
+          ],
+        );
+        return true;
+      },
+    );
+  }
+  let failTxCache: ReturnType<typeof buildFailTx> | null = null;
+  function getFailTx(): ReturnType<typeof buildFailTx> {
+    return (failTxCache ??= buildFailTx());
+  }
 
   function fail({
     id,
@@ -447,7 +476,7 @@ export function createJobQueue({
     rateLimited?: boolean;
     random?: () => number;
   }): boolean {
-    return failTx.immediate({
+    return getFailTx().immediate({
       id,
       claimToken,
       error,
@@ -457,6 +486,14 @@ export function createJobQueue({
     });
   }
 
+  // Safe only because a matches-by-hostname-prefix reap can run once at
+  // boot without an age check: this assumes each container gets a distinct
+  // hostname across a RollHook deploy overlap. Verified 2026-09-28 —
+  // vps/apps/email-gateway/compose.yml sets no `hostname:`, so Docker
+  // assigns each container its own random per-container id. If that
+  // compose file ever adds an explicit `hostname:`, this reap would release
+  // the still-draining old container's claims immediately on the new
+  // container's boot.
   function reapOwnStaleClaims(): number {
     const { changes } = db.run(
       `UPDATE jobs SET claimed_at = NULL, claimed_by = NULL
@@ -476,6 +513,42 @@ export function createJobQueue({
       .get()!;
   }
 
+  function getJob(id: string): JobRecord | null {
+    const row = db
+      .query<
+        {
+          id: string;
+          kind: string;
+          subject_key: string | null;
+          status: JobStatus;
+          attempts: number;
+          next_attempt_at: string | null;
+          last_error: string | null;
+          created_at: string;
+          finished_at: string | null;
+        },
+        [string]
+      >(
+        `SELECT id, kind, subject_key, status, attempts, next_attempt_at,
+                last_error, created_at, finished_at
+         FROM jobs WHERE id = ?`,
+      )
+      .get(id);
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      kind: row.kind,
+      subjectKey: row.subject_key,
+      status: row.status,
+      attempts: row.attempts,
+      nextAttemptAt: row.next_attempt_at,
+      lastError: row.last_error,
+      createdAt: row.created_at,
+      finishedAt: row.finished_at,
+    };
+  }
+
   return {
     enqueue,
     claimNext,
@@ -484,5 +557,6 @@ export function createJobQueue({
     fail,
     reapOwnStaleClaims,
     counts,
+    getJob,
   };
 }

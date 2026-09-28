@@ -1,11 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createAdminRoutes } from "./plugin";
-import { openDatabase } from "../db/client";
-import { createEmailsRepo } from "../db/emails";
-import { createImapStateRepo } from "../db/imap-state";
-import { createSubmissionsRepo } from "../db/submissions";
+import { openMailDatabase } from "../db/mail-client";
+import { createMailSubmissionsRepo } from "../db/mail-submissions";
 import { emailRegistry } from "../emails/registry";
-import type { EnrichEmailOutcome } from "../enrich/enrich-email";
 
 const PASSWORD = "local-admin-pass-123";
 const FIXED_NOW = new Date("2026-09-15T08:30:00.000Z");
@@ -23,46 +20,16 @@ function sameOriginHeaders(extra: Record<string, string> = {}) {
 }
 
 function testApp(overrides: { password?: string | undefined } = {}) {
-  const db = openDatabase(":memory:");
-  const emails = createEmailsRepo(db);
-  const submissions = createSubmissionsRepo(db);
-
-  let enrichOutcome: EnrichEmailOutcome = {
-    ok: true,
-    result: {
-      category: "inquiry",
-      priority: "normal",
-      actionRequired: false,
-      summary: "Re-enriched summary",
-      suggestedAction: null,
-      language: "en",
-      facts: [],
-      model: "test-model",
-    },
-  };
+  const db = openMailDatabase(":memory:");
+  const submissions = createMailSubmissionsRepo(db);
 
   const app = createAdminRoutes({
     password: "password" in overrides ? overrides.password : PASSWORD,
-    emails,
     submissions,
-    imapState: createImapStateRepo(db),
-    runSync: async () => ({
-      outbound: { new: 1, updated: 0 },
-      inbound: { new: 2 },
-      errors: [],
-    }),
-    enrich: async () => enrichOutcome,
     now: () => FIXED_NOW,
   });
 
-  return {
-    app,
-    emails,
-    submissions,
-    setEnrichOutcome: (outcome: EnrichEmailOutcome) => {
-      enrichOutcome = outcome;
-    },
-  };
+  return { app, submissions };
 }
 
 describe("admin plugin auth", () => {
@@ -85,7 +52,9 @@ describe("admin plugin auth", () => {
   test("no auth header -> 401 with WWW-Authenticate", async () => {
     const { app } = testApp();
 
-    const response = await app.handle(new Request("http://localhost/admin"));
+    const response = await app.handle(
+      new Request("http://localhost/admin/submissions"),
+    );
 
     expect(response.status).toBe(401);
     expect(response.headers.get("www-authenticate")).toContain("Basic");
@@ -95,7 +64,7 @@ describe("admin plugin auth", () => {
     const { app } = testApp();
 
     const response = await app.handle(
-      new Request("http://localhost/admin", {
+      new Request("http://localhost/admin/submissions", {
         headers: { authorization: basicAuth("admin", "wrong-password") },
       }),
     );
@@ -104,214 +73,26 @@ describe("admin plugin auth", () => {
   });
 });
 
-describe("admin overview", () => {
-  test("renders stat numbers", async () => {
-    const { app, emails } = testApp();
-    emails.upsertEmail({
-      id: "in_1",
-      direction: "inbound",
-      fromAddress: "guest@example.com",
-      toAddresses: ["charter@example.com"],
-      subject: "Charter enquiry",
-      createdAt: FIXED_NOW.toISOString(),
-    });
+describe("admin root redirect", () => {
+  test("/admin -> /admin/submissions", async () => {
+    const { app } = testApp();
 
     const response = await app.handle(
       new Request("http://localhost/admin", {
         headers: { authorization: basicAuth("admin", PASSWORD) },
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    const html = await response.text();
-    expect(html).toContain("Received · 30d");
-    expect(html).toContain(">1<");
-  });
-});
-
-describe("admin emails list", () => {
-  test("filters pass through to the repo and render matches", async () => {
-    const { app, emails } = testApp();
-    emails.upsertEmail({
-      id: "in_yacht",
-      direction: "inbound",
-      fromAddress: "guest@example.com",
-      toAddresses: ["charter@example.com"],
-      subject: "Yacht charter request",
-      createdAt: FIXED_NOW.toISOString(),
-    });
-    emails.upsertEmail({
-      id: "out_confirm",
-      direction: "outbound",
-      fromAddress: "no-reply@example.com",
-      toAddresses: ["guest@example.com"],
-      subject: "Thanks for reaching out",
-      createdAt: FIXED_NOW.toISOString(),
-    });
-
-    const response = await app.handle(
-      new Request("http://localhost/admin/emails?direction=inbound&q=yacht", {
-        headers: { authorization: basicAuth("admin", PASSWORD) },
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    const html = await response.text();
-    expect(html).toContain("Yacht charter request");
-    expect(html).not.toContain("Thanks for reaching out");
-  });
-
-  test("provider/mailbox filters and badges render", async () => {
-    const { app, emails } = testApp();
-    emails.upsertEmail({
-      id: "imap_1",
-      direction: "inbound",
-      fromAddress: "ada@example.com",
-      toAddresses: ["hello@example.com"],
-      subject: "From the human inbox",
-      createdAt: FIXED_NOW.toISOString(),
-      provider: "imap",
-      mailbox: "Spam",
-    });
-    emails.upsertEmail({
-      id: "resend_1",
-      direction: "inbound",
-      fromAddress: "guest@example.com",
-      toAddresses: ["charter@example.com"],
-      subject: "From a form",
-      createdAt: FIXED_NOW.toISOString(),
-    });
-
-    const response = await app.handle(
-      new Request("http://localhost/admin/emails?provider=imap&mailbox=Spam", {
-        headers: { authorization: basicAuth("admin", PASSWORD) },
-      }),
-    );
-
-    const html = await response.text();
-    expect(html).toContain("From the human inbox");
-    expect(html).not.toContain("From a form");
-    expect(html).toContain("imap · Spam");
-  });
-
-  test("renders German list dates", async () => {
-    const { app, emails } = testApp();
-    emails.upsertEmail({
-      id: "in_1",
-      direction: "inbound",
-      fromAddress: "guest@example.com",
-      toAddresses: ["charter@example.com"],
-      subject: "Charter enquiry",
-      createdAt: FIXED_NOW.toISOString(),
-    });
-
-    const response = await app.handle(
-      new Request("http://localhost/admin/emails", {
-        headers: { authorization: basicAuth("admin", PASSWORD) },
-      }),
-    );
-
-    const html = await response.text();
-    expect(html).toContain("Heute, ");
-  });
-});
-
-describe("admin email detail", () => {
-  test("404 for unknown id", async () => {
-    const { app } = testApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/admin/emails/does-not-exist", {
-        headers: { authorization: basicAuth("admin", PASSWORD) },
-      }),
-    );
-
-    expect(response.status).toBe(404);
-  });
-
-  test("renders summary/facts and a sandboxed iframe", async () => {
-    const { app, emails } = testApp();
-    emails.upsertEmail({
-      id: "in_1",
-      direction: "inbound",
-      fromAddress: "guest@example.com",
-      toAddresses: ["charter@example.com"],
-      subject: "Charter enquiry",
-      createdAt: FIXED_NOW.toISOString(),
-      html: "<p>Hello</p>",
-    });
-    emails.saveEnrichment("in_1", {
-      category: "inquiry",
-      priority: "high",
-      actionRequired: true,
-      summary: "Guest wants a week in August.",
-      suggestedAction: "Reply with availability",
-      language: "en",
-      facts: [{ label: "Guests", value: "6" }],
-      model: "test-model",
-    });
-
-    const response = await app.handle(
-      new Request("http://localhost/admin/emails/in_1", {
-        headers: { authorization: basicAuth("admin", PASSWORD) },
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    const html = await response.text();
-    expect(html).toContain("Guest wants a week in August.");
-    expect(html).toContain("Guests");
-    expect(html).toContain("<iframe");
-    expect(html).toContain("sandbox");
-  });
-
-  test("rejects an off-site back param and falls back to the default inbox path", async () => {
-    const { app } = testApp();
-
-    const response = await app.handle(
-      new Request(
-        "http://localhost/admin/emails/does-not-exist?back=https://evil.example",
-        { headers: { authorization: basicAuth("admin", PASSWORD) } },
-      ),
-    );
-
-    expect(response.status).toBe(404);
-    const html = await response.text();
-    expect(html).toContain('href="/admin/emails"');
-    expect(html).not.toContain("evil.example");
-  });
-});
-
-describe("admin manual re-enrich", () => {
-  test("redirects with notice=enrich-busy when another worker holds the claim", async () => {
-    const { app, emails } = testApp();
-    emails.upsertEmail({
-      id: "in_1",
-      direction: "inbound",
-      fromAddress: "guest@example.com",
-      toAddresses: ["charter@example.com"],
-      subject: "Charter enquiry",
-      createdAt: FIXED_NOW.toISOString(),
-    });
-    expect(emails.claimEnrichment("in_1")).toBe(true);
-
-    const response = await app.handle(
-      new Request("http://localhost/admin/emails/in_1/enrich", {
-        method: "POST",
-        headers: sameOriginHeaders(),
         redirect: "manual",
       }),
     );
 
-    expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toContain("notice=enrich-busy");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/admin/submissions");
   });
 });
 
 describe("admin submissions", () => {
   test("HTML-escapes submission values", async () => {
     const { app, submissions } = testApp();
-    submissions.recordSubmission({
+    submissions.insertSubmission({
       source: "fpp",
       verdict: "spam",
       confidence: 0.9,
@@ -332,53 +113,89 @@ describe("admin submissions", () => {
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>alert(1)</script>");
   });
+
+  test("filters pass through to the repo", async () => {
+    const { app, submissions } = testApp();
+    submissions.insertSubmission({
+      source: "fpp",
+      verdict: "legit",
+      confidence: 0.95,
+      reason: "genuine feedback",
+      model: "test-model",
+      delivered: true,
+      submission: { message: "love the tool" },
+    });
+    submissions.insertSubmission({
+      source: "sy-serendipity",
+      verdict: "spam",
+      confidence: 0.9,
+      reason: "looks like spam",
+      model: "test-model",
+      delivered: false,
+      submission: { message: "buy now" },
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/admin/submissions?source=fpp", {
+        headers: { authorization: basicAuth("admin", PASSWORD) },
+      }),
+    );
+
+    const html = await response.text();
+    expect(html).toContain("love the tool");
+    expect(html).not.toContain("buy now");
+  });
+
+  test("a submission with no Jev result yet shows a placeholder", async () => {
+    const { app, submissions } = testApp();
+    submissions.insertSubmission({
+      source: "fpp",
+      verdict: "legit",
+      confidence: 0.95,
+      reason: "genuine feedback",
+      model: "test-model",
+      delivered: true,
+      submission: { message: "love the tool" },
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/admin/submissions", {
+        headers: { authorization: basicAuth("admin", PASSWORD) },
+      }),
+    );
+
+    const html = await response.text();
+    expect(html).toContain("not yet judged");
+  });
 });
 
-describe("admin redirects", () => {
-  test("/admin/sent -> /admin/emails?direction=outbound", async () => {
+describe("admin sync", () => {
+  test("POST without same-origin signal -> 403", async () => {
     const { app } = testApp();
 
     const response = await app.handle(
-      new Request("http://localhost/admin/sent", {
+      new Request("http://localhost/admin/sync", {
+        method: "POST",
         headers: { authorization: basicAuth("admin", PASSWORD) },
-        redirect: "manual",
       }),
     );
 
-    expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe(
-      "/admin/emails?direction=outbound",
-    );
+    expect(response.status).toBe(403);
   });
 
-  test("/admin/received -> /admin/emails?direction=inbound", async () => {
+  test("POST with Sec-Fetch-Site: same-origin enqueues a sync_tick job and redirects", async () => {
     const { app } = testApp();
 
     const response = await app.handle(
-      new Request("http://localhost/admin/received", {
-        headers: { authorization: basicAuth("admin", PASSWORD) },
+      new Request("http://localhost/admin/sync", {
+        method: "POST",
+        headers: sameOriginHeaders(),
         redirect: "manual",
       }),
     );
 
-    expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe(
-      "/admin/emails?direction=inbound",
-    );
-  });
-
-  test("/admin/filtered -> /admin/submissions", async () => {
-    const { app } = testApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/admin/filtered", {
-        headers: { authorization: basicAuth("admin", PASSWORD) },
-        redirect: "manual",
-      }),
-    );
-
-    expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe("/admin/submissions");
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain("notice=sync-enqueued");
   });
 });
 
@@ -413,34 +230,17 @@ describe("admin templates", () => {
     expect(html).toContain("<iframe");
     expect(html).toContain("sandbox");
   });
-});
 
-describe("admin CSRF", () => {
-  test("POST without same-origin signal -> 403", async () => {
+  test("unknown template id -> 404", async () => {
     const { app } = testApp();
 
     const response = await app.handle(
-      new Request("http://localhost/admin/sync", {
-        method: "POST",
+      new Request("http://localhost/admin/templates/does-not-exist", {
         headers: { authorization: basicAuth("admin", PASSWORD) },
       }),
     );
 
-    expect(response.status).toBe(403);
-  });
-
-  test("POST with Sec-Fetch-Site: same-origin -> 303", async () => {
-    const { app } = testApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/admin/sync", {
-        method: "POST",
-        headers: sameOriginHeaders(),
-        redirect: "manual",
-      }),
-    );
-
-    expect(response.status).toBe(303);
+    expect(response.status).toBe(404);
   });
 });
 

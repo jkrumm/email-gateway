@@ -152,6 +152,33 @@ status ∈ pending | done | failed        claimed_by = "<hostname>:<pid>"
 - Boot reaps jobs claimed by this host's previous pid (audio-gateway's
   `hostname:pid` pattern); another host's claims expire by staleness.
 
+## Known gaps (Wave 4 implementation vs. this design)
+
+Accepted for now — no live caller depends on either path yet (no client until
+Wave 6, no MCP until Wave 8) — but real design work, not a bug fix, closes
+them. Flagged here so a later wave doesn't rediscover them by surprise.
+
+- **Message identity doesn't survive a mailbox move.** §Provider port's
+  "Identity across mailboxes" design keys a message by its RFC Message-ID,
+  scoped per account. `src/sync/ingest.ts`'s envelope-only sync can't do that
+  yet — envelope `list()` calls carry no Message-ID (only a full body
+  `read()` does) — so its message key is scoped per **mailbox**
+  (`sha256(account:provider:mailbox:uidValidity:uid)`). A `POST
+/messages/:key/move` (`src/api/plugin.ts`) updates the location row
+  correctly, but the _next_ sync tick still ingests the moved message under
+  its new mailbox+uid as a brand-new key — a second `messages` row (and a
+  second `classifications` row) for one physical email. Real fix: re-key by
+  the Message-ID once it's known, at classify/read time.
+- **Backfill never resumes once "done."** `src/sync/ingest.ts` runs a
+  one-page head pass every tick (always the newest page) plus a bounded
+  backfill pass that walks backward once and then stops permanently. If a
+  mailbox accumulates more new mail between two ticks than fits in one head
+  page (`LIST_PAGE_LIMIT`, 500 messages — e.g. the container was down that
+  long), the excess older backlog is never picked up: nothing ever resumes a
+  finished backfill. Real fix: the head pass itself needs to walk backward
+  adaptively (keep paging while it keeps finding unknown messages, stop at
+  the first already-known one) instead of always being exactly one page.
+
 ## Client
 
 Vite + React + basalt-ui SPA in `client/`, built into `client/dist`, served by

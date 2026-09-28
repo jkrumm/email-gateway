@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { openDatabase } from "./client";
-import { createEmailsRepo } from "./emails";
 import {
   JEV_MAX_ATTEMPTS,
   JEV_STALE_CLAIM_MS,
@@ -93,47 +92,9 @@ function submissionsHarness(): Harness {
   };
 }
 
-function emailsHarness(): Harness {
-  const emails = createEmailsRepo(openDatabase(":memory:"));
-  const result = {
-    spamProbability: 0.1,
-    category: "inquiry",
-    categoryConfidence: 0.8,
-    latencyMs: 5,
-    model: "jev",
-  };
-  return {
-    enqueue: () =>
-      emails.upsertEmail({
-        id: "in_1",
-        direction: "inbound",
-        fromAddress: "a@example.com",
-        toAddresses: [],
-        subject: "s",
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    claimNext: (now) => emails.claimNextJev({ now }),
-    complete: (claim) => emails.completeJev({ ...claim, result }),
-    fail: (claim, now) =>
-      emails.failJev({ ...claim, error: "429 high demand", now }),
-    state: () => {
-      const jev = emails.getEmail("in_1")!.enrichment.jev!;
-      return {
-        status: jev.status,
-        attempts: jev.attempts,
-        nextAttemptAt: jev.nextAttemptAt,
-        error: jev.error,
-      };
-    },
-    counts: emails.jevQueueCounts,
-    unknownClaim: () => ({ id: "does-not-exist", claimToken: "x" }),
-  };
-}
+describe("Jev queue: submissions", () => {
+  const makeHarness = submissionsHarness;
 
-describe.each([
-  ["submissions", submissionsHarness],
-  ["email_enrichments", emailsHarness],
-])("Jev queue: %s", (_table, makeHarness) => {
   function queued() {
     const queue = makeHarness();
     queue.enqueue();

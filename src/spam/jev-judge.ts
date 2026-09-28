@@ -1,9 +1,18 @@
-import type { JevSubmissionResult, SubmissionSource } from "../db/submissions";
+import type { SubmissionSource, Verdict } from "../db/mail-submissions";
 import { decideShadow, type JevConfig } from "../llm/jev";
 
+// A successful Jev call on a submission.
+export interface JevSubmissionResult {
+  verdict: Verdict;
+  confidence: number;
+  probabilities: Record<string, number> | null;
+  latencyMs: number;
+  model: string;
+}
+
 // Jev's shadow verdict on a contact-form submission. Never authoritative:
-// the Jev worker (src/jev/worker.ts) records it beside the LLM classifier's
-// verdict and it never influences delivery.
+// the `jev_submission` job (src/jobs/jev.ts) records it beside the LLM
+// classifier's verdict and it never influences delivery.
 
 const SITES = {
   fpp: "Free-Planning-Poker.com — a free online planning-poker tool for agile teams. Legitimate senders are users writing feedback, bug reports, feature requests, or questions about the tool.",

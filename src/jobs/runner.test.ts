@@ -212,6 +212,23 @@ describe("createJobRunner", () => {
     expect(renewCalls).toBe(callsDuringRun);
   });
 
+  test("a rate-limit error parks the job without spending an attempt", async () => {
+    const { db, queue, runner } = setup();
+    const id = queue.enqueue({ kind: "classify", payload: {}, now: T0 });
+
+    runner.register("classify", async () => {
+      throw new Error("rate_limit_exceeded");
+    });
+
+    expect(await runner.runOnce(T0)).toBe(true);
+    const row = db
+      .query<{ status: string; attempts: number }, [string]>(
+        `SELECT status, attempts FROM jobs WHERE id = ?`,
+      )
+      .get(id)!;
+    expect(row).toEqual({ status: "pending", attempts: 0 });
+  });
+
   test("a throwing claimNext does not crash runOnce — it just reports no job ran", async () => {
     const { db, queue } = setup();
     const stubQueue = {

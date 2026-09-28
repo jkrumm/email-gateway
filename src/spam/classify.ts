@@ -1,6 +1,6 @@
 import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
-import type { SubmissionSource, Verdict } from "../db/submissions";
+import type { SubmissionSource, Verdict } from "../db/mail-submissions";
 import { getLlmConfig, getModel, getModelId } from "../llm/model";
 
 const SUPPRESS_CONFIDENCE_THRESHOLD = 0.7;

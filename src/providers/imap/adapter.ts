@@ -97,6 +97,12 @@ export interface ImapSession {
     options?: { readOnly?: boolean },
   ): Promise<ImapMailbox>;
   close(): Promise<void>;
+  // Optional: only ./provider.ts's session pool needs this, to tell a dead
+  // connection (retry the operation against a freshly opened session) apart
+  // from an application-level error (message not found, unsupported
+  // operation — never retried). Real sessions report imapflow's own `usable`
+  // flag; a fake that doesn't implement it is treated as always healthy.
+  isUsable?(): boolean;
 }
 
 export interface ImapPort {
@@ -135,6 +141,24 @@ export type ImapClient = Pick<
 >;
 
 export type ImapClientFactory = (options: ImapFlowOptions) => ImapClient;
+
+// watch()'s dedicated connection needs more of the real client than the
+// batch-fetch surface above: it opens a mailbox itself and sits in IDLE.
+export type ImapIdleClient = Pick<
+  ImapFlow,
+  | "on"
+  | "off"
+  | "connect"
+  | "logout"
+  | "close"
+  | "usable"
+  | "mailboxOpen"
+  | "idle"
+>;
+
+export type ImapIdleClientFactory = (
+  options: ImapFlowOptions,
+) => ImapIdleClient;
 
 // Plain network timeouts (not an agent budget): a stalled Bridge must fail the
 // tick instead of holding the sync lock forever.
@@ -430,7 +454,10 @@ function createMailboxHandle(
   };
 }
 
-function buildClientOptions(config: ImapConfig): ImapFlowOptions {
+function buildClientOptions(
+  config: ImapConfig,
+  { disableAutoIdle = true }: { disableAutoIdle?: boolean } = {},
+): ImapFlowOptions {
   return {
     host: config.host,
     port: config.port,
@@ -444,7 +471,7 @@ function buildClientOptions(config: ImapConfig): ImapFlowOptions {
     auth: { user: config.user, pass: config.password },
     tls: tlsOptions(config),
     logger: false,
-    disableAutoIdle: true,
+    disableAutoIdle,
     connectionTimeout: CONNECTION_TIMEOUT_MS,
     greetingTimeout: GREETING_TIMEOUT_MS,
     socketTimeout: SOCKET_TIMEOUT_MS,
@@ -510,7 +537,28 @@ export function createImapflowPort(
           return entries.map(toMailboxInfo);
         },
         openMailbox: makeOpenMailbox(client),
+        isUsable: () => client.usable,
       };
     },
   };
+}
+
+// watch()'s dedicated long-lived connection (./provider.ts): unlike the
+// pooled clients above, this one must NOT set disableAutoIdle — its whole
+// job is to sit in IDLE, re-entering it in a loop, rather than being driven
+// command-by-command like the batch sync tick's or the session pool's
+// connections.
+export function createIdleClient(
+  config: ImapConfig,
+  {
+    createClient = (options) => new ImapFlow(options),
+  }: { createClient?: ImapIdleClientFactory } = {},
+): ImapIdleClient {
+  const client = createClient(
+    buildClientOptions(config, { disableAutoIdle: false }),
+  );
+  client.on("error", (error: unknown) => {
+    console.error("[imap] idle connection error", { error });
+  });
+  return client;
 }

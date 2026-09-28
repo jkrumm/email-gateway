@@ -6,17 +6,9 @@ import { EmailFrame, SegmentedLinks } from "../ui";
 
 type RegistryEntry = (typeof emailRegistry)[number];
 
-export function TemplatesListPage({
-  needsActionCount,
-}: {
-  needsActionCount: number;
-}) {
+export function TemplatesListPage() {
   return (
-    <AdminLayout
-      title="Templates"
-      active="templates"
-      needsActionCount={needsActionCount}
-    >
+    <AdminLayout title="Templates" active="templates">
       <h1 className="page-title">Templates</h1>
       <p className="page-subtitle" style={{ marginBottom: 16 }}>
         {emailRegistry.length} registered templates
@@ -47,19 +39,9 @@ export function TemplatesListPage({
   );
 }
 
-export function TemplateNotFoundPage({
-  id,
-  needsActionCount,
-}: {
-  id: string;
-  needsActionCount: number;
-}) {
+export function TemplateNotFoundPage({ id }: { id: string }) {
   return (
-    <AdminLayout
-      title="Template not found"
-      active="templates"
-      needsActionCount={needsActionCount}
-    >
+    <AdminLayout title="Template not found" active="templates">
       <h1 className="page-title">Template not found</h1>
       <p>No template registered with id "{id}".</p>
     </AdminLayout>
@@ -81,19 +63,13 @@ export function TemplateDetailPage({
   entry,
   html,
   width,
-  needsActionCount,
 }: {
   entry: RegistryEntry;
   html: string;
   width: 600 | 375;
-  needsActionCount: number;
 }) {
   return (
-    <AdminLayout
-      title={entry.name}
-      active="templates"
-      needsActionCount={needsActionCount}
-    >
+    <AdminLayout title={entry.name} active="templates">
       <a className="back-link" href="/admin/templates">
         ← Back
       </a>
