@@ -20,6 +20,7 @@
     "@tanstack/react-router": "1.170.39",
     "@tanstack/react-router-devtools": "1.167.2",
     "basalt-ui": "1.30.2",
+    "motion": "12.42.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
