@@ -796,28 +796,109 @@ build` failed because basalt-ui 1.30.2 imports `motion/react` eagerly
       real pass, or every row will fail with a restricted-key error (handled
       gracefully, but reconciliation is a no-op until then).
 
-## Wave 8 — Agent API: REST v2 complete + MCP + Hermes <!-- status: active -->
+## Wave 8 — Agent API: REST v2 complete + MCP + Hermes <!-- status: done -->
 
 Follows §Agent API. `@modelcontextprotocol/server` 2.0.0 via `createMcpHandler`
 exactly as `research-gateway/src/routes/mcp.ts`.
 
-- [ ] Finish REST v2: `GET /api/threads/:key/summary` (LLM job, cached on the
+- [x] Finish REST v2: `GET /api/threads/:key/summary` (LLM job, cached on the
       thread), `POST /api/drafts` (reply draft as text — D2: no send-as-owner),
       `POST /api/sends` (template send → job), `GET /api/needs-action`.
-- [ ] `/mcp`: tools `search_mail`, `read_message`, `summarize_thread`,
+- [x] `/mcp`: tools `search_mail`, `read_message`, `summarize_thread`,
       `needs_action`, `draft_reply`, `send_template`, `job_status`; bearer
       checked before the handler; stateless, `responseMode: 'sse'`.
-- [ ] Remove the `/api/emails*` aliases; `docs/agent-api.md` for Hermes
+- [x] Remove the `/api/emails*` aliases; `docs/agent-api.md` for Hermes
       (curl examples, the MCP client config) modelled on research-gateway's
       README "Clients" section.
-- [ ] Build the Hermes repoint as a real branch + **draft** PR in
+- [x] Build the Hermes repoint as a real branch + **draft** PR in
       `~/SourceRoot/hermes-agent` (`skills/argo-api/SKILL.md` +
       `references/schedule.md`, Gmail reads → email-gateway), gate green
       there, PR URL in `docs/agent-api.md`. **Never merge/apply** — owner
       gate.
-      **Left behind:**
+      **Left behind:** Built across three `mcp__sideclaw__dispatch` episodes
+      (REST v2 + the shared `src/services/agent-api.ts` service layer, a
+      review fix-up round, then `/mcp`) plus a small manual dedup pass
+      (`extractBearerToken` in `src/auth.ts`, `splitCsv` in
+      `src/utils/csv.ts`, shared between `src/api/plugin.ts` and the new
+      `src/mcp/plugin.ts`). Three `/review` rounds ran, each catching real,
+      independently-verified bugs: round 1 (3 blocking) — an omitted
+      `templateProps` on `POST /api/sends` silently mailed a template's
+      _preview_ content to a real recipient (fixed: the field is now
+      required, `t.Record` not `t.Unknown`); `sendTemplate`'s `send_log`
+      insert and `jobs.enqueue` were two independent non-transactional
+      writes, risking an orphaned, unreconcilable `send_log` row on a crash
+      between them (fixed: one shared `enqueueTemplateSend` helper,
+      `db.transaction()`-wrapped, also adopted by the pre-existing
+      `POST /api/templates/:id/test-send`); `getThreadSummary` fetched
+      thread rows with a fixed `limit: 100` and cached on `messageCount ===
+rows.length`, so a thread past 100 messages could never invalidate its
+      cache again (fixed in round 3, see below — round 1 only raised it).
+      Round 2 (after `/mcp` landed, 5 blocking) — MCP tool errors forwarded
+      raw upstream LLM/provider error text where REST sanitized it through
+      an `agentErrorStatus` mapping (fixed: MCP now routes through the same
+      shared mapping, exported from `src/services/agent-api.ts`); MCP
+      success responses serialized the full `{ ok: true, ... }` service
+      envelope instead of the flat shape REST returns for the same call,
+      contradicting `docs/agent-api.md`'s "identical payload" claim, and
+      `send_template` was missing the `enqueued` field entirely (fixed:
+      every one of the 7 tools now unwraps to match its REST counterpart
+      field-for-field); the `getThreadSummary` cache-staleness bug from
+      round 1 was re-confirmed here by an independent reviewer angle and
+      fixed for real this time — invalidation moved from a capped row count
+      to the thread's newest message key (`thread_summaries.latest_key`,
+      migration v4), so a thread under the 100-message summarization cap is
+      never permanently stale (the cap on what gets _summarized_ is
+      unrelated and still a known gap, see below); `draft-reply.ts` and
+      `thread-summary.ts` both embedded `JSON.stringify(payload)` directly
+      between their `<email>`/`<thread>` untrusted-data delimiters with no
+      escaping, so a subject or body containing a literal `</email>` or
+      `</thread>` could close the block early and forge trusted-looking
+      content past it — fixed with a shared `serializeUntrusted` helper
+      (`src/utils/prompt.ts`) that escapes `<`/`>` to their JSON `\u` form;
+      `draftReplyForMessage`'s live provider read + `saveBody` write weren't
+      wrapped in try/catch, so a throw there escaped the route's error-code
+      mapping entirely and could surface raw text via Elysia's default
+      500 handler (fixed: wrapped, returns a mapped `read_failed`). Round 3
+      confirmed green with no new findings. `fallow`'s residual findings —
+      the pre-existing unused `MAIL_MIGRATIONS`/`ThreadSummary`/
+      `SaveThreadSummaryInput` exports, the pre-existing `motion` client
+      dep, the pre-existing flags/move route duplication, and one small
+      7-line guard duplicate between `getThreadSummary`/`draftReplyForMessage`
+      — are judged not worth another round, matching every prior wave's own
+      triage precedent. `/check` is green: format, typecheck (server +
+      client), 473 tests, `bun run build` from a clean `client/dist` all
+      pass.
 
-## Wave 9 — Topology cutover <!-- status: pending -->
+      Known gaps newly documented in `docs/architecture.md`: `POST
+      /api/sends` has no rate limit or recipient allowlist (any bearer-key
+      holder, and now any MCP-driven agent, can send as the owner to an
+      arbitrary address); `templateProps` has no per-template zod schema;
+      `getThreadSummary`'s cache is still not content-sensitive (a
+      re-sighted message whose content changed but isn't a new thread
+      arrival serves a stale summary) and a thread over 100 messages is
+      still summarized from its newest 100 only (the invalidation bug is
+      fixed, the page-size cap is not); and `src/enrich/enrich-email.ts` has
+      the same pre-existing unescaped-delimiter exposure this wave's fix
+      addressed in its own two new prompt builders — flagged, not fixed,
+      since the file predates this wave and touching it is out of scope.
+
+      The Hermes repoint PR
+      ([jkrumm/hermes-agent#3](https://github.com/jkrumm/hermes-agent/pull/3))
+      was built in an isolated `git worktree` (not sideclaw dispatch —
+      hermes-agent's dispatch policy caps at `investigate`, below what a
+      branch+PR needs) so the repo's own significant pre-existing
+      uncommitted work was never touched. It rewrites Gmail reads against
+      email-gateway's real contract and explicitly calls out two capability
+      gaps versus argo's old proxy (no native unread/important/starred
+      filter — derive from each message's `flags`; no per-field
+      `from:`/`to:`/`subject:` search, free-text FTS only) rather than
+      inventing parameters that don't exist. **Not merged** — gated on both
+      this API actually being reachable in production (Wave 9) and argo's
+      own pending `/gmail/*` deletion PR
+      ([jkrumm/argo#20](https://github.com/jkrumm/argo/pull/20), from Wave
+      5, also still unmerged).
+
+## Wave 9 — Topology cutover <!-- status: active -->
 
 Follows D1. Every step here touches production or another repo's deploy path:
 **prepare everything, verify locally, then hand back to the owner** — no push

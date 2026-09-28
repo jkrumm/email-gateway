@@ -162,3 +162,12 @@ Because REST and MCP are two thin wrappers over the one
 provider directly — behavior is identical whichever door you use. The paths
 above and the MCP tools are one implementation, not two; pick whichever fits
 the client.
+
+## Hermes repoint
+
+Hermes reads Gmail today through argo's `/gmail/*` proxy
+(`hermes-agent/skills/argo-api/SKILL.md` + `references/schedule.md`). Per
+Decision D3, that repoints here once this API is live in production. Prepared
+as a draft PR, not merged — an owner gate tied to the Wave 9 topology cutover
+landing (this API isn't reachable outside dev yet):
+[jkrumm/hermes-agent#3](https://github.com/jkrumm/hermes-agent/pull/3).
