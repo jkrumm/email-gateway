@@ -80,37 +80,78 @@ export function planJobFailure({
   };
 }
 
+// A rate-limited attempt's own escalation ladder — separate from
+// JOB_BACKOFF_MS's attempt-spending one, and deliberately short: 1m, 5m,
+// 15m, 1h, then capped at 1h forever. Uncapped/deeper backoff (3h+) is
+// wrong here — the point is recovering promptly once the upstream clears,
+// not treating a rate limit like a job that's actually broken.
+const RATE_LIMIT_BACKOFF_MS = [
+  MINUTE_MS,
+  5 * MINUTE_MS,
+  15 * MINUTE_MS,
+  HOUR_MS,
+] as const;
+
+export interface JobRateLimitPlan {
+  status: "pending";
+  nextAttemptAt: string;
+  // The new count of *consecutive* rate-limited outcomes, for both the
+  // escalation ladder above and the runner's log line. Resets to 0 on
+  // success or a non-rate-limit failure (see buildFailTx/complete below).
+  // `attempts` itself is not part of this plan — a rate limit never spends
+  // one, so the caller just leaves the row's existing value untouched.
+  rateLimits: number;
+}
+
 // The state a job moves to after a rate-limited attempt: parks for a short,
-// jittered delay and retries **without** spending one of JOB_MAX_ATTEMPTS —
-// a 429 is the upstream's fault, not the job's. Left unbounded deliberately:
-// a persistent upstream outage keeps retrying at this cadence instead of the
-// job going terminally `failed` while the queue itself is healthy. Callers
-// decide what counts as rate-limited (jobs.ts stays domain-agnostic); Wave 4
-// wires this in for jev_message/jev_submission when they move onto this
-// queue, replacing src/db/jev-queue.ts's current all-failures-count-an-
-// attempt behaviour that let a 429 burst burn through 17 submissions'
-// attempt budgets in 24h (2026-09-28).
+// escalating, jittered delay and retries **without** spending one of
+// JOB_MAX_ATTEMPTS — a 429 is the upstream's fault, not the job's. Never
+// goes terminal, deliberately: a persistent upstream outage keeps retrying
+// at this cadence (capped at 1h) instead of the job going terminally
+// `failed` while the queue itself is healthy. Callers decide what counts as
+// rate-limited (jobs.ts stays domain-agnostic).
+//
+// Escalates on `rateLimits`, not `attempts`: the original version always
+// rescheduled on the first (1-minute) rung regardless of how many times a
+// job had already been rate-limited, so a sustained upstream 429 storm kept
+// every parked job retrying every ~1 minute instead of backing off — replaying
+// roughly its own request volume straight back at the gateway that was
+// returning 429 in the first place (root-caused 2026-09-28, 40 min after the
+// Wave 4 deploy: 17 jev_submission + 2 jev_message jobs stuck re-firing at
+// ~14 req/min against a still-throttling gateway).
 export function planJobRateLimited({
-  attempts,
+  rateLimits,
   now,
   random = Math.random,
 }: {
-  attempts: number;
+  rateLimits: number;
   now: Date;
   random?: () => number;
-}): JobFailurePlan {
+}): JobRateLimitPlan {
+  const rung = Math.min(rateLimits, RATE_LIMIT_BACKOFF_MS.length - 1);
   return {
     status: "pending",
-    attempts,
     nextAttemptAt: new Date(
-      now.getTime() + jitteredDelayMs(JOB_BACKOFF_MS[0]!, random),
+      now.getTime() + jitteredDelayMs(RATE_LIMIT_BACKOFF_MS[rung]!, random),
     ).toISOString(),
+    rateLimits: rateLimits + 1,
   };
 }
 
 export interface JobCounts {
   pending: number;
   failed: number;
+}
+
+// fail()'s return: enough for the runner to log a rate-limited outcome in
+// one line without a second read (see src/jobs/runner.ts). `ok: false` means
+// the claim was already lost (stale takeover) — nothing was written, and
+// `rateLimited`/`rateLimits`/`nextAttemptAt` are meaningless in that case.
+export interface JobFailOutcome {
+  ok: boolean;
+  rateLimited: boolean;
+  rateLimits: number;
+  nextAttemptAt: string | null;
 }
 
 export interface JobClaim {
@@ -144,6 +185,7 @@ const JOBS_SCHEMA = `
     subject_key TEXT,
     status TEXT NOT NULL CHECK (status IN ('pending', 'done', 'failed')) DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
+    rate_limits INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT,
     claimed_at TEXT,
     claimed_by TEXT,
@@ -156,8 +198,28 @@ const JOBS_SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_jobs_kind ON jobs (kind, status);
 `;
 
+// This module owns 100% of the jobs table's DDL (see the header comment) —
+// there is no versioned migration path for it, so a column added after the
+// table already exists in prod (rate_limits, 2026-09-28) needs its own
+// idempotent ALTER here rather than a src/db/mail-migrations.ts entry.
+// CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so the
+// live jobs table only gets the new column through this check, run on every
+// boot before anything claims a job.
+function ensureRateLimitsColumn(db: Database): void {
+  const hasColumn = db
+    .query<{ name: string }, []>(`PRAGMA table_info(jobs)`)
+    .all()
+    .some((column) => column.name === "rate_limits");
+  if (!hasColumn) {
+    db.run(
+      `ALTER TABLE jobs ADD COLUMN rate_limits INTEGER NOT NULL DEFAULT 0`,
+    );
+  }
+}
+
 export function ensureJobsSchema(db: Database): void {
   db.run(JOBS_SCHEMA);
+  ensureRateLimitsColumn(db);
 }
 
 // audio-gateway's "<hostname>:<pid>" pattern: identifies which process holds
@@ -208,7 +270,9 @@ export interface JobQueue {
   // after JOB_MAX_ATTEMPTS, keeping the last error either way. Pass
   // `rateLimited: true` to park and reschedule instead, without spending an
   // attempt (see planJobRateLimited) — the caller decides what counts as
-  // rate-limited. A no-op when the claim was lost.
+  // rate-limited. `ok: false` (nothing written) when the claim was lost;
+  // `rateLimits`/`nextAttemptAt` let the caller log the escalated retry
+  // delay without a second read.
   fail(input: {
     id: string;
     claimToken: string;
@@ -216,7 +280,7 @@ export interface JobQueue {
     now?: Date;
     rateLimited?: boolean;
     random?: () => number;
-  }): boolean;
+  }): JobFailOutcome;
   // Releases every job this host claimed before it last restarted (matched
   // by the hostname prefix of `claimedBy`, any pid) back to pending. Call
   // exactly once at boot, before the runner or anything else claims a job —
@@ -386,6 +450,7 @@ export function createJobQueue({
       `UPDATE jobs SET
          status = 'done',
          attempts = attempts + 1,
+         rate_limits = 0,
          next_attempt_at = NULL,
          claimed_at = NULL,
          claimed_by = NULL,
@@ -425,34 +490,63 @@ export function createJobQueue({
         now,
         rateLimited,
         random,
-      }: FailTxArgs): boolean => {
+      }: FailTxArgs): JobFailOutcome => {
         const row = db
-          .query<{ attempts: number }, [string, string]>(
-            `SELECT attempts FROM jobs WHERE id = ? AND claimed_at = ?`,
+          .query<{ attempts: number; rate_limits: number }, [string, string]>(
+            `SELECT attempts, rate_limits FROM jobs WHERE id = ? AND claimed_at = ?`,
           )
           .get(id, claimToken);
-        if (!row) return false;
+        if (!row) {
+          return { ok: false, rateLimited, rateLimits: 0, nextAttemptAt: null };
+        }
 
-        const plan = rateLimited
-          ? planJobRateLimited({ attempts: row.attempts, now, random })
-          : planJobFailure({ attempts: row.attempts, now, random });
+        // Rate-limited: attempts stays exactly as it was (never spent), and
+        // rate_limits escalates per planJobRateLimited's own ladder. Any
+        // other failure resets rate_limits to 0 — a real, non-rate-limit
+        // error means the run is no longer degraded by an upstream 429, so
+        // the next rate limit (if any) should start escalating from rung 0
+        // again, not continue from wherever a prior, unrelated streak left
+        // off.
+        let status: JobStatus;
+        let attempts: number;
+        let rateLimits: number;
+        let nextAttemptAt: string | null;
+        if (rateLimited) {
+          const plan = planJobRateLimited({
+            rateLimits: row.rate_limits,
+            now,
+            random,
+          });
+          status = plan.status;
+          attempts = row.attempts;
+          rateLimits = plan.rateLimits;
+          nextAttemptAt = plan.nextAttemptAt;
+        } else {
+          const plan = planJobFailure({ attempts: row.attempts, now, random });
+          status = plan.status;
+          attempts = plan.attempts;
+          rateLimits = 0;
+          nextAttemptAt = plan.nextAttemptAt;
+        }
+
         db.run(
           `UPDATE jobs SET
-             status = ?, attempts = ?,
+             status = ?, attempts = ?, rate_limits = ?,
              next_attempt_at = ?, claimed_at = NULL, claimed_by = NULL,
              last_error = ?, finished_at = ?
            WHERE id = ? AND claimed_at = ?`,
           [
-            plan.status,
-            plan.attempts,
-            plan.nextAttemptAt,
+            status,
+            attempts,
+            rateLimits,
+            nextAttemptAt,
             error,
-            plan.status === "failed" ? now.toISOString() : null,
+            status === "failed" ? now.toISOString() : null,
             id,
             claimToken,
           ],
         );
-        return true;
+        return { ok: true, rateLimited, rateLimits, nextAttemptAt };
       },
     );
   }
@@ -475,7 +569,7 @@ export function createJobQueue({
     now?: Date;
     rateLimited?: boolean;
     random?: () => number;
-  }): boolean {
+  }): JobFailOutcome {
     return getFailTx().immediate({
       id,
       claimToken,

@@ -229,6 +229,56 @@ describe("createJobRunner", () => {
     expect(row).toEqual({ status: "pending", attempts: 0 });
   });
 
+  test("a rate-limited failure logs exactly one line naming the retry delay and rate_limits, never the raw error object", async () => {
+    const { db, queue } = setup();
+    const id = queue.enqueue({ kind: "classify", payload: {}, now: T0 });
+    const logs: { message: string; meta?: unknown }[] = [];
+    const runner = createJobRunner({
+      db,
+      claimedBy: CLAIMED_BY,
+      queue,
+      log: (message, meta) => logs.push({ message, meta }),
+    });
+    runner.register("classify", async () => {
+      throw new Error("rate_limit_exceeded");
+    });
+
+    expect(await runner.runOnce(T0)).toBe(true);
+
+    expect(logs).toHaveLength(1);
+    // recordFailOutcome logs against the real jittered delay (queue.fail
+    // isn't given a fixed `random` here) — 60-72s covers the 1st rung's
+    // base plus up to the configured 20% jitter.
+    expect(logs[0]!.message).toMatch(
+      new RegExp(
+        `^\\[jobs\\] classify ${id} rate-limited, retry in (6[0-9]|7[0-2])s \\(rate_limits=1\\)$`,
+      ),
+    );
+    expect(logs[0]!.meta).toBeUndefined();
+  });
+
+  test("a non-rate-limit failure still logs the full error object", async () => {
+    const { db, queue } = setup();
+    const id = queue.enqueue({ kind: "classify", payload: {}, now: T0 });
+    const logs: { message: string; meta?: unknown }[] = [];
+    const runner = createJobRunner({
+      db,
+      claimedBy: CLAIMED_BY,
+      queue,
+      log: (message, meta) => logs.push({ message, meta }),
+    });
+    const error = new Error("boom");
+    runner.register("classify", async () => {
+      throw error;
+    });
+
+    expect(await runner.runOnce(T0)).toBe(true);
+
+    expect(logs).toEqual([
+      { message: `[jobs] classify job ${id} failed`, meta: { error } },
+    ]);
+  });
+
   test("a throwing claimNext does not crash runOnce — it just reports no job ran", async () => {
     const { db, queue } = setup();
     const stubQueue = {

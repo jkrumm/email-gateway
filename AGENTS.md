@@ -126,7 +126,12 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   `sync_tick`. `src/jobs/classify.ts`, `src/jobs/jev.ts`, `src/jobs/send.ts`
   are the handler factories; `runner.ts`'s `runOnce` now classifies a caught
   error via `isRateLimitError` and calls `fail({ rateLimited: true })` so a
-  429 parks instead of burning an attempt.
+  429 parks on `jobs.rate_limits`'s own escalating ladder (1m → 5m → 15m →
+  capped 1h, never terminal, resets on success/other failure) instead of
+  burning an `attempts`. `ensureJobsSchema` ALTERs `rate_limits` onto an
+  existing table idempotently — this module owns 100% of the jobs DDL, so a
+  post-launch column has no versioned migration path, only this on-boot
+  check (2026-09-28 fix, see README §Jev shadow mode).
 - `src/sync/ingest.ts` + `src/sync/composition.ts` (Wave 4): envelope-only
   ingest of one mailbox through any `MailProvider` into `messages`/
   `message_locations`, and the composition root (`runSyncTick`) that loops

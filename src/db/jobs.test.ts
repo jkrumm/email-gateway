@@ -22,6 +22,7 @@ const CLAIMED_BY = defaultClaimedBy("host-a", 111);
 interface JobRow {
   status: string;
   attempts: number;
+  rate_limits: number;
   next_attempt_at: string | null;
   last_error: string | null;
 }
@@ -29,7 +30,7 @@ interface JobRow {
 function jobState(db: Database, id: string): JobRow {
   return db
     .query<JobRow, [string]>(
-      `SELECT status, attempts, next_attempt_at, last_error FROM jobs WHERE id = ?`,
+      `SELECT status, attempts, rate_limits, next_attempt_at, last_error FROM jobs WHERE id = ?`,
     )
     .get(id)!;
 }
@@ -88,25 +89,41 @@ describe("planJobFailure", () => {
 });
 
 describe("planJobRateLimited", () => {
-  test("reschedules on the first backoff rung without incrementing attempts", () => {
-    const plan = planJobRateLimited({ attempts: 4, now: T0, random: noJitter });
+  test("escalates per rung — 1m, 5m, 15m, 1h — then caps at 1h forever", () => {
+    const rungs = [MINUTE, 5 * MINUTE, 15 * MINUTE, HOUR];
 
-    expect(plan).toEqual({
-      status: "pending",
-      attempts: 4,
-      nextAttemptAt: at(MINUTE).toISOString(),
-    });
+    for (const [rateLimits, wait] of rungs.entries()) {
+      expect(
+        planJobRateLimited({ rateLimits, now: T0, random: noJitter }),
+      ).toEqual({
+        status: "pending",
+        nextAttemptAt: at(wait).toISOString(),
+        rateLimits: rateLimits + 1,
+      });
+    }
+
+    // Every rung past the ladder's own length stays capped at the last one
+    // (1h), never escalating further and never going terminal.
+    for (const rateLimits of [4, 5, 50]) {
+      expect(
+        planJobRateLimited({ rateLimits, now: T0, random: noJitter }),
+      ).toEqual({
+        status: "pending",
+        nextAttemptAt: at(HOUR).toISOString(),
+        rateLimits: rateLimits + 1,
+      });
+    }
   });
 
-  test("never goes terminal no matter how many prior attempts", () => {
+  test("never goes terminal no matter how many prior rate limits", () => {
     const plan = planJobRateLimited({
-      attempts: JOB_MAX_ATTEMPTS + 10,
+      rateLimits: JOB_MAX_ATTEMPTS + 10,
       now: T0,
       random: noJitter,
     });
 
     expect(plan.status).toBe("pending");
-    expect(plan.attempts).toBe(JOB_MAX_ATTEMPTS + 10);
+    expect(plan.rateLimits).toBe(JOB_MAX_ATTEMPTS + 11);
   });
 });
 
@@ -165,12 +182,13 @@ describe("createJobQueue", () => {
         error: "429 high demand",
         now: T0,
         random: noJitter,
-      }),
+      }).ok,
     ).toBe(true);
 
     expect(jobState(db, id)).toEqual({
       status: "pending",
       attempts: 1,
+      rate_limits: 0,
       next_attempt_at: at(MINUTE).toISOString(),
       last_error: "429 high demand",
     });
@@ -180,26 +198,98 @@ describe("createJobQueue", () => {
     expect(queue.claimNext({ now: at(MINUTE) })).not.toBeNull();
   });
 
-  test("fail with rateLimited never spends an attempt, however many times it recurs", () => {
+  test("fail with rateLimited never spends an attempt, however many times it recurs, and escalates then caps at 1h", () => {
     const { db, queue, id } = setup();
+    const rungs = [MINUTE, 5 * MINUTE, 15 * MINUTE, HOUR, HOUR, HOUR];
+    let clock = T0;
 
-    for (let i = 0; i < JOB_MAX_ATTEMPTS + 3; i++) {
-      const claim = queue.claimNext({ now: at(i * HOUR) })!;
-      queue.fail({
+    rungs.forEach((wait, i) => {
+      const claim = queue.claimNext({ now: clock })!;
+      const outcome = queue.fail({
         ...claim,
         error: "429 high demand",
-        now: at(i * HOUR),
+        now: clock,
         rateLimited: true,
         random: noJitter,
       });
-    }
 
+      expect(outcome).toEqual({
+        ok: true,
+        rateLimited: true,
+        rateLimits: i + 1,
+        nextAttemptAt: new Date(clock.getTime() + wait).toISOString(),
+      });
+      const state = jobState(db, id);
+      expect(state.attempts).toBe(0);
+      expect(state.rate_limits).toBe(i + 1);
+      clock = new Date(state.next_attempt_at!);
+    });
+
+    expect(jobState(db, id).status).toBe("pending");
+    expect(queue.claimNext({ now: clock })).not.toBeNull();
+  });
+
+  // Walks `count` rate-limited failures, each claimed once the previous
+  // one's own escalated backoff has actually elapsed — a fixed step (unlike
+  // JOB_BACKOFF_MS's failures, which the existing tests walk at 1-hour
+  // steps) would under-shoot the ladder's later rungs (5m, 15m) and leave
+  // the job still not due, silently no-op-ing the next claimNext/fail call.
+  function failRateLimitedTimes(
+    db: Database,
+    queue: ReturnType<typeof createJobQueue>,
+    id: string,
+    count: number,
+  ): Date {
+    let clock = T0;
+    for (let i = 0; i < count; i++) {
+      const claim = queue.claimNext({ now: clock })!;
+      queue.fail({
+        ...claim,
+        error: "429 high demand",
+        now: clock,
+        rateLimited: true,
+        random: noJitter,
+      });
+      clock = new Date(jobState(db, id).next_attempt_at!);
+    }
+    return clock;
+  }
+
+  test("a rate-limited streak resets to rung 0 on the next non-rate-limit failure", () => {
+    const { db, queue, id } = setup();
+    const clock = failRateLimitedTimes(db, queue, id, 3);
+    expect(jobState(db, id).rate_limits).toBe(3);
+
+    const claim = queue.claimNext({ now: clock })!;
+    const outcome = queue.fail({
+      ...claim,
+      error: "boom",
+      now: clock,
+      random: noJitter,
+    });
+
+    expect(outcome).toEqual({
+      ok: true,
+      rateLimited: false,
+      rateLimits: 0,
+      nextAttemptAt: new Date(clock.getTime() + MINUTE).toISOString(),
+    });
     const state = jobState(db, id);
-    expect(state.status).toBe("pending");
-    expect(state.attempts).toBe(0);
-    expect(
-      queue.claimNext({ now: at((JOB_MAX_ATTEMPTS + 3) * HOUR) }),
-    ).not.toBeNull();
+    expect(state.rate_limits).toBe(0);
+    // A non-rate-limit failure spends exactly one attempt, same as always —
+    // the earlier rate-limited attempts never touched this counter.
+    expect(state.attempts).toBe(1);
+  });
+
+  test("a rate-limited streak resets to rung 0 on success", () => {
+    const { db, queue, id } = setup();
+    const clock = failRateLimitedTimes(db, queue, id, 3);
+    expect(jobState(db, id).rate_limits).toBe(3);
+
+    const claim = queue.claimNext({ now: clock })!;
+    expect(queue.complete({ ...claim, now: clock })).toBe(true);
+
+    expect(jobState(db, id)).toMatchObject({ status: "done", rate_limits: 0 });
   });
 
   test("walks the full schedule and ends failed after JOB_MAX_ATTEMPTS", () => {
@@ -220,6 +310,7 @@ describe("createJobQueue", () => {
     expect(jobState(db, id)).toEqual({
       status: "failed",
       attempts: JOB_MAX_ATTEMPTS,
+      rate_limits: 0,
       next_attempt_at: null,
       last_error: "boom",
     });
@@ -237,13 +328,13 @@ describe("createJobQueue", () => {
         ...oldClaim,
         error: "boom",
         now: at(JOB_STALE_CLAIM_MS + 2 * MINUTE),
-      }),
+      }).ok,
     ).toBe(false);
     expect(queue.complete({ ...oldClaim, now: T0 })).toBe(false);
     expect(jobState(db, id)).toMatchObject({ status: "pending", attempts: 0 });
 
     expect(queue.complete({ ...newClaim, now: T0 })).toBe(true);
-    expect(queue.fail({ ...oldClaim, error: "boom", now: T0 })).toBe(false);
+    expect(queue.fail({ ...oldClaim, error: "boom", now: T0 }).ok).toBe(false);
     expect(jobState(db, id)).toMatchObject({
       status: "done",
       attempts: 1,
@@ -257,7 +348,7 @@ describe("createJobQueue", () => {
 
     expect(queue.complete({ ...claim, now: T0 })).toBe(true);
     expect(queue.complete({ ...claim, now: T0 })).toBe(false);
-    expect(queue.fail({ ...claim, error: "boom", now: T0 })).toBe(false);
+    expect(queue.fail({ ...claim, error: "boom", now: T0 }).ok).toBe(false);
   });
 
   test("failing or completing an unknown id is a no-op", () => {
@@ -265,7 +356,7 @@ describe("createJobQueue", () => {
     const unknown = { id: "does-not-exist", claimToken: "x" };
 
     expect(queue.complete({ ...unknown, now: T0 })).toBe(false);
-    expect(queue.fail({ ...unknown, error: "boom", now: T0 })).toBe(false);
+    expect(queue.fail({ ...unknown, error: "boom", now: T0 }).ok).toBe(false);
   });
 
   test("reapOwnStaleClaims releases only this host's claims, immediately", () => {

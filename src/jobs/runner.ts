@@ -3,6 +3,7 @@ import {
   createJobQueue,
   JOB_STALE_CLAIM_MS,
   type JobClaim,
+  type JobFailOutcome,
   type JobQueue,
 } from "../db/jobs";
 import { errorMessage } from "../utils/error";
@@ -106,16 +107,86 @@ function recordOutcome({
   }
 }
 
+// Records a failed handler's outcome. Rate-limited failures are common and
+// expected under a sustained upstream 429 — logging the full error object
+// (with stack) for every one of them, every ~1-40 minutes per parked job,
+// is pure noise at volume (2026-09-28: ~48 log lines per attempt, ~40k
+// lines/hour during the incident this fixes) and buries the one number an
+// operator actually needs. A genuine, non-rate-limit failure keeps the full
+// object — that one really is worth the detail.
+function recordFailOutcome({
+  queue,
+  claim,
+  renewal,
+  error,
+  log,
+}: {
+  queue: JobQueue;
+  claim: JobClaim;
+  renewal: { currentToken: () => string };
+  error: unknown;
+  log: (message: string, meta?: unknown) => void;
+}): void {
+  const rateLimited = isRateLimitError(error);
+  const failNow = new Date();
+  let outcome: JobFailOutcome;
+  try {
+    outcome = queue.fail({
+      id: claim.id,
+      claimToken: renewal.currentToken(),
+      error: errorMessage(error),
+      now: failNow,
+      rateLimited,
+    });
+  } catch (writeError) {
+    // Same reasoning as recordOutcome: a DB error here must not abort the
+    // rest of drain()'s loop — log and move on.
+    log(`[jobs] failed to record ${claim.kind} job ${claim.id} as failed`, {
+      error: writeError,
+    });
+    return;
+  }
+
+  if (!outcome.ok) {
+    log(
+      `[jobs] ${claim.kind} job ${claim.id} failed, but its claim was already lost — may run again elsewhere`,
+    );
+    return;
+  }
+
+  if (outcome.rateLimited) {
+    const retrySeconds = outcome.nextAttemptAt
+      ? Math.max(
+          0,
+          Math.round(
+            (new Date(outcome.nextAttemptAt).getTime() - failNow.getTime()) /
+              1000,
+          ),
+        )
+      : 0;
+    log(
+      `[jobs] ${claim.kind} ${claim.id} rate-limited, retry in ${retrySeconds}s (rate_limits=${outcome.rateLimits})`,
+    );
+    return;
+  }
+
+  log(`[jobs] ${claim.kind} job ${claim.id} failed`, { error });
+}
+
 export function createJobRunner({
   db,
   claimedBy,
   queue = createJobQueue({ db, claimedBy }),
   renewIntervalMs = DEFAULT_RENEW_INTERVAL_MS,
+  log = console.error,
 }: {
   db: Database;
   claimedBy: string;
   queue?: JobQueue;
   renewIntervalMs?: number;
+  // Injectable so a test can assert on the exact log line without spyOn
+  // (repo convention) — defaults to the real console.error in production.
+  log?: (message: string, meta?: unknown) => void;
 }): JobRunner {
   if (renewIntervalMs >= JOB_STALE_CLAIM_MS) {
     throw new Error(
@@ -161,20 +232,8 @@ export function createJobRunner({
     try {
       await handler(claim.payload);
     } catch (error) {
-      console.error(`[jobs] ${claim.kind} job ${claim.id} failed`, { error });
       renewal.stop();
-      recordOutcome({
-        claim,
-        verb: "failed",
-        write: () =>
-          queue.fail({
-            id: claim.id,
-            claimToken: renewal.currentToken(),
-            error: errorMessage(error),
-            now: new Date(),
-            rateLimited: isRateLimitError(error),
-          }),
-      });
+      recordFailOutcome({ queue, claim, renewal, error, log });
       return true;
     }
 
