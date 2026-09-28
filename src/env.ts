@@ -1,6 +1,42 @@
 import { X509Certificate } from "node:crypto";
 import { z } from "zod";
 import { normalizePem } from "./utils/pem";
+import { splitMailboxes } from "./utils/mailboxes";
+
+// Shared by both IMAP accounts' superRefine checks below: every key in
+// `keys` must be set once any one of them is, so a half-configured account
+// (host but no password, user but no app password) fails fast at startup
+// instead of connecting with an undefined credential.
+function requireTogether<T extends Record<string, unknown>>(
+  context: z.RefinementCtx,
+  value: T,
+  keys: readonly (keyof T & string)[],
+  reason: string,
+): void {
+  for (const key of keys) {
+    if (!value[key]) {
+      context.addIssue({
+        code: "custom",
+        path: [key],
+        message: `${key} is required when ${reason}`,
+      });
+    }
+  }
+}
+
+function requireNonEmptyMailboxList(
+  context: z.RefinementCtx,
+  key: string,
+  value: string,
+): void {
+  if (splitMailboxes(value).length === 0) {
+    context.addIssue({
+      code: "custom",
+      path: [key],
+      message: `${key} must name at least one mailbox`,
+    });
+  }
+}
 
 export const envSchema = z
   .object({
@@ -43,35 +79,54 @@ export const envSchema = z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+
+    // IMAP ingest (Gmail, imap.gmail.com over implicit TLS). Unset user ->
+    // Gmail ingest disabled. The port is fixed (993) and the certificate is
+    // not pinned (a public CA). Default mailbox is INBOX only: Gmail's
+    // Archive/Spam/Trash folder paths are localized ("[Gmail]/…"), so the
+    // owner opts into any others by name.
+    GMAIL_IMAP_USER: z.string().optional(),
+    GMAIL_IMAP_APP_PASSWORD: z.string().optional(),
+    GMAIL_IMAP_MAILBOXES: z.string().default("INBOX"),
   })
   .superRefine((value, context) => {
-    if (!value.IMAP_HOST) return;
-    for (const key of ["IMAP_USER", "IMAP_PASSWORD"] as const) {
-      if (!value[key]) {
-        context.addIssue({
-          code: "custom",
-          path: [key],
-          message: `${key} is required when IMAP_HOST is set`,
-        });
+    if (value.IMAP_HOST) {
+      requireTogether(
+        context,
+        value,
+        ["IMAP_USER", "IMAP_PASSWORD"],
+        "IMAP_HOST is set",
+      );
+      if (value.IMAP_TLS_CERT) {
+        try {
+          new X509Certificate(normalizePem(value.IMAP_TLS_CERT));
+        } catch {
+          context.addIssue({
+            code: "custom",
+            path: ["IMAP_TLS_CERT"],
+            message: "IMAP_TLS_CERT is not a valid PEM certificate",
+          });
+        }
       }
+      requireNonEmptyMailboxList(
+        context,
+        "IMAP_MAILBOXES",
+        value.IMAP_MAILBOXES,
+      );
     }
-    if (value.IMAP_TLS_CERT) {
-      try {
-        new X509Certificate(normalizePem(value.IMAP_TLS_CERT));
-      } catch {
-        context.addIssue({
-          code: "custom",
-          path: ["IMAP_TLS_CERT"],
-          message: "IMAP_TLS_CERT is not a valid PEM certificate",
-        });
-      }
-    }
-    if (!value.IMAP_MAILBOXES.split(",").some((name) => name.trim())) {
-      context.addIssue({
-        code: "custom",
-        path: ["IMAP_MAILBOXES"],
-        message: "IMAP_MAILBOXES must name at least one mailbox",
-      });
+
+    if (value.GMAIL_IMAP_USER || value.GMAIL_IMAP_APP_PASSWORD) {
+      requireTogether(
+        context,
+        value,
+        ["GMAIL_IMAP_USER", "GMAIL_IMAP_APP_PASSWORD"],
+        "Gmail IMAP is configured",
+      );
+      requireNonEmptyMailboxList(
+        context,
+        "GMAIL_IMAP_MAILBOXES",
+        value.GMAIL_IMAP_MAILBOXES,
+      );
     }
   });
 

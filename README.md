@@ -1,6 +1,6 @@
 # email-gateway
 
-The single door to all of my email: Proton Mail (Bridge), Resend and later Gmail behind one API and UI. Direction: [docs/vision.md](docs/vision.md).
+The single door to all of my email: Proton Mail (Bridge), Gmail (IMAP) and Resend behind one API and UI. Direction: [docs/vision.md](docs/vision.md).
 
 ## Local Development
 
@@ -116,16 +116,24 @@ A `sync_tick` runs one envelope-only ingest pass per configured provider/mailbox
 
 ## IMAP
 
-`src/providers/imap/` is the Proton (via Bridge) and Gmail adapter behind the `MailProvider` port (`src/providers/port.ts`): `capabilities()` (declared from what the server actually advertises), `listMailboxes()`, `list()`/`read()` (newest-first), `search()`, `setFlags()`/`move()` (open the mailbox with `SELECT`, not `EXAMINE`, since a write needs it), `watch()` (IDLE). `src/sync/ingest.ts` only ever calls `list()`/`read()` for a `sync_tick` — flags/moves are exposed through `/api/messages/:key/flags` and `/move` instead.
+`src/providers/imap/` is the Proton (via Bridge) and Gmail adapter behind the `MailProvider` port (`src/providers/port.ts`): `capabilities()` (declared from what the server actually advertises, per account), `listMailboxes()`, `list()`/`read()` (newest-first), `search()`, `setFlags()`/`move()` (open the mailbox with `SELECT`, not `EXAMINE`, since a write needs it), `watch()` (IDLE). `src/sync/ingest.ts` only ever calls `list()`/`read()` for a `sync_tick` — flags/moves are exposed through `/api/messages/:key/flags` and `/move` instead.
 
-Env vars (all optional; unset `IMAP_HOST` → IMAP ingest is off):
+Capabilities are detected per connection, never assumed from the provider id. On Gmail (`X-GM-EXT-1`) every listed envelope also carries its `X-GM-THRID` as the generic `threadKey`, and a folder's special-use attribute (`\All`, `\Junk`, `\Trash`, …) maps Archive/Spam/Trash through `listMailboxes()` — folder paths are localized, so special-use is the portable signal and `[Gmail]/…` names are never hardcoded. When the server advertises `CONDSTORE`, the head sync pass uses a `changedSince` fast path bookmarked per mailbox (seed on the first full scan, process-local); every server without it — Bridge — keeps the byte-identical UID-window scan. Gmail labels themselves are not captured yet: there is no `labels` field in the schema, so a folder/special-use move is the in-scope label operation (documented gap).
+
+Env vars (all optional; unset `IMAP_HOST` → Proton ingest is off; unset `GMAIL_IMAP_USER` → Gmail ingest is off):
 
 - `IMAP_HOST`, `IMAP_PORT` (default `1143`), `IMAP_USER`, `IMAP_PASSWORD` — Bridge's per-address credentials. A host without user/password fails fast at startup.
 - `IMAP_MAILBOXES` — comma-separated, default `INBOX,Spam`. Syncing Proton's Spam folder lets you compare its filter against our classifier.
 - `IMAP_TLS_CERT` — PEM of Bridge's self-signed certificate (`\n`-escaped newlines are accepted, so it fits a one-line secret). The cert is the sole trust anchor **and** the presented certificate's SHA-256 fingerprint must equal the pinned one, so a CA certificate configured by mistake can't vouch for anything else. Hostname matching is skipped: Bridge issues for localhost while we connect over the tailnet.
 - `IMAP_TLS_INSECURE=true` — accept any certificate (one warning at startup). Only acceptable because the path is WireGuard (Tailscale); prefer `IMAP_TLS_CERT`. Ignored when a cert is set.
+- `GMAIL_IMAP_USER`, `GMAIL_IMAP_APP_PASSWORD` — the Gmail address and a 16-character app password (2-Step Verification required). A user without a password (or vice versa) fails fast at startup. Two named vars rather than a `MAIL_ACCOUNTS` JSON blob: they match the `IMAP_*` naming and keep the 1Password template one line per secret.
+- `GMAIL_IMAP_MAILBOXES` — comma-separated, default `INBOX`. INBOX only by default because Gmail's other folder paths are localized; add folders by their exact `LIST` path.
 
-The connection is `STARTTLS` (login is refused if the upgrade fails) and has plain network timeouts (30 s connect, 15 s greeting, 60 s socket inactivity), after which the client is closed, so a stalled Bridge fails the tick instead of holding the job's claim.
+The Proton connection is `STARTTLS` (login is refused if the upgrade fails); Gmail is implicit TLS to `imap.gmail.com:993` with the system trust store. Both have plain network timeouts (30 s connect, 15 s greeting, 60 s socket inactivity), after which the client is closed, so a stalled server fails the tick instead of holding the job's claim.
+
+`GET /health` stays a plain `{ "ok": true }` liveness check (unauthenticated, on the public tunnel, watched by Uptime Kuma) — it never lists real mail addresses. `GET /api/accounts` (bearer, see §Agent API) lists every configured account (`id`, `provider`, `address`) without connecting to any of them, for both env-configured-but-never-synced accounts and ones already in the store.
+
+A CONDSTORE server (Gmail) bookmarks its mailbox's modseq per `mailbox:UIDVALIDITY` pair, process-local — a mailbox recreation (a new UIDVALIDITY, e.g. a Gmail label rebuild) looks like a fresh mailbox instead of reusing a bookmark the server's reset counter would otherwise answer "nothing changed" to.
 
 ## Enrichment
 
@@ -139,6 +147,7 @@ Every newly-ingested message is enriched once by the LLM (`src/enrich/`, run fro
 
 | Method & path                   | Query / body                                                                                                                                                            | Notes                                                                                                                                                                                 |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/accounts`             | —                                                                                                                                                                       | Every account the env configures (`id`, `provider`, `address`), without connecting to any of them — includes an account that has never synced yet, unlike `/api/stats`'s `accounts`.  |
 | `GET /api/messages`             | `account` (comma-separated account ids), `direction`, `category`, `needs_me`/`action_required` (`1` or `true`), `since`, `until`, `limit` (1-100, default 25), `cursor` | Keyset-paginated, newest first, from `messages`/`classifications`. `needs_me=1` is sugar for `action_required=true`.                                                                  |
 | `GET /api/messages/:key`        | `include=body`                                                                                                                                                          | Envelope + locations + classification; body (`html`/`text`, may be `null` if never cached) only when `include=body` is passed. `404` if unknown. Never triggers a live provider read. |
 | `GET /api/threads/:key`         | —                                                                                                                                                                       | Every message sharing the key's `threadKey`, newest first; a message with no `threadKey` returns just itself. `404` if the message itself is unknown.                                 |

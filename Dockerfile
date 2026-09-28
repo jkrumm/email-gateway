@@ -7,6 +7,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile --production --ignore-scripts
 
 COPY src ./src
+COPY scripts ./scripts
 
 FROM oven/bun:1.4-alpine AS runner
 WORKDIR /app
@@ -17,6 +18,7 @@ RUN apk add --no-cache curl ca-certificates \
 
 COPY --from=builder --chown=app:app /app/node_modules /app/node_modules
 COPY --from=builder --chown=app:app /app/src /app/src
+COPY --from=builder --chown=app:app /app/scripts /app/scripts
 COPY --from=builder --chown=app:app /app/package.json /app/package.json
 
 ENV NODE_ENV=production

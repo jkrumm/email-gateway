@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createImapProvider } from "./provider";
 import type {
+  ImapChangedListing,
   ImapEnvelopeInfo,
   ImapIdleClient,
   ImapMailbox,
@@ -15,6 +16,7 @@ const config = {
   user: "u",
   password: "p",
   mailboxes: ["INBOX"],
+  tls: "starttls" as const,
   tlsInsecure: false,
 };
 
@@ -38,19 +40,35 @@ function createFakePort({
   // A destination UIDVALIDITY distinct from the source mailbox's ("1"),
   // so a test that asserts on it catches the adapter reusing the wrong one.
   movedUidValidity = "2" as string | null,
+  highestModseq,
+  changedListing,
 }: {
   capabilities?: Capabilities;
   envelopes?: ImapEnvelopeInfo[];
   source?: Uint8Array;
   movedUidValidity?: string | null;
+  // CONDSTORE-only: the mailbox's HIGHESTMODSEQ and the changedSince listing
+  // it answers a head call with once a bookmark exists.
+  highestModseq?: bigint;
+  changedListing?: ImapChangedListing;
 } = {}) {
   const closes = { session: 0, mailbox: 0 };
   const connects = { count: 0 };
   const opens: { path: string; readOnly?: boolean }[] = [];
+  const changedSinceCalls: { changedSince: bigint; limit: number }[] = [];
   let usable = true;
 
   const mailbox: ImapMailbox = {
     uidValidity: "1",
+    ...(highestModseq !== undefined ? { highestModseq } : {}),
+    ...(changedListing
+      ? {
+          listChangedSince: async (changedSince, limit) => {
+            changedSinceCalls.push({ changedSince, limit });
+            return changedListing;
+          },
+        }
+      : {}),
     listAfter: async () => ({ messages: [], truncated: false }),
     listBefore: async () => ({
       messages: envelopes,
@@ -93,6 +111,12 @@ function createFakePort({
     closes,
     connects,
     opens,
+    changedSinceCalls,
+    // Exposed so a test can simulate a mailbox recreation (a new
+    // UIDVALIDITY, a reset modseq counter) mid-session without forcing a
+    // full reconnect through the session pool — the pool trusts a cached
+    // handle's live fields, exactly like the real ImapMailbox does.
+    mailbox,
     setUsable: (value: boolean) => {
       usable = value;
     },
@@ -1266,5 +1290,187 @@ describe("createImapProvider watch()", () => {
     ]);
 
     unsubscribe();
+  });
+
+  test("a Bridge mailbox (no CONDSTORE) never takes the changedSince fast path", async () => {
+    const { port, changedSinceCalls } = createFakePort();
+    const provider = createImapProvider(config, {
+      id: "proton",
+      account: "hello@example.com",
+      port,
+    });
+
+    await provider.list("INBOX", undefined);
+    await provider.list("INBOX", undefined);
+
+    // No bookmark is ever established, so every head call is a full scan.
+    expect(changedSinceCalls).toHaveLength(0);
+  });
+
+  test("a Gmail mailbox seeds a modseq bookmark on the first head scan, then lists only changes", async () => {
+    const changed: ImapEnvelopeInfo = {
+      uid: 7,
+      size: 10,
+      internalDate: new Date("2026-09-15T00:00:00.000Z"),
+      from: "ada@example.com",
+      to: ["me@gmail.com"],
+      subject: "Changed",
+      hasAttachments: false,
+      flags: ["\\Seen"],
+      threadKey: "42",
+    };
+    const { port, changedSinceCalls } = createFakePort({
+      highestModseq: 500n,
+      changedListing: {
+        messages: [changed],
+        truncated: false,
+        highestModseq: 510n,
+      },
+      envelopes: [],
+    });
+    const provider = createImapProvider(config, {
+      id: "gmail",
+      account: "me@gmail.com",
+      port,
+    });
+
+    // First head call: no bookmark yet -> full scan, seeds 500.
+    const first = await provider.list("INBOX", undefined);
+    expect(first.items).toHaveLength(0);
+    expect(changedSinceCalls).toHaveLength(0);
+
+    // Second head call: changedSince from the seeded bookmark.
+    const second = await provider.list("INBOX", undefined);
+    expect(changedSinceCalls).toEqual([{ changedSince: 500n, limit: 500 }]);
+    expect(second.items[0]?.threadKey).toBe("42");
+    expect(second.cursor).toBeUndefined();
+  });
+
+  test("skipFastPath forces a full scan even with an existing bookmark, so a caller seeding backfill never gets an ambiguous undefined cursor", async () => {
+    const { port, changedSinceCalls } = createFakePort({
+      highestModseq: 500n,
+      changedListing: { messages: [], truncated: false, highestModseq: 500n },
+      envelopes: [],
+    });
+    const provider = createImapProvider(config, {
+      id: "gmail",
+      account: "me@gmail.com",
+      port,
+    });
+
+    await provider.list("INBOX", undefined); // seeds the bookmark
+    const forced = await provider.list("INBOX", undefined, {
+      skipFastPath: true,
+    });
+
+    // Never took the fast path (which always returns cursor: undefined,
+    // ambiguous with "genuinely nothing older") despite a bookmark existing.
+    expect(changedSinceCalls).toHaveLength(0);
+    expect(forced.cursor).toBeUndefined();
+  });
+
+  test("skipFastPath never re-bootstraps an existing bookmark, even when the mailbox's current HIGHESTMODSEQ has since advanced", async () => {
+    const { port, changedSinceCalls, mailbox } = createFakePort({
+      highestModseq: 500n,
+      changedListing: { messages: [], truncated: false, highestModseq: 500n },
+      envelopes: [],
+    });
+    const provider = createImapProvider(config, {
+      id: "gmail",
+      account: "me@gmail.com",
+      port,
+    });
+
+    await provider.list("INBOX", undefined); // seeds the bookmark at 500n
+
+    // The server's HIGHESTMODSEQ has since moved on — e.g. an older message
+    // outside this UID-window scan's range got a flag change. A skipFastPath
+    // call must not treat this as "no bookmark yet" and re-seed to the new,
+    // higher value: that would silently widen the bookmark past what this
+    // scan's limited (newest-page-only) results actually cover.
+    mailbox.highestModseq = 900n;
+    await provider.list("INBOX", undefined, { skipFastPath: true });
+
+    // The next ordinary head call must still ask changedSince the ORIGINAL
+    // 500n bookmark, not the skipped call's un-seeded 900n.
+    await provider.list("INBOX", undefined);
+    expect(changedSinceCalls).toEqual([{ changedSince: 500n, limit: 500 }]);
+  });
+
+  test("a changed set larger than one page falls back to the full scan instead of dropping changes", async () => {
+    const { port, changedSinceCalls } = createFakePort({
+      highestModseq: 500n,
+      // The changed set is truncated: the provider must not advance its
+      // bookmark past messages it did not receive.
+      changedListing: {
+        messages: [
+          {
+            uid: 7,
+            size: 1,
+            internalDate: null,
+            from: "",
+            to: [],
+            subject: "x",
+            hasAttachments: false,
+            flags: [],
+          },
+        ],
+        truncated: true,
+        highestModseq: 510n,
+      },
+      envelopes: [],
+    });
+    const provider = createImapProvider(config, {
+      id: "gmail",
+      account: "me@gmail.com",
+      port,
+    });
+
+    await provider.list("INBOX", undefined); // seed bookmark
+    await provider.list("INBOX", undefined); // changedSince, truncated -> falls back
+
+    // Truncated -> the fallback full scan ran, but the bookmark must NOT
+    // advance to the full scan's current HIGHESTMODSEQ: that scan only
+    // covers the newest page, not the whole changed set the server
+    // reported, so advancing past it would drop whatever fell outside this
+    // window forever. The next head call retries the SAME changedSince.
+    expect(changedSinceCalls).toEqual([{ changedSince: 500n, limit: 500 }]);
+    await provider.list("INBOX", undefined);
+    expect(changedSinceCalls).toEqual([
+      { changedSince: 500n, limit: 500 },
+      { changedSince: 500n, limit: 500 },
+    ]);
+  });
+
+  test("a mailbox recreation (new UIDVALIDITY) invalidates the modseq bookmark instead of reporting nothing changed", async () => {
+    const { port, changedSinceCalls, mailbox } = createFakePort({
+      highestModseq: 500n,
+      changedListing: { messages: [], truncated: false, highestModseq: 500n },
+      envelopes: [],
+    });
+    const provider = createImapProvider(config, {
+      id: "gmail",
+      account: "me@gmail.com",
+      port,
+    });
+
+    await provider.list("INBOX", undefined); // seeds a bookmark for "INBOX:1"
+
+    // The mailbox is recreated: a new UIDVALIDITY and a reset modseq counter
+    // (real IMAP servers issue a lower HIGHESTMODSEQ after a recreation,
+    // since the modseq sequence itself restarts).
+    mailbox.uidValidity = "2";
+    mailbox.highestModseq = 5n;
+
+    await provider.list("INBOX", undefined);
+
+    // A bookmark keyed only by mailbox path would read the "INBOX:1" value
+    // (500n) against the new mailbox and ask for changes since a modseq the
+    // new UIDVALIDITY's counter has never reached — every real server
+    // answers that truthfully with "nothing changed", which is wrong here:
+    // the mailbox's whole history is unseen under this UIDVALIDITY. Scoping
+    // the bookmark by UIDVALIDITY makes this look like a fresh mailbox
+    // instead, so the second call must fall through to a full scan.
+    expect(changedSinceCalls).toHaveLength(0);
   });
 });

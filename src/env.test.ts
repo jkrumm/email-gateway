@@ -76,3 +76,50 @@ describe("IMAP env validation", () => {
     expect(envSchema.parse({ ...base, IMAP_PORT: "993" }).IMAP_PORT).toBe(993);
   });
 });
+
+describe("Gmail IMAP env validation", () => {
+  test("unset user: Gmail is off and the mailbox default applies", () => {
+    const parsed = envSchema.parse(base);
+    expect(parsed.GMAIL_IMAP_USER).toBeUndefined();
+    expect(parsed.GMAIL_IMAP_APP_PASSWORD).toBeUndefined();
+    expect(parsed.GMAIL_IMAP_MAILBOXES).toBe("INBOX");
+  });
+
+  test("user without an app password (or vice versa) fails fast, naming the missing key", () => {
+    const noPassword = envSchema.safeParse({
+      ...base,
+      GMAIL_IMAP_USER: "me@gmail.com",
+    });
+    expect(noPassword.success).toBe(false);
+    expect(
+      noPassword.error?.issues.map((issue) => issue.path.join(".")),
+    ).toEqual(["GMAIL_IMAP_APP_PASSWORD"]);
+
+    const noUser = envSchema.safeParse({
+      ...base,
+      GMAIL_IMAP_APP_PASSWORD: "p",
+    });
+    expect(noUser.success).toBe(false);
+    expect(noUser.error?.issues.map((issue) => issue.path.join("."))).toEqual([
+      "GMAIL_IMAP_USER",
+    ]);
+  });
+
+  test("user with an app password parses; an empty mailbox list is rejected", () => {
+    const ok = {
+      ...base,
+      GMAIL_IMAP_USER: "me@gmail.com",
+      GMAIL_IMAP_APP_PASSWORD: "p",
+    };
+    expect(envSchema.safeParse(ok).success).toBe(true);
+
+    const empty = envSchema.safeParse({
+      ...ok,
+      GMAIL_IMAP_MAILBOXES: " , ",
+    });
+    expect(empty.success).toBe(false);
+    expect(empty.error?.issues.map((issue) => issue.path.join("."))).toEqual([
+      "GMAIL_IMAP_MAILBOXES",
+    ]);
+  });
+});

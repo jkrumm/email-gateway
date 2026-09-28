@@ -4,6 +4,7 @@ import { createAccountsRepo } from "../db/accounts";
 import { createMessagesRepo } from "../db/messages";
 import type {
   Envelope,
+  ListOptions,
   MailProvider,
   Page,
   ProviderId,
@@ -54,7 +55,11 @@ function fakeProvider({
   id?: ProviderId;
   account?: string;
   pages: Record<string, Page<Envelope>["items"][]>;
-  onList?: (mailbox: string, cursor: string | undefined) => void;
+  onList?: (
+    mailbox: string,
+    cursor: string | undefined,
+    options: ListOptions | undefined,
+  ) => void;
 }): MailProvider {
   return {
     id,
@@ -73,8 +78,8 @@ function fakeProvider({
     async listMailboxes() {
       return [];
     },
-    async list(mailbox, cursor) {
-      onList?.(mailbox, cursor);
+    async list(mailbox, cursor, options) {
+      onList?.(mailbox, cursor, options);
       const mailboxPages = pages[mailbox] ?? [];
       const index = cursor ? Number(cursor) : 0;
       const items = mailboxPages[index] ?? [];
@@ -122,6 +127,57 @@ describe("ingestMailbox", () => {
         "INBOX#backfill"
       ],
     ).toBe("done");
+  });
+
+  test("requests skipFastPath on the head call exactly when backfill is about to be seeded from its cursor", async () => {
+    const { accounts, messages } = repos();
+    const calls: {
+      cursor: string | undefined;
+      options: ListOptions | undefined;
+    }[] = [];
+    const provider = fakeProvider({
+      pages: {
+        INBOX: [[envelope({ ref: imapRef(1) })]],
+      },
+      onList: (_mailbox, cursor, options) => calls.push({ cursor, options }),
+    });
+
+    // First tick: no stored backfill cursor yet — this is the seeding call.
+    await ingestMailbox({ provider, mailbox: "INBOX", accounts, messages });
+    expect(calls).toEqual([
+      { cursor: undefined, options: { skipFastPath: true } },
+    ]);
+
+    // Backfill is already "done" after the first tick (one-page mailbox), so
+    // the second tick's head call is an ordinary one — never a seeding call.
+    calls.length = 0;
+    await ingestMailbox({ provider, mailbox: "INBOX", accounts, messages });
+    expect(calls).toEqual([
+      { cursor: undefined, options: { skipFastPath: false } },
+    ]);
+  });
+
+  test("re-seeds backfill with skipFastPath after a stale cursor resets it to restart", async () => {
+    const { accounts, messages } = repos();
+    accounts.upsertAccount({
+      id: "proton:hello@example.com",
+      provider: "proton",
+      address: "hello@example.com",
+    });
+    accounts.updateCursor(
+      "proton:hello@example.com",
+      "INBOX#backfill",
+      "restart",
+    );
+    const calls: { options: ListOptions | undefined }[] = [];
+    const provider = fakeProvider({
+      pages: { INBOX: [[envelope({ ref: imapRef(1) })]] },
+      onList: (_mailbox, _cursor, options) => calls.push({ options }),
+    });
+
+    await ingestMailbox({ provider, mailbox: "INBOX", accounts, messages });
+
+    expect(calls[0]).toEqual({ options: { skipFastPath: true } });
   });
 
   test("persists the backfill cursor and resumes from it on the next call", async () => {

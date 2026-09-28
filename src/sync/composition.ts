@@ -5,21 +5,34 @@ import {
 import type { AccountsRepo } from "../db/accounts";
 import type { MessagesRepo } from "../db/messages";
 import { configuredProviders as defaultConfiguredProviders } from "../providers/from-env";
-import { imapConfigFromEnv } from "../providers/imap/config";
+import {
+  gmailImapConfigFromEnv,
+  imapConfigFromEnv,
+} from "../providers/imap/config";
 import { accountIdFor, ingestMailbox } from "./ingest";
+import type { ImapConfig } from "../providers/imap/adapter";
 import type { MailProvider } from "../providers/port";
 import type { JobHandler } from "../jobs/runner";
 
-// The mailboxes each configured provider ingests. Resend has no folders — its
-// "sent"/"received" history lists stand in (src/providers/resend/adapter.ts);
-// IMAP ingests whatever IMAP_MAILBOXES names (env.ts default "INBOX,Spam") —
-// Proton's Sent folder isn't in that list today, so outbound-via-IMAP isn't
-// ingested this wave (matches the old sync's scope). Exported as an
-// injectable default (rather than called directly) so tests can supply a
-// fixed mailbox list per provider without depending on real IMAP env.
-export function defaultMailboxesFor(provider: MailProvider): string[] {
+// The mailboxes each configured provider ingests, keyed by provider — one
+// account's mailbox list must never be applied to the other. Resend has no
+// folders — its "sent"/"received" history lists stand in
+// (src/providers/resend/adapter.ts); Proton ingests whatever IMAP_MAILBOXES
+// names (env.ts default "INBOX,Spam"), Gmail whatever GMAIL_IMAP_MAILBOXES
+// names. Exported as an injectable default (rather than called directly) so
+// tests can supply a fixed mailbox list per provider without depending on
+// real IMAP env.
+export function defaultMailboxesFor(
+  provider: MailProvider,
+  configs: { proton?: ImapConfig; gmail?: ImapConfig } = {
+    proton: imapConfigFromEnv(),
+    gmail: gmailImapConfigFromEnv(),
+  },
+): string[] {
   if (provider.id === "resend") return ["sent", "received"];
-  return imapConfigFromEnv()?.mailboxes ?? [];
+  if (provider.id === "proton") return configs.proton?.mailboxes ?? [];
+  if (provider.id === "gmail") return configs.gmail?.mailboxes ?? [];
+  return [];
 }
 
 export interface SyncTickResult {

@@ -5,6 +5,7 @@ import type {
   Capabilities,
   Envelope,
   FlagChange,
+  ListOptions,
   Mailbox,
   MailProvider,
   Message,
@@ -300,6 +301,8 @@ function toEnvelope(
     size: info.size,
     hasAttachments: info.hasAttachments,
     flags: info.flags,
+    // X-GM-THRID (Gmail) when the server advertised it; absent for Bridge.
+    ...(info.threadKey ? { threadKey: info.threadKey } : {}),
   };
 }
 
@@ -349,19 +352,190 @@ function parseCursor(
   return { uidValidity, uid };
 }
 
+// modseqByMailbox is keyed by `${mailboxPath}:${uidValidity}`, not the bare
+// path: a recreated mailbox (a Gmail label rebuild) resets the server's
+// modseq counter, and a bookmark issued under the old UIDVALIDITY read
+// against the new one would report "nothing changed" — silently and
+// permanently, since a CONDSTORE server never errors on a modseq that just
+// happens to be higher than anything it currently has. Scoping the key by
+// UIDVALIDITY makes a recreation look like "no bookmark yet" instead.
+function modseqKey(mailboxPath: string, uidValidity: string): string {
+  return `${mailboxPath}:${uidValidity}`;
+}
+
+// Drops every OTHER modseqKey entry for this mailbox path — called only when
+// bootstrapping a fresh bookmark under a new UIDVALIDITY, so any entry that
+// doesn't match `keep` is provably from a superseded (recreated) incarnation
+// of this same mailbox and will never be read again. Without this, a
+// long-lived process accumulates one dead entry per recreation, forever.
+function pruneStaleModseqKeys(
+  modseqByMailbox: Map<string, bigint>,
+  mailboxPath: string,
+  keep: string,
+): void {
+  const prefix = `${mailboxPath}:`;
+  for (const key of modseqByMailbox.keys()) {
+    if (key !== keep && key.startsWith(prefix)) {
+      modseqByMailbox.delete(key);
+    }
+  }
+}
+
+interface ImapListContext {
+  id: ImapProviderId;
+  account: string;
+  mailboxPath: string;
+  mailbox: MailboxHandle;
+  bookmarked: bigint | undefined;
+  modseqByMailbox: Map<string, bigint>;
+}
+
+// The changedSince fast path for imapList's plain head call (no cursor, once
+// a previous full scan left a modseq bookmark): one FETCH returns everything
+// that changed since, instead of re-listing the newest UID window every tick.
+// Returns undefined (fall through to the full scan) when the mailbox has no
+// bookmark yet, the server has no CONDSTORE, the changed set doesn't fit one
+// page (truncated changed-set can't paginate by modseq alone without risking
+// a skip), or the caller passed `skipFastPath: true` — its result's
+// `cursor` is always `undefined`, which the caller can't tell apart from a
+// genuine "nothing older than this page" (see ListOptions.skipFastPath).
+async function imapListChangedSince(
+  ctx: ImapListContext,
+): Promise<Page<Envelope> | undefined> {
+  const { id, account, mailboxPath, mailbox, bookmarked, modseqByMailbox } =
+    ctx;
+  if (bookmarked === undefined || !mailbox.listChangedSince) return undefined;
+
+  const changed = await mailbox.listChangedSince(bookmarked, LIST_PAGE_LIMIT);
+  if (changed.truncated) {
+    // Silent otherwise: the bookmark correctly stays put (never advances
+    // past what fit), so every subsequent tick retries the identical
+    // changedSince call and truncates again — a mailbox can get stuck this
+    // way indefinitely (a bulk operation touching more than one page's
+    // worth of messages). Worth a line so it shows up as a real signal
+    // rather than looking like a quiet, permanently degraded sync.
+    console.error(
+      `[imap] ${mailboxPath} has more CONDSTORE changes than fit one page ` +
+        `(limit ${LIST_PAGE_LIMIT}); falling back to a full scan this tick`,
+    );
+    return undefined;
+  }
+
+  if (changed.highestModseq > bookmarked) {
+    modseqByMailbox.set(
+      modseqKey(mailboxPath, mailbox.uidValidity),
+      changed.highestModseq,
+    );
+  }
+  return {
+    items: changed.messages.map((info) =>
+      toEnvelope(id, account, mailboxPath, mailbox.uidValidity, info),
+    ),
+    cursor: undefined,
+  };
+}
+
+// Whether a bookmark actually exists is tracked separately from the
+// `bookmarked` value imapListChangedSince gets to use: `skipFastPath` must
+// suppress *using* an existing bookmark without making the bootstrap guard
+// in bootstrapBookmarkIfColdStart below believe none exists — those are
+// different facts, and conflating them (reading "existing" off the same,
+// option-suppressed value) previously let a forced full scan re-seed an
+// already-precise bookmark with a coarser one that a UID-window scan's
+// limited results don't actually back up.
+interface BookmarkLookup {
+  modseqKeyForMailbox: string;
+  hasExistingBookmark: boolean;
+  bookmarked: bigint | undefined;
+}
+
+function resolveBookmark(
+  mailboxPath: string,
+  mailbox: MailboxHandle,
+  parsed: ReturnType<typeof parseCursor>,
+  modseqByMailbox: Map<string, bigint>,
+  options: ListOptions | undefined,
+): BookmarkLookup {
+  const modseqKeyForMailbox = modseqKey(mailboxPath, mailbox.uidValidity);
+  const hasExistingBookmark =
+    parsed === undefined && modseqByMailbox.has(modseqKeyForMailbox);
+  const bookmarked =
+    hasExistingBookmark && !options?.skipFastPath
+      ? modseqByMailbox.get(modseqKeyForMailbox)
+      : undefined;
+  return { modseqKeyForMailbox, hasExistingBookmark, bookmarked };
+}
+
+// A full head scan only bootstraps the bookmark on a true cold start — no
+// prior bookmark for this mailbox+UIDVALIDITY (checked directly against the
+// map by resolveBookmark above, not the possibly skipFastPath-suppressed
+// `bookmarked` value). A call that already had one but landed here anyway
+// (the fast path's changed set didn't fit one page, or the caller explicitly
+// asked to skip it) must NOT re-bookmark: this UID-window scan covers only
+// the newest page, not the whole changed set the server reported, so
+// advancing the bookmark past it would drop whatever fell outside this
+// window forever instead of retrying it next tick.
+function bootstrapBookmarkIfColdStart(
+  lookup: BookmarkLookup,
+  mailboxPath: string,
+  mailbox: MailboxHandle,
+  parsed: ReturnType<typeof parseCursor>,
+  modseqByMailbox: Map<string, bigint>,
+): void {
+  if (
+    parsed !== undefined ||
+    lookup.hasExistingBookmark ||
+    mailbox.highestModseq === undefined
+  ) {
+    return;
+  }
+  // A bootstrap under a new UIDVALIDITY (mailbox recreation) is the one
+  // moment this mailbox's OLD key is known to be dead — prune it so a
+  // long-lived process doesn't accumulate one stale entry per recreation
+  // forever.
+  pruneStaleModseqKeys(
+    modseqByMailbox,
+    mailboxPath,
+    lookup.modseqKeyForMailbox,
+  );
+  modseqByMailbox.set(lookup.modseqKeyForMailbox, mailbox.highestModseq);
+}
+
 // Newest-first bounded page over one mailbox; cursor is `uidValidity:uid` for
 // the lowest message returned so far, so the next call continues below it
-// and can detect a mailbox recreated in between.
+// and can detect a mailbox recreated in between. A plain head call (no
+// cursor) tries the CONDSTORE fast path above first, unless the caller asked
+// to skip it — see imapListChangedSince's own comment for both.
 async function imapList(
   pool: SessionPool,
   id: ImapProviderId,
   account: string,
   mailboxPath: string,
   cursor: string | undefined,
+  modseqByMailbox: Map<string, bigint>,
+  options: ListOptions | undefined,
 ): Promise<Page<Envelope>> {
   const parsed = parseCursor(cursor);
   return pool.withMailbox(mailboxPath, {}, async (mailbox) => {
     if (!mailbox.listBefore) throw unsupported(id, "list");
+
+    const lookup = resolveBookmark(
+      mailboxPath,
+      mailbox,
+      parsed,
+      modseqByMailbox,
+      options,
+    );
+    const fastPath = await imapListChangedSince({
+      id,
+      account,
+      mailboxPath,
+      mailbox,
+      bookmarked: lookup.bookmarked,
+      modseqByMailbox,
+    });
+    if (fastPath) return fastPath;
+
     if (parsed && parsed.uidValidity !== mailbox.uidValidity) {
       throw new Error(
         `stale list() cursor: issued for UIDVALIDITY ${parsed.uidValidity}, ` +
@@ -371,6 +545,13 @@ async function imapList(
     const window = await mailbox.listBefore(parsed?.uid, LIST_PAGE_LIMIT);
     const items = window.messages.map((info) =>
       toEnvelope(id, account, mailboxPath, mailbox.uidValidity, info),
+    );
+    bootstrapBookmarkIfColdStart(
+      lookup,
+      mailboxPath,
+      mailbox,
+      parsed,
+      modseqByMailbox,
     );
     const last = window.messages[window.messages.length - 1];
     // Prefer the lowest returned message's uid (tighter — a window that had
@@ -716,13 +897,25 @@ export function createImapProvider(
   },
 ): MailProvider {
   const pool = createSessionPool(port, poolIdleMs);
+  // CONDSTORE bookmarks are process-local: a restart just costs one full head
+  // scan per mailbox and re-bootstraps the bookmark. Never persisted, so a
+  // stale bookmark can't survive a mailbox recreation either.
+  const modseqByMailbox = new Map<string, bigint>();
   return {
     id,
     account,
     capabilities: () => imapCapabilities(pool, id),
     listMailboxes: () => imapListMailboxes(pool, id),
-    list: (mailboxPath, cursor) =>
-      imapList(pool, id, account, mailboxPath, cursor),
+    list: (mailboxPath, cursor, options) =>
+      imapList(
+        pool,
+        id,
+        account,
+        mailboxPath,
+        cursor,
+        modseqByMailbox,
+        options,
+      ),
     read: (ref) => imapRead(pool, id, account, ref),
     search: (query) => imapSearch(pool, id, account, query),
     setFlags: (ref, flags) => imapSetFlags(pool, id, account, ref, flags),

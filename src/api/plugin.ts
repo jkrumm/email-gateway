@@ -21,7 +21,11 @@ import type {
 } from "../db/mail-submissions";
 import { enqueueSyncTick, jobQueue as defaultJobQueue } from "../jobs/queue";
 import type { JobQueue } from "../db/jobs";
-import { providerForAccountId as defaultProviderFor } from "../providers/from-env";
+import { accountIdFor } from "../sync/ingest";
+import {
+  configuredProviders as defaultConfiguredProviders,
+  providerForAccountId as defaultProviderFor,
+} from "../providers/from-env";
 import type { MailProvider, MessageRef } from "../providers/port";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60_000;
@@ -221,6 +225,7 @@ export function createApiRoutes({
   accounts = defaultAccounts,
   jobs = defaultJobQueue,
   providerFor = defaultProviderFor,
+  configuredProviders = defaultConfiguredProviders,
 }: {
   apiKey: string | undefined;
   messages?: MessagesRepo;
@@ -228,6 +233,7 @@ export function createApiRoutes({
   accounts?: AccountsRepo;
   jobs?: JobQueue;
   providerFor?: (accountId: string) => MailProvider | null;
+  configuredProviders?: () => MailProvider[];
 }) {
   const configured = apiKey !== undefined;
 
@@ -274,6 +280,13 @@ export function createApiRoutes({
         return { error: "unauthorized" };
       }
     })
+    .get("/accounts", () =>
+      configuredProviders().map((provider) => ({
+        id: accountIdFor(provider),
+        provider: provider.id,
+        address: provider.account,
+      })),
+    )
     .get(
       "/messages",
       ({ query, set }) => {

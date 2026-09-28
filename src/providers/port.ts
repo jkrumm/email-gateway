@@ -107,6 +107,17 @@ export interface Page<T> {
 
 export type Unsubscribe = () => void;
 
+export interface ListOptions {
+  // Forces a full newest-page scan even when a provider's CONDSTORE fast
+  // path could otherwise answer a cursorless call — the fast path always
+  // returns `cursor: undefined`, indistinguishable from "genuinely nothing
+  // older than this page" (src/sync/ingest.ts needs that distinction the
+  // one time it seeds backfill progress from a head page's cursor: a fresh
+  // or just-reset mailbox must get a real, truncation-based cursor, not an
+  // ambiguous one from a CONDSTORE shortcut).
+  skipFastPath?: boolean;
+}
+
 export interface MailProvider {
   readonly id: ProviderId;
   // hello@…, me@gmail.com, the Resend sending domain.
@@ -114,7 +125,11 @@ export interface MailProvider {
   capabilities(): Promise<Capabilities>;
   listMailboxes(): Promise<Mailbox[]>;
   // Newest first, bounded — never lists an unbounded backlog in one call.
-  list(mailbox: string, cursor: Cursor): Promise<Page<Envelope>>;
+  list(
+    mailbox: string,
+    cursor: Cursor,
+    options?: ListOptions,
+  ): Promise<Page<Envelope>>;
   read(ref: MessageRef): Promise<Message>;
   // Provider-side; may lag the provider's own index by up to a minute.
   search(query: SearchQuery): Promise<MessageRef[]>;

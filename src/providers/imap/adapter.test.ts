@@ -17,6 +17,7 @@ const config: ImapConfig = {
   user: "hello",
   password: "secret",
   mailboxes: ["INBOX"],
+  tls: "starttls",
   tlsInsecure: false,
 };
 
@@ -33,6 +34,8 @@ interface FakeFetched {
   };
   flags?: Set<string>;
   bodyStructure?: FakeBodyStructure;
+  modseq?: bigint;
+  threadId?: string;
 }
 
 interface FakeBodyStructure {
@@ -69,7 +72,8 @@ function createFakeClient({
   searchResult = [] as number[] | false,
 }: {
   fetched?: FakeFetched[];
-  mailbox?: { uidValidity: bigint; uidNext: number } | false;
+  mailbox?:
+    { uidValidity: bigint; uidNext: number; highestModseq?: bigint } | false;
   usable?: boolean;
   logoutFails?: boolean;
   connectFails?: boolean;
@@ -117,7 +121,11 @@ function createFakeClient({
     },
     fetchAll: async (range: unknown, query: unknown, options: unknown) => {
       record.fetchAllCalls.push([range, query, options]);
-      return fetched;
+      const changedSince = (options as { changedSince?: bigint } | undefined)
+        ?.changedSince;
+      if (changedSince === undefined) return fetched;
+      // CONDSTORE: the server returns only messages with a higher modseq.
+      return fetched.filter((message) => (message.modseq ?? 0n) > changedSince);
     },
     fetchOne: async (seq: unknown, query: unknown, options: unknown) => {
       record.fetchOneCalls.push([seq, query, options]);
@@ -702,6 +710,139 @@ describe("createImapflowPort", () => {
     expect(record.searchCalls).toEqual([
       [{ from: "ada@example.com" }, { uid: true }],
     ]);
+  });
+
+  test("an implicit-TLS config connects securely with no STARTTLS upgrade (Gmail)", async () => {
+    const { record, createClient } = createFakeClient();
+
+    await createImapflowPort(
+      { ...config, host: "imap.gmail.com", port: 993, tls: "implicit" },
+      { createClient },
+    ).connect();
+
+    expect(record.options).toMatchObject({
+      host: "imap.gmail.com",
+      port: 993,
+      secure: true,
+    });
+    // imapflow rejects secure + doSTARTTLS together; Gmail is TLS from byte 0.
+    expect(record.options).not.toHaveProperty("doSTARTTLS");
+  });
+
+  test("X-GM-EXT-1 (Gmail) makes listBefore fetch and surface X-GM-THRID as threadKey", async () => {
+    const { record, createClient } = createFakeClient({
+      capabilities: new Map([["X-GM-EXT-1", true]]),
+      mailbox: { uidValidity: 1n, uidNext: 10 },
+      fetched: [{ uid: 5, threadId: "1278455344230334865" }],
+    });
+    const session = await createImapflowPort(config, {
+      createClient,
+    }).connect();
+    const mailbox = await session.openMailbox("INBOX");
+
+    const { messages } = await mailbox.listBefore!(undefined, 1);
+
+    expect(messages[0]?.threadKey).toBe("1278455344230334865");
+    expect(record.fetchAllCalls[0]?.[1]).toMatchObject({ threadId: true });
+  });
+
+  test("without X-GM-EXT-1 (Bridge) no threadId is requested — the fetch is byte-identical", async () => {
+    const { record, createClient } = createFakeClient({
+      mailbox: { uidValidity: 1n, uidNext: 10 },
+      fetched: [{ uid: 5 }],
+    });
+    const session = await createImapflowPort(config, {
+      createClient,
+    }).connect();
+    const mailbox = await session.openMailbox("INBOX");
+
+    const { messages } = await mailbox.listBefore!(undefined, 1);
+
+    expect(messages[0]?.threadKey).toBeUndefined();
+    expect(record.fetchAllCalls[0]?.[1]).toEqual({
+      uid: true,
+      size: true,
+      internalDate: true,
+      envelope: true,
+      flags: true,
+      bodyStructure: true,
+    });
+  });
+
+  test("CONDSTORE exposes a changedSince listing and a HIGHESTMODSEQ bookmark", async () => {
+    const { record, createClient } = createFakeClient({
+      capabilities: new Map([["CONDSTORE", true]]),
+      mailbox: { uidValidity: 1n, uidNext: 10, highestModseq: 500n },
+      fetched: [
+        { uid: 2, modseq: 450n, envelope: { subject: "changed" } },
+        { uid: 5, modseq: 480n, envelope: { subject: "changed" } },
+        { uid: 9, modseq: 460n, envelope: { subject: "changed" } },
+        { uid: 1, modseq: 100n, envelope: { subject: "before bookmark" } },
+      ],
+    });
+    const session = await createImapflowPort(config, {
+      createClient,
+    }).connect();
+    const mailbox = await session.openMailbox("INBOX");
+
+    expect(mailbox.highestModseq).toBe(500n);
+
+    const listing = await mailbox.listChangedSince!(440n, 500);
+
+    // Only modseq > 440, newest uid first.
+    expect(listing.messages.map((message) => message.uid)).toEqual([9, 5, 2]);
+    expect(listing.truncated).toBe(false);
+    // The mailbox's own HIGHESTMODSEQ wins over the highest returned modseq.
+    expect(listing.highestModseq).toBe(500n);
+    expect(record.fetchAllCalls).toEqual([
+      [
+        "1:*",
+        {
+          uid: true,
+          size: true,
+          internalDate: true,
+          envelope: true,
+          flags: true,
+          bodyStructure: true,
+        },
+        { uid: true, changedSince: 440n },
+      ],
+    ]);
+  });
+
+  test("listChangedSince caps at the limit and reports truncation", async () => {
+    const { createClient } = createFakeClient({
+      capabilities: new Map([["CONDSTORE", true]]),
+      mailbox: { uidValidity: 1n, uidNext: 10 },
+      fetched: [
+        { uid: 2, modseq: 200n },
+        { uid: 3, modseq: 300n },
+        { uid: 4, modseq: 400n },
+      ],
+    });
+    const session = await createImapflowPort(config, {
+      createClient,
+    }).connect();
+    const mailbox = await session.openMailbox("INBOX");
+
+    const listing = await mailbox.listChangedSince!(100n, 2);
+
+    expect(listing.messages.map((message) => message.uid)).toEqual([4, 3]);
+    expect(listing.truncated).toBe(true);
+    // No HIGHESTMODSEQ on the mailbox, so the bookmark advances only to the
+    // highest modseq actually seen.
+    expect(listing.highestModseq).toBe(400n);
+  });
+
+  test("without CONDSTORE (Bridge) changedSince listing and HIGHESTMODSEQ are absent", async () => {
+    const { createClient } = createFakeClient();
+    const session = await createImapflowPort(config, {
+      createClient,
+    }).connect();
+    const mailbox = await session.openMailbox("INBOX");
+
+    expect(mailbox.listChangedSince).toBeUndefined();
+    expect(mailbox.highestModseq).toBeUndefined();
   });
 });
 

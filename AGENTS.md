@@ -2,11 +2,12 @@
 
 Bun + Elysia service on the VPS: the one door to the owner's mail. Today it sends
 app mail through Resend (`/fpp`, `/fpp-daily-analytics`, `/sy-serendipity`),
-syncs Resend history and the Proton `hello@` inbox (Bridge on the homelab, tailnet
-IMAP) into SQLite, classifies with an LLM plus Jev in shadow mode, and serves an
-SSR admin at `/admin` and a bearer JSON API at `/api/*`. **README.md is the
-contract** (endpoints, env vars, storage, sync rules); this file is what a
-dispatched agent needs before touching code.
+syncs Resend history and two IMAP accounts — Proton `hello@` through Bridge on
+the homelab (tailnet, STARTTLS) and Gmail through its IMAP endpoint (implicit
+TLS, app password) — into SQLite, classifies with an LLM plus Jev in shadow
+mode, and serves an SSR admin at `/admin` and a bearer JSON API at `/api/*`.
+**README.md is the contract** (endpoints, env vars, storage, sync rules); this
+file is what a dispatched agent needs before touching code.
 
 | Doc                    | Holds                                                                                           |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
@@ -54,11 +55,13 @@ then `/review` on code. There is no lint script; prettier is the formatter.
   `reapOwnStaleClaims()` once at boot per `src/jobs/register.ts`), never an
   in-memory lock alone. Safe only while `vps/apps/email-gateway/compose.yml`
   sets no `hostname:` (see the comment next to `reapOwnStaleClaims`).
-- **IMAP sync stays read-only**: `EXAMINE` + `BODY.PEEK`, STARTTLS required,
-  cert pinned by SHA-256 when `IMAP_TLS_CERT` is set. The IMAP adapter
-  (`src/providers/imap/adapter.ts`) does expose `setFlags`/`move`
-  (`SELECT`, per D2) for future callers — the sync tick itself never opens a
-  mailbox for write.
+- **IMAP sync stays read-only**: `EXAMINE` + `BODY.PEEK`, STARTTLS required for
+  Bridge (implicit TLS for Gmail), cert pinned by SHA-256 when `IMAP_TLS_CERT`
+  is set. The IMAP adapter (`src/providers/imap/adapter.ts`) does expose
+  `setFlags`/`move` (`SELECT`, per D2) for future callers — the sync tick
+  itself never opens a mailbox for write. Capabilities are detected per
+  connection, and each IMAP provider ingests only its own mailbox list
+  (`defaultMailboxesFor`, `src/sync/composition.ts`) — never another account's.
 - **`messages` rows refresh on every re-sight** (Wave 4) — unlike the old
   Message-ID-derived id, `messages.key` is `sha256(account:provider:mailbox:
 uidValidity:uid)`, never attacker-influenced, so `ON CONFLICT DO UPDATE`ing
@@ -87,9 +90,11 @@ Traefik host `email-gateway.<domain>` behind Cloudflare Tunnel, rate-limit +
 security-headers middlewares, `/health` check, Uptime Kuma monitor). Secrets:
 `vps/apps/email-gateway/.env.tpl` → `make email-gateway-env` (1Password). Bridge
 lives on the homelab (`homelab/docs/proton-bridge.md`), IMAP only, on the
-tailnet; the tailnet ACL grants VPS → homelab `tcp:1143`. **No backup covers
+tailnet; the tailnet ACL grants VPS → homelab `tcp:1143`. Gmail joins directly
+from the container (`imap.gmail.com:993`, app password). **No backup covers
 `/var/lib/email-gateway` yet.** Not wired in prod today: `RESEND_ADMIN_API_KEY`,
-`IMAP_TLS_CERT` (runs `IMAP_TLS_INSECURE=true`), `IMAP_MAILBOXES`.
+`IMAP_TLS_CERT` (runs `IMAP_TLS_INSECURE=true`), `IMAP_MAILBOXES`,
+`GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` (awaiting the app password).
 
 ## Local dev
 
@@ -135,8 +140,12 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
 - `src/sync/ingest.ts` + `src/sync/composition.ts` (Wave 4): envelope-only
   ingest of one mailbox through any `MailProvider` into `messages`/
   `message_locations`, and the composition root (`runSyncTick`) that loops
-  every configured provider's mailboxes. `src/providers/from-env.ts` builds
-  the configured `MailProvider`s once per process and resolves one back from
+  every configured provider's mailboxes. `defaultMailboxesFor` keys each
+  provider to its own env (`IMAP_MAILBOXES` for Proton, `GMAIL_IMAP_MAILBOXES`
+  for Gmail) — one account's list is never applied to the other.
+  `src/providers/from-env.ts` builds the configured `MailProvider`s once per
+  process (Resend always; Proton when `IMAP_HOST` is set; Gmail when
+  `GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` are) and resolves one back from
   a stored account id.
 - `src/db/mail-index.ts` (Wave 4): the `mail.sqlite` repo singletons
   (`accountsRepo`, `messagesRepo`, `mailSubmissionsRepo`, `templatesRepo`,
@@ -154,9 +163,14 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   read, search, setFlags, move, send, watch) every mailbox sits behind;
   `src/providers/imap/adapter.ts` grows the old IMAP port with Bridge/Gmail
   capability detection, `listMailboxes`, flags/move (`SELECT`, gated on
-  MOVE+UIDPLUS together), `search`; `src/providers/imap/provider.ts` wraps
-  that into the generic `MailProvider` (UIDVALIDITY + cross-provider ref
-  checks); `config.ts` reads env into `ImapConfig`. `list`/`read`/`search`/
+  MOVE+UIDPLUS together), `search`; Gmail's `X-GM-EXT-1` adds `X-GM-THRID` to
+  the fetch as the generic `threadKey`, and `CONDSTORE` exposes an internal
+  `listChangedSince` fast path (only in `adapter.ts`, not the public port);
+  `src/providers/imap/provider.ts` wraps that into the generic `MailProvider`
+  (UIDVALIDITY + cross-provider ref checks) and keeps the per-mailbox modseq
+  bookmark process-local; `config.ts` reads env into `ImapConfig`
+  (`imapConfigFromEnv` for Proton STARTTLS, `gmailImapConfigFromEnv` for
+  `imap.gmail.com:993` implicit TLS). `list`/`read`/`search`/
   `setFlags`/`move` share one pooled, reused `ImapSession` per provider
   instance (serialized, idle-closed after `poolIdleMs`, one reconnect-and-
   retry on a dead connection for read-only calls only — a mutating call

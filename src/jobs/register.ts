@@ -6,10 +6,12 @@ import { createJobRunner } from "./runner";
 import { createClassifyHandler } from "./classify";
 import { createJevMessageHandler, createJevSubmissionHandler } from "./jev";
 import { createSendHandler } from "./send";
-import { createSyncTickHandler } from "../sync/composition";
+import {
+  createSyncTickHandler,
+  defaultMailboxesFor,
+} from "../sync/composition";
 import { configuredProviders } from "../providers/from-env";
-import { imapConfigFromEnv } from "../providers/imap/config";
-import type { Unsubscribe } from "../providers/port";
+import type { MailProvider, Unsubscribe } from "../providers/port";
 
 // Boot composition for every async source (docs/architecture.md §Jobs),
 // replacing src/sync/index.ts's startSync, src/enrich/worker.ts's
@@ -88,42 +90,72 @@ export function startJobSystem(): void {
 }
 
 // watch() kicks a (debounced) sync_tick per configured IMAP mailbox that
-// reports idle capability. The returned Unsubscribe is never called today —
-// the process only stops by exiting — but is kept reachable rather than
-// dropped, per the wave brief.
-async function wireImapIdle(enqueueSyncTick: () => void): Promise<void> {
-  const imapConfig = imapConfigFromEnv();
-  if (!imapConfig) return;
+// reports idle capability. Returns the Unsubscribe for each mailbox watched
+// (unused by wireImapIdle below — the process only ever stops by exiting),
+// so a future caller that does need to stop watching has it without a
+// signature change.
+// One provider's own capabilities check + mailbox watches — factored out so
+// wireImapIdle can run every provider's setup concurrently instead of one
+// provider's slow/half-open connect delaying every account after it in the
+// list (real-time IDLE coverage for those accounts would otherwise wait out
+// imapflow's own connect timeout first).
+async function wireProviderIdle(
+  provider: MailProvider,
+  enqueueSyncTick: () => void,
+): Promise<Unsubscribe[]> {
+  if (provider.id === "resend" || !provider.watch) return [];
+
+  const capabilities = await provider.capabilities().catch((error) => {
+    console.error("[imap] failed to read capabilities for watch()", {
+      error,
+    });
+    return null;
+  });
+  if (!capabilities?.idle) return [];
 
   const unsubscribes: Unsubscribe[] = [];
-  for (const provider of configuredProviders()) {
-    if (provider.id === "resend" || !provider.watch) continue;
+  // Each IMAP provider watches only its own configured mailboxes — Proton's
+  // list must not be opened on the Gmail account, or vice versa.
+  for (const mailbox of defaultMailboxesFor(provider)) {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const onChange = (): void => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(enqueueSyncTick, IDLE_DEBOUNCE_MS);
+      debounceTimer.unref();
+    };
 
-    const capabilities = await provider.capabilities().catch((error) => {
-      console.error("[imap] failed to read capabilities for watch()", {
+    try {
+      const unsubscribe = await provider.watch(mailbox, onChange);
+      unsubscribes.push(unsubscribe);
+      console.log(`[imap] watching ${mailbox} for changes (IDLE)`);
+    } catch (error) {
+      console.error(`[imap] failed to start watch() on ${mailbox}`, {
         error,
       });
-      return null;
-    });
-    if (!capabilities?.idle) continue;
-
-    for (const mailbox of imapConfig.mailboxes) {
-      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-      const onChange = (): void => {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(enqueueSyncTick, IDLE_DEBOUNCE_MS);
-        debounceTimer.unref();
-      };
-
-      try {
-        const unsubscribe = await provider.watch(mailbox, onChange);
-        unsubscribes.push(unsubscribe);
-        console.log(`[imap] watching ${mailbox} for changes (IDLE)`);
-      } catch (error) {
-        console.error(`[imap] failed to start watch() on ${mailbox}`, {
-          error,
-        });
-      }
     }
   }
+  return unsubscribes;
+}
+
+async function wireImapIdle(enqueueSyncTick: () => void): Promise<void> {
+  const providers = configuredProviders();
+  const results = await Promise.allSettled(
+    providers.map((provider) => wireProviderIdle(provider, enqueueSyncTick)),
+  );
+  // wireProviderIdle already catches/logs every failure it can attribute to
+  // a specific provider's capabilities()/watch() call — this only catches
+  // something unexpected escaping it outright (e.g. defaultMailboxesFor's
+  // own env parsing throwing), which allSettled would otherwise swallow
+  // with no signal at all.
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.error(
+        `[imap] wireProviderIdle failed unexpectedly for ${providers[index]!.id}`,
+        { error: result.reason },
+      );
+    }
+  });
+  // Every returned Unsubscribe is intentionally left uncollected here — the
+  // process only ever stops by exiting, per wireProviderIdle's own doc
+  // comment, so there is nothing that would ever call one.
 }

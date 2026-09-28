@@ -152,11 +152,13 @@ status ∈ pending | done | failed        claimed_by = "<hostname>:<pid>"
 - Boot reaps jobs claimed by this host's previous pid (audio-gateway's
   `hostname:pid` pattern); another host's claims expire by staleness.
 
-## Known gaps (Wave 4 implementation vs. this design)
+## Known gaps (Wave 4/5 implementation vs. this design)
 
-Accepted for now — no live caller depends on either path yet (no client until
-Wave 6, no MCP until Wave 8) — but real design work, not a bug fix, closes
-them. Flagged here so a later wave doesn't rediscover them by surprise.
+Accepted for now — no live caller depends on any of these paths yet (no
+client until Wave 6, no MCP until Wave 8, and Gmail itself has no live
+caller until the app password lands and Wave 5's own live-verification step
+runs) — but real design work, not a bug fix, closes them. Flagged here so a
+later wave doesn't rediscover them by surprise.
 
 - **Message identity doesn't survive a mailbox move.** §Provider port's
   "Identity across mailboxes" design keys a message by its RFC Message-ID,
@@ -178,6 +180,30 @@ them. Flagged here so a later wave doesn't rediscover them by surprise.
   finished backfill. Real fix: the head pass itself needs to walk backward
   adaptively (keep paging while it keeps finding unknown messages, stop at
   the first already-known one) instead of always being exactly one page.
+- **A CONDSTORE modseq bookmark can advance before its page is durably
+  ingested (Wave 5).** `src/providers/imap/provider.ts`'s fast path advances
+  its process-local `modseqByMailbox` bookmark as soon as the IMAP FETCH
+  succeeds, inside `list()` itself — before `src/sync/ingest.ts`'s
+  `ingestPage()` has durably written that page to `mail.sqlite`. If
+  `ingestPage()` throws (a DB write failure mid-page), the next tick's
+  `changedSince` call starts from the already-advanced bookmark and silently
+  skips exactly the messages that failed to persist — never retried. Same
+  failure shape as the accepted "one item's enqueueClassify failure" gap
+  next to it in `ingest.ts`, one layer lower. Real fix: `list()` returns a
+  candidate bookmark alongside the page instead of committing it, and the
+  caller (`ingestMailbox`) commits it only after `ingestPage()` succeeds —
+  mirroring how the backfill cursor itself is only ever persisted post-ingest.
+- **A CONDSTORE fast-path fetch has no upper bound on payload size (Wave
+  5).** `src/providers/imap/adapter.ts`'s `makeListChangedSince` issues one
+  `FETCH 1:* ... CHANGEDSINCE` and only truncates the _result_ client-side
+  (`found.slice(0, limit)`) after everything has already been fetched,
+  parsed and sorted — a mailbox that accumulated a very large changed set
+  (a long-downtime backlog, a bulk label/flag operation) can pull the whole
+  thing into memory in one round trip, unlike every other list path in this
+  adapter, which is bounded per FETCH (`LIST_WINDOW`, `MAX_LIST_WINDOWS`).
+  IMAP's CONDSTORE extension has no server-side LIMIT, so a real fix needs a
+  windowed changedSince strategy (e.g. paging by UID range with `changedSince`
+  applied per window), not a client-side slice.
 
 ## Client
 
@@ -339,6 +365,13 @@ Google account; `imap.gmail.com:993`, TLS; secret in 1Password). Argo's Gmail
 routes are deleted once email-gateway serves the same reads; argo keeps
 Calendar and its OAuth client. Hermes's `argo-api` skill is repointed to
 email-gateway's `/api`. The Gmail REST API is closed for this chain.
+
+Wave 5 prepared the argo half as a draft PR:
+[jkrumm/argo#20](https://github.com/jkrumm/argo/pull/20) — deletes
+`routes/gmail.ts` and the Gmail half of `clients/google.ts`, keeps Calendar +
+OAuth, gate green (1038 tests). **Not merged** — merging is an owner gate tied
+to email-gateway actually reading Gmail live, which needs the app password
+(still pending as of this wave).
 
 ### D4 — Today's stored bodies
 

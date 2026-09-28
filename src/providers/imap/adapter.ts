@@ -32,6 +32,8 @@ export interface ImapEnvelopeInfo extends ImapMessageInfo {
   subject: string;
   hasAttachments: boolean;
   flags: string[];
+  // X-GM-THRID when the server advertises X-GM-EXT-1 (Gmail), else undefined.
+  threadKey?: string;
 }
 
 export interface ImapEnvelopeListing {
@@ -44,6 +46,16 @@ export interface ImapEnvelopeListing {
   // finding anything, and a cursor built from the last message alone can't
   // express "keep going" in that case.
   nextBeforeUid: number;
+}
+
+// The result of a CONDSTORE incremental fetch: only messages whose modseq
+// exceeds the caller's bookmark, newest-first, plus the bookmark to resume
+// from. `truncated` means more changed messages exist than `limit` — the
+// caller must not advance its bookmark past what it actually got.
+export interface ImapChangedListing {
+  messages: ImapEnvelopeInfo[];
+  truncated: boolean;
+  highestModseq: bigint;
 }
 
 export interface ImapMoveResult {
@@ -59,6 +71,10 @@ export interface ImapMoveResult {
 
 export interface ImapMailbox {
   uidValidity: string;
+  // Current HIGHESTMODSEQ, only when the server advertised CONDSTORE. The
+  // generic provider bookmarks it after a full UID-window head scan so the
+  // next head scan can use the changedSince fast path.
+  highestModseq?: bigint;
   // Up to `limit` messages with uid > afterUid, ascending. Only a bounded UID
   // window is queried per round trip, so a large backlog is never listed at
   // once.
@@ -70,6 +86,13 @@ export interface ImapMailbox {
     beforeUid: number | undefined,
     limit: number,
   ): Promise<ImapEnvelopeListing>;
+  // CONDSTORE-only incremental listing: messages whose modseq exceeds
+  // `changedSince`, newest-first. Absent unless the server advertised
+  // CONDSTORE, so the caller's only fallback is the UID-window scan.
+  listChangedSince?(
+    changedSince: bigint,
+    limit: number,
+  ): Promise<ImapChangedListing>;
   // Full RFC 822 sources; a uid the server did not return is absent.
   fetchSources(uids: number[]): Promise<Map<number, Uint8Array>>;
   fetchHeaders(uid: number): Promise<Uint8Array | null>;
@@ -115,6 +138,10 @@ export interface ImapConfig {
   user: string;
   password: string;
   mailboxes: string[];
+  // "starttls" upgrades a plaintext connection before login (Proton Bridge);
+  // "implicit" connects directly over TLS (Gmail). Never inferred from the
+  // port alone — the two accounts differ on purpose.
+  tls: "starttls" | "implicit";
   tlsCert?: string;
   tlsInsecure: boolean;
 }
@@ -230,8 +257,38 @@ function toMailboxInfo(entry: {
   };
 }
 
-type OpenedMailbox = { uidValidity: bigint; uidNext: number };
+type OpenedMailbox = {
+  uidValidity: bigint;
+  uidNext: number;
+  // Present only after a CONDSTORE-enabled SELECT.
+  highestModseq?: bigint;
+};
 type FetchedMessage = Awaited<ReturnType<ImapClient["fetchAll"]>>[number];
+
+// Gmail advertises X-GM-EXT-1; Bridge does not. The extra FETCH attributes
+// (X-GM-THRID -> imapflow's `threadId`) must only be requested when the server
+// supports them — an unknown attribute is a protocol error, not a no-op.
+function hasGmailExtensions(client: ImapClient): boolean {
+  return client.capabilities.has("X-GM-EXT-1");
+}
+
+function hasCondstore(client: ImapClient): boolean {
+  return client.capabilities.has("CONDSTORE");
+}
+
+// The envelope fetch every list path shares, plus the Gmail thread id when the
+// server can provide it.
+function envelopeFetchQuery(client: ImapClient) {
+  return {
+    uid: true,
+    size: true,
+    internalDate: true,
+    envelope: true,
+    flags: true,
+    bodyStructure: true,
+    ...(hasGmailExtensions(client) ? { threadId: true } : {}),
+  };
+}
 
 function makeListAfter(client: ImapClient, mailbox: OpenedMailbox) {
   return async (afterUid: number, limit: number): Promise<ImapListing> => {
@@ -291,6 +348,7 @@ function toImapEnvelopeInfo(message: FetchedMessage): ImapEnvelopeInfo {
     subject: envelope?.subject ?? "",
     hasAttachments: hasAttachment(message.bodyStructure),
     flags: message.flags ? Array.from(message.flags) : [],
+    ...(message.threadId ? { threadKey: message.threadId } : {}),
   };
 }
 
@@ -317,14 +375,7 @@ function makeListBefore(client: ImapClient, mailbox: OpenedMailbox) {
       const start = Math.max(1, end - LIST_WINDOW + 1);
       const messages = await client.fetchAll(
         `${start}:${end}`,
-        {
-          uid: true,
-          size: true,
-          internalDate: true,
-          envelope: true,
-          flags: true,
-          bodyStructure: true,
-        },
+        envelopeFetchQuery(client),
         { uid: true },
       );
       for (const message of messages) {
@@ -338,6 +389,47 @@ function makeListBefore(client: ImapClient, mailbox: OpenedMailbox) {
       messages: found.slice(0, limit),
       truncated: found.length > limit || end >= 1,
       nextBeforeUid: end + 1,
+    };
+  };
+}
+
+// CONDSTORE incremental listing (Gmail). Every message changed since the
+// bookmark comes back from one FETCH (MODSEQ > changedSince), so an idle
+// mailbox costs one round trip instead of the UID-window scan.
+function makeListChangedSince(client: ImapClient, mailbox: OpenedMailbox) {
+  return async (
+    changedSince: bigint,
+    limit: number,
+  ): Promise<ImapChangedListing> => {
+    const messages = await client.fetchAll("1:*", envelopeFetchQuery(client), {
+      uid: true,
+      changedSince,
+    });
+    const found = messages
+      .map(toImapEnvelopeInfo)
+      .sort((a, b) => b.uid - a.uid);
+
+    // Advance the bookmark only as far as the evidence allows: the mailbox's
+    // own HIGHESTMODSEQ when the server reported one, else the highest modseq
+    // actually seen on a fetched message, else leave it untouched. A bookmark
+    // below the true highest just refetches; one above would skip mail.
+    let highestModseq = changedSince;
+    if (
+      mailbox.highestModseq !== undefined &&
+      mailbox.highestModseq > highestModseq
+    ) {
+      highestModseq = mailbox.highestModseq;
+    }
+    for (const message of messages) {
+      if (message.modseq !== undefined && message.modseq > highestModseq) {
+        highestModseq = message.modseq;
+      }
+    }
+
+    return {
+      messages: found.slice(0, limit),
+      truncated: found.length > limit,
+      highestModseq,
     };
   };
 }
@@ -438,8 +530,14 @@ function createMailboxHandle(
 ): ImapMailbox {
   return {
     uidValidity: mailbox.uidValidity.toString(),
+    ...(mailbox.highestModseq !== undefined
+      ? { highestModseq: mailbox.highestModseq }
+      : {}),
     listAfter: makeListAfter(client, mailbox),
     listBefore: makeListBefore(client, mailbox),
+    ...(hasCondstore(client)
+      ? { listChangedSince: makeListChangedSince(client, mailbox) }
+      : {}),
     fetchSources: makeFetchSources(client),
     fetchHeaders: makeFetchHeaders(client),
     existingUids: makeExistingUids(client),
@@ -458,6 +556,7 @@ function buildClientOptions(
   config: ImapConfig,
   { disableAutoIdle = true }: { disableAutoIdle?: boolean } = {},
 ): ImapFlowOptions {
+  const implicitTls = config.tls === "implicit";
   return {
     host: config.host,
     port: config.port,
@@ -465,9 +564,11 @@ function buildClientOptions(
     // upgrade rejects ("servername argument must be an string"). Bridge's
     // cert is issued for localhost/127.0.0.1 and SNI is ignored anyway.
     ...(isIP(config.host) ? { servername: "localhost" } : {}),
-    secure: false,
-    // Refuse to log in unless the connection was upgraded via STARTTLS.
-    doSTARTTLS: true,
+    secure: implicitTls,
+    // Refuse to log in unless the connection was upgraded via STARTTLS. Only
+    // for the plaintext path — imapflow rejects secure + doSTARTTLS together,
+    // and Gmail negotiates TLS from the first byte.
+    ...(implicitTls ? {} : { doSTARTTLS: true }),
     auth: { user: config.user, pass: config.password },
     tls: tlsOptions(config),
     logger: false,

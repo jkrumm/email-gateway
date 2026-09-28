@@ -177,18 +177,26 @@ export async function ingestMailbox({
   }
 
   try {
-    // Head pass: always the true newest page, regardless of backfill state.
-    const head = await provider.list(mailbox, undefined);
-    ingestPage(head.items);
-
     const key = backfillKey(mailbox);
     let backfillCursor = accounts.getAccount(accountId)?.cursors[key];
+    // A fresh mailbox or one just reset after a stale-cursor error (below)
+    // is about to seed backfill progress straight from this head call's own
+    // cursor — that seed needs a real, truncation-based cursor, not the
+    // CONDSTORE fast path's always-`undefined` one (indistinguishable from
+    // "genuinely nothing older"), so skip it on exactly this call.
+    const needsBackfillSeed =
+      backfillCursor === undefined || backfillCursor === "restart";
 
-    if (backfillCursor === undefined || backfillCursor === "restart") {
-      // First time this mailbox is seen (or reset after a stale-cursor error
-      // below): seed from the head pass's own continuation cursor so the
-      // backfill pass never re-fetches/duplicates the head page's own range.
-      // If the head page wasn't truncated, there is nothing to backfill.
+    // Head pass: always the true newest page, regardless of backfill state.
+    const head = await provider.list(mailbox, undefined, {
+      skipFastPath: needsBackfillSeed,
+    });
+    ingestPage(head.items);
+
+    if (needsBackfillSeed) {
+      // See the comment above: the head pass just ran with skipFastPath, so
+      // head.cursor is genuinely "nothing older" when undefined, not an
+      // artifact of the fast path.
       backfillCursor = head.cursor ?? "done";
       accounts.updateCursor(accountId, key, backfillCursor);
     }

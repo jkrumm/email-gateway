@@ -1,6 +1,6 @@
 # Build context is the repo root (.github/workflows/deploy.yml: context: ".").
-# The Dockerfile only COPYs package.json, bun.lockb, tsconfig.json and src/ —
-# everything listed here is provably unreferenced by any COPY/ADD.
+# The Dockerfile only COPYs package.json, bun.lock, tsconfig.json, src/ and
+# scripts/ — everything listed here is provably unreferenced by any COPY/ADD.
 
 # Dependencies (reinstalled in the builder stage)
 **/node_modules
@@ -29,3 +29,12 @@ coverage
 
 # SQLite data directory (src/db/client.ts, DATA_DIR) — compose mounts a volume here
 data/
+
+# Tests — nothing at runtime imports a *.test.ts file or src/test/'s fakes.
+scripts/*.test.ts
+src/**/*.test.ts
+src/test/
+
+# scripts/seed-demo.ts also ships (only its own *.test.ts is excluded above):
+# it self-refuses under NODE_ENV=production (the runner's own env), and
+# `bun run seed:demo` may be run in prod deliberately for demo/QA data.

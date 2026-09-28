@@ -75,7 +75,11 @@ function testApp(
   apiKey: string | undefined,
   {
     providerFor,
-  }: { providerFor?: (accountId: string) => MailProvider | null } = {},
+    configuredProviders,
+  }: {
+    providerFor?: (accountId: string) => MailProvider | null;
+    configuredProviders?: () => MailProvider[];
+  } = {},
 ) {
   const db = openMailDatabase(":memory:");
   const accounts = createAccountsRepo(db);
@@ -95,6 +99,7 @@ function testApp(
     accounts,
     jobs,
     providerFor: providerFor ?? (() => null),
+    configuredProviders: configuredProviders ?? (() => []),
   });
 
   return { app, messages, mailSubmissions, accounts, jobs };
@@ -137,6 +142,43 @@ describe("API auth", () => {
 
     const response = await app.handle(
       new Request("http://localhost/api/stats"),
+    );
+
+    expect(response.status).toBe(401);
+  });
+});
+
+describe("GET /api/accounts", () => {
+  test("lists every configured account, not just ones that have synced", async () => {
+    const { app } = testApp(API_KEY, {
+      configuredProviders: () => [
+        fakeProvider({ id: "resend", account: "app" }),
+        fakeProvider({ id: "proton", account: "hello@example.com" }),
+        fakeProvider({ id: "gmail", account: "me@gmail.com" }),
+      ],
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/accounts", { headers: authHeaders() }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([
+      { id: "resend:app", provider: "resend", address: "app" },
+      {
+        id: "proton:hello@example.com",
+        provider: "proton",
+        address: "hello@example.com",
+      },
+      { id: "gmail:me@gmail.com", provider: "gmail", address: "me@gmail.com" },
+    ]);
+  });
+
+  test("requires a bearer token like every other /api route", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/accounts"),
     );
 
     expect(response.status).toBe(401);
