@@ -898,23 +898,115 @@ rows.length`, so a thread past 100 messages could never invalidate its
       ([jkrumm/argo#20](https://github.com/jkrumm/argo/pull/20), from Wave
       5, also still unmerged).
 
-## Wave 9 — Topology cutover <!-- status: active -->
+## Wave 9 — Topology cutover <!-- status: done -->
 
 Follows D1. Every step here touches production or another repo's deploy path:
 **prepare everything, verify locally, then hand back to the owner** — no push
 outside this repo, no hostname published by a wave. The `MAIL_HOST` code
 itself already shipped in Wave 6; this wave is what makes it live.
 
-- [ ] Local dev off Doppler: `.env.tpl` + `secrets-run` like the siblings,
+- [x] Local dev off Doppler: `.env.tpl` + `secrets-run` like the siblings,
       `make dev/check/…` Makefile, `doppler.yaml` deleted; README §Local
       Development.
-- [ ] Backup: `scripts/backup.sh` (`VACUUM INTO` + rsync to the homelab backup
+- [x] Backup: `scripts/backup.sh` (`VACUUM INTO` + rsync to the homelab backup
       target, warden's pattern) and the cron entry as a ready-to-apply snippet
       for the `vps` repo.
-- [ ] Ready-to-apply changes for `vps/apps/email-gateway/compose.yml` (second
+- [x] Ready-to-apply changes for `vps/apps/email-gateway/compose.yml` (second
       Traefik router on the tailnet hostname, `MAIL_HOST`, the DNS-only A
       record note) and `.env.tpl` (Gmail secrets, `RESEND_ADMIN_API_KEY`,
       `IMAP_TLS_CERT`) written to `docs/vps-cutover.md`, plus the owner's
       checklist: apply, deploy, delete `email-gateway.sqlite`, revoke argo's
       Gmail scope.
-      **Left behind:**
+      **Left behind:** `.env.tpl` + `Makefile` (`dev`/`check`/`build`/`help`)
+      replace Doppler; `package.json`'s `start`/`dev` now run through
+      `secrets-run --env-file=.env.tpl`, reading the same `op://vps/
+email-gateway/*` vault the VPS deploy does (solo project, no separate
+      dev secret set). Proton IMAP stays deliberately unreachable from local
+      dev — the tailnet ACL only grants VPS → homelab, not the mini — so
+      `.env.tpl` leaves `IMAP_HOST` unset and documents verifying
+      IMAP-touching changes against the live container instead (Wave 4/5's
+      `ssh vps` + `docker exec` pattern). `scripts/backup.ts` (VACUUM INTO to
+      a `.tmp` path, `PRAGMA integrity_check`, then an atomic rename; prune
+      to `KEEP=7` per database) is unit-tested (`scripts/backup.test.ts`,
+      14 tests). `scripts/backup.sh` (container discovery via the compose
+      service label, an empty-source guard before `rsync --delete`, a
+      warden-style `mkdir` single-instance lock under `$DATA_DIR`) is
+      smoke-tested by hand with `docker`/`rsync` stubbed on `PATH` — this
+      repo has no shell-test harness, so it still needs a real dry-run on the
+      VPS before the cron job is trusted unattended. `docs/vps-cutover.md`
+      is the full handover: the tailnet ACL grant the backup rsync still
+      needs (`tag:vps → tag:homelab tcp:22`, absent today — verified against
+      `dotfiles-private/tailscale-acl.jsonc`), the DNS-only A record, the
+      exact `compose.yml`/`.env.tpl` diffs (matching the `hyperdx`/`argo`
+      tailnet-only precedent in `vps/compose.monitoring.yml`), the cron
+      entry, and the owner's 6-step checklist (ACL + DNS → vps repo changes
+      → cron install → revoke argo's Gmail scope → delete the legacy SQLite
+      file → merge the Hermes repoint PR). Verified, not assumed: Traefik's
+      `websecure` entrypoint is published as `${VPS_TAILSCALE_IP}:443:443`
+      (`vps/compose.networking.yml`), not `0.0.0.0` — so the proposed
+      `mail.${DOMAIN}` router is unreachable from the public internet by
+      construction (non-routable CGNAT target _and_ a listener bound to
+      nothing public), not merely "DNS is the access control" as the
+      `hyperdx`/`argo` comments it was modelled on understate.
+
+      Three `/review` (sideclaw) rounds ran, each catching real, independently-
+      verified issues. Round 1 (2 blocking): an unguarded `VACUUM INTO`
+      writing straight to its final path, so a process killed mid-write
+      (OOM, a RollHook deploy tearing the container down) could leave a
+      truncated file that's filename-indistinguishable from a good snapshot
+      and gets rsynced offsite as one — fixed with a `.tmp` path + integrity
+      check + atomic rename; and an adversary-angle claim that the tailnet
+      router was reachable from the public internet — investigated and
+      found **false** (see "Verified, not assumed" above), so the doc was
+      corrected to state the real enforcement mechanism precisely rather
+      than either accept the false finding or leave the original
+      understated claim as-is. Round 2 (3 blocking, on the fixes above): a
+      broken local `DATA_DIR` claim from the adversary angle — investigated
+      and found **false** (`src/env.ts`'s real default is the relative
+      `./data`, auto-created by `openDatabase`'s `mkdirSync`, not the
+      Dockerfile's prod-only `/data`); an unguarded `rsync --delete` that
+      could wipe the entire offsite copy on a host/container `DATA_DIR`
+      path drift — fixed with an explicit empty-source guard; and local
+      `KEEP` rotation outrunning the rsync during an extended tailnet
+      outage, silently shrinking offsite retention — documented as an
+      accepted, bounded tradeoff already present in `warden-backup.sh`
+      (restic's own long-term retention on the homelab side is the actual
+      archive), not engineered around. Also fixed from round 2: per-database
+      isolation in `runBackup` (one DB's failure no longer skips the rest,
+      new test), `tmpOut` cleanup on an integrity-check failure, and a
+      warden-style `mkdir` single-instance lock closing an overlapping-run
+      race. Round 3 (1 blocking, investigated and found **false**: the lock
+      PID file write was claimed to write a literal `"$"` instead of the
+      PID — verified directly against real bash, `printf '%s' "$$"` does
+      expand to the actual PID): fixed the surrounding, genuinely real
+      findings instead — the lock's default path moved off world-writable
+      `/tmp` to `$DATA_DIR` (owned solely by this backup process), a bare
+      `as` cast on `PRAGMA integrity_check`'s result replaced with
+      bun:sqlite's typed `.query<T, Params>()`, a stale `AGENTS.md` pointer
+      in `.env.tpl`'s header fixed to the real location
+      (`~/.claude/CLAUDE.md`), and a `keep: 0` regression test locking in
+      round 1's negative-zero fix (`.slice(0, -keep)` silently pruning
+      nothing at `keep === 0`; now `Math.max(0, files.length - keep)`).
+      Three residual lock races (an empty-pid-file window right after
+      `mkdir`, the `rm -rf`+`mkdir` reclaim not being atomic, a reused PID
+      after reboot defeating `kill -0`) are accepted and documented inline
+      in `scripts/backup.sh` — all three are present identically in
+      `warden-backup.sh`, the pattern this wave was asked to mirror, and
+      none are reachable outside a once-daily cron with no long-running
+      overlap. `fallow`'s one finding — `client/package.json`'s `motion`
+      dependency — is the same pre-existing false positive triaged in
+      Waves 6/7/8 (basalt-ui imports it internally; confirmed there by
+      rebuilding without it and watching the build fail); not touched here
+      either, matching precedent. `/check` is green: format, typecheck
+      (server + client), 484 tests (up from 473 at Wave 8's close), fallow
+      audit clean on changed files.
+
+      **Nothing outward-facing was applied** — no push to `vps`,
+      `dotfiles-private`, or any other repo; no DNS record created; no ACL
+      grant added; the cron entry is not installed. `docs/vps-cutover.md` is
+      the complete handover for the owner to apply by hand.
+
+      **This closes the wave chain** — Wave 9 was the last wave in this
+      plan and its own header requires handing back to the owner rather
+      than spawning a successor regardless of gate state. No Wave 10
+      exists; `rd wave` should not be invoked from here.
