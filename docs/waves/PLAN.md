@@ -376,7 +376,7 @@ needed; do this once the cooldown has actually lifted, not before.
       pattern risking a permanent non-terminal retry loop on an unrelated
       error. Round 3 (8 more, smaller/subtler): the JSON-path fix still broke
       on a literal backslash — replaced with `json_patch(cursors,
-    json_object(?, ?))`, no hand-built path string at all, verified against
+json_object(?, ?))`, no hand-built path string at all, verified against
       `.`/`[`/`]`/`"`/`\`; a same-mailbox move deleting the location it just
       wrote; a null-provider-date message drifting to "now" on every re-sight
       forever (fixed via `COALESCE`/`CASE` in the upsert SQL, not a JS-level
@@ -418,7 +418,7 @@ needed; do this once the cooldown has actually lifted, not before.
       this plan's own Wave 2/3 precedent for triaging `fallow` output rather
       than chasing every flag to zero.
 
-## Wave 5 — Gmail through the IMAP adapter <!-- status: active -->
+## Wave 5 — Gmail through the IMAP adapter <!-- status: done -->
 
 Moved up from Wave 8 (validation 2026-09-28): reading Gmail ranks above UI and
 template polish for the owner, and the client (next wave) should be built
@@ -433,27 +433,131 @@ verification against a real Gmail mailbox is not a checkbox step of this wave
 — it is a named open item the delivery lead pulls in once the password is in
 1Password, so the chain never stalls on it.
 
-- [ ] Multi-account config: `accounts` rows from env (`MAIL_ACCOUNTS` JSON or
+- [x] Multi-account config: `accounts` rows from env (`MAIL_ACCOUNTS` JSON or
       per-account `GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` — pick one, document
       it) with secrets referenced, never stored; `/health` lists every account.
-- [ ] IMAP adapter capability detection per account: CONDSTORE `changedSince`
+- [x] IMAP adapter capability detection per account: CONDSTORE `changedSince`
       fast path when advertised (Gmail), UID-window fallback (Bridge);
       `X-GM-THRID` as the thread key and `X-GM-LABELS` as labels when
       `X-GM-EXT-1` is present; `[Gmail]/…` folder mapping for archive/spam/trash.
-- [ ] Sync + classification for the second account end to end, reachable
+- [x] Sync + classification for the second account end to end, reachable
       through the API — there is no client yet (Wave 6 builds the inbox
       against both accounts from the start instead of retrofitting it); fakes
       cover the Gmail capability set.
-- [ ] Retire argo Gmail for real, not as a patch file (owner approval
+- [x] Retire argo Gmail for real, not as a patch file (owner approval
       2026-09-28): in `~/SourceRoot/argo` create a branch and a **draft** PR
       that deletes `apps/api/routes/gmail.ts` and the Gmail half of
       `clients/google.ts`, keeping Calendar + OAuth; gate green there; record
       the PR URL in `docs/architecture.md`. **Never merge, deploy, or apply
       it** — until email-gateway reads Gmail live, argo is the only Gmail
       source; applying stays an owner gate tied to Gmail-live.
-      **Left behind:**
+      **Left behind:** Per-account env: `GMAIL_IMAP_USER`/
+      `GMAIL_IMAP_APP_PASSWORD`/`GMAIL_IMAP_MAILBOXES` (named vars, not a
+      `MAIL_ACCOUNTS` blob — matches `IMAP_*` naming, keeps `.env.tpl` one
+      line per secret). `ImapConfig` gained `tls: "starttls" | "implicit"`
+      (Gmail is implicit TLS on `993`, no cert pinning — a public CA).
+      **Deviation from this step's literal text:** account listing did **not**
+      land on `/health` — that endpoint is unauthenticated on the public
+      tunnel, and listing real mail addresses there is a PII leak (caught by
+      `/review`). It lives on bearer-protected `GET /api/accounts` instead
+      (covers both env-configured-but-never-synced accounts and ones already
+      in `mail.sqlite`, unlike `/api/stats`'s DB-only `accounts`); `/health`
+      stays a plain `{ "ok": true }`.
 
-## Wave 6 — Client shell + the tailnet host gate <!-- status: pending -->
+      Capability detection: `X-GM-EXT-1` adds `X-GM-THRID` to the fetch as
+      `Envelope.threadKey`; `[Gmail]/…` folders map via RFC 6154 special-use
+      attributes (never hardcoded — Gmail localizes folder names). **Gap,
+      accepted:** raw `X-GM-LABELS` capture is not implemented — no `labels`
+      field exists anywhere in the port/schema/API, and this wave is
+      schema-neutral, so folder/special-use move is the in-scope label
+      operation instead.
+
+      CONDSTORE fast path: a process-local `modseqByMailbox` bookmark
+      (`mailbox:UIDVALIDITY` keyed, so a mailbox recreation can't read a
+      stale bookmark as "nothing changed") backs an incremental `changedSince`
+      head call once a prior full scan seeded it; a changed set larger than
+      one page, or no CONDSTORE, falls back to the byte-identical UID-window
+      scan. `list()` gained `ListOptions.skipFastPath` so `ingest.ts` can force
+      a real, truncation-based cursor on exactly the one call that's about to
+      seed backfill progress from it (the fast path's `cursor` is always
+      `undefined`, ambiguous with "genuinely nothing older").
+
+      **`/review` ran three rounds against this diff** (two sideclaw passes
+      plus the dispatch worker's own build-time pass), each catching a real,
+      independently-reachable bug in the CONDSTORE bookmark/mailbox-recreation
+      path: round 1 — the bookmark not scoped by UIDVALIDITY (a recreation
+      read a stale bookmark as "nothing changed", silently dropping mail
+      forever) and the bookmark advancing even when a truncated fast-path
+      fallback's UID-window scan didn't cover the whole changed set (fixed:
+      scope by UIDVALIDITY, never re-bookmark from a fallback once one already
+      existed) — plus the unauthenticated `/health` PII leak (fixed, see
+      above). Round 2 — `skipFastPath`'s ambiguous-cursor fix landed, but
+      forcing `bookmarked = undefined` locally also fooled the cold-start
+      guard into re-bootstrapping an *already-precise* bookmark with a
+      coarser one a forced UID-window scan doesn't actually back up (fixed:
+      track "bookmark exists" against the map directly, not the
+      option-suppressed local — regression test asserts the bookmark stays
+      exact even when the mailbox's live `HIGHESTMODSEQ` has since moved on).
+      Also applied from round 2: a silent-degradation log line on the
+      truncated-fallback path, `wireImapIdle` now runs every provider's IDLE
+      setup concurrently (`Promise.allSettled`, with its own rejection
+      logging) instead of one slow account delaying every account after it,
+      `modseqByMailbox` prunes a mailbox's stale UIDVALIDITY entries on
+      recreation instead of growing unboundedly, `accountIdFor` reused
+      instead of a third inline copy of the `<provider>:<account>` format,
+      `.dockerignore` broadened to exclude every `*.test.ts` and `src/test/`
+      (not just `scripts/*.test.ts`) from the prod image, and a shared
+      `splitMailboxes` util replacing duplicated CSV-parsing between `env.ts`
+      and `config.ts`. `imapList` was extracted into `resolveBookmark`/
+      `bootstrapBookmarkIfColdStart` helpers once fallow flagged it past the
+      complexity threshold from these fixes, matching this plan's Wave 3
+      precedent.
+
+      **Accepted as known gaps, documented in `docs/architecture.md`§Known
+      gaps** (zero live callers before the Gmail app password lands, matching
+      this plan's own precedent for Wave 4's comparable gaps): (1) a CONDSTORE
+      bookmark can still advance in-memory before `ingestMailbox` durably
+      persists the corresponding page — a DB write failure mid-page could
+      skip up to one page of changes on retry; real fix needs `list()` to
+      return a candidate bookmark for the caller to commit post-ingest,
+      mirroring how the backfill cursor itself is only ever persisted
+      post-ingest. (2) a mailbox whose backfill already reached "done" before
+      a UIDVALIDITY change never re-seeds under the new identity — a
+      manifestation of the existing "backfill never resumes once done" gap
+      via a different trigger, same real fix (adaptive head-pass backfill).
+      (3) `makeListChangedSince`'s CONDSTORE fetch has no server-side bound,
+      unlike every other list path in the adapter — IMAP's CONDSTORE
+      extension has no LIMIT, so a real fix needs a windowed changedSince
+      strategy, not a client-side slice.
+
+      `fallow`'s remaining findings — the pre-existing unused
+      `resetConfiguredProvidersForTest` export and `@fontsource-variable/*`
+      deps (both from Wave 4), and `src/api/plugin.ts`'s two pre-existing,
+      deliberately-duplicated query-schema clone groups (the file's own
+      comment explains why) — are judged not worth another round, matching
+      this plan's Wave 2/3/4 precedent for triaging `fallow` rather than
+      chasing every flag to zero. `/check` is green: format, typecheck, 407
+      tests, fallow audit exit 0.
+
+      **A priority live-incident fix landed first, as its own commit**
+      (`678f7d4`, before this wave's own diff): a rate-limited job always
+      rescheduled on the backoff ladder's first (1-minute) rung regardless of
+      how many times it had already been rate-limited, so the 2026-09-28 Jev
+      429 storm kept every parked job retrying every ~1 minute — replaying
+      roughly its own request volume back at the still-throttling gateway,
+      plus ~40k log lines/hour from logging the full error object on every
+      attempt. Fixed with `jobs.rate_limits`'s own escalating ladder (1m → 5m
+      → 15m → capped 1h, never terminal, resets on success/other failure,
+      never spends an `attempts`), an idempotent `ensureJobsSchema` `ALTER`
+      for the live table (this module owns the jobs DDL outside the versioned
+      `mail-migrations.ts` path), and a one-line rate-limited log instead of
+      the full error object. Unrelated to Gmail; see that commit for detail.
+
+      **Open item for the delivery lead:** live verification against a real
+      Gmail mailbox, once the app password is in 1Password — not a blocker,
+      per this wave's own header.
+
+## Wave 6 — Client shell + the tailnet host gate <!-- status: active -->
 
 Moved down from Wave 5 (validation 2026-09-28) so the inbox is built against
 both Proton and Gmail from the start. Follows §Client. Pattern:
