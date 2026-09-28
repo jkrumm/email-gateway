@@ -20,6 +20,17 @@ function isValidBearer(token: string | undefined): boolean {
   return timingSafeEqualStrings(token, env.SECRET_KEY);
 }
 
+// Shared by every bearer-checking guard (src/api/plugin.ts, src/mcp/plugin.ts):
+// pulls the token out of an `Authorization: Bearer <token>` header, or
+// undefined if the header is missing or a different scheme.
+export function extractBearerToken(
+  authorization: string | null | undefined,
+): string | undefined {
+  return authorization?.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length)
+    : undefined;
+}
+
 /**
  * Registers the bearer plugin and rejects unauthenticated requests on the
  * given Elysia instance. Call before adding routes so the guard applies to

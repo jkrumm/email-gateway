@@ -3,6 +3,7 @@ import { fppRoutes } from "./routes/fpp";
 import { sySerendipityRoutes } from "./routes/sy-serendipity";
 import { webRoutes } from "./web/plugin";
 import { apiRoutes } from "./api/plugin";
+import { mcpRoutes } from "./mcp/plugin";
 import { env } from "./env";
 import { hostAllowed } from "./host-gate";
 
@@ -37,10 +38,11 @@ export function createApp<
       .get("/health", () => ({ ok: true }))
       .use(fppRoutes)
       .use(sySerendipityRoutes)
-      // The mail surface (/app, /api) sits behind MAIL_HOST; the send routes
-      // above and /health never do. A mismatching Host 404s these routes
-      // entirely. A `.guard()` (not a separate plugin used via `.use`, whose
-      // local hook does not propagate) is what scopes the check over both sets.
+      // The mail surface (/app, /api, /mcp) sits behind MAIL_HOST; the send
+      // routes above and /health never do. A mismatching Host 404s these
+      // routes entirely. A `.guard()` (not a separate plugin used via `.use`,
+      // whose local hook does not propagate) is what scopes the check over
+      // all three sets.
       .guard(
         {
           beforeHandle: ({ request, set }) => {
@@ -50,7 +52,7 @@ export function createApp<
             }
           },
         },
-        (gated) => gated.use(web).use(api),
+        (gated) => gated.use(web).use(api).use(mcpRoutes),
       )
   );
 }

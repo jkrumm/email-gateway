@@ -9,6 +9,7 @@
         "@ai-sdk/openai-compatible": "3.0.53",
         "@elysia/static": "1.4.11",
         "@elysiajs/bearer": "1.4.4",
+        "@modelcontextprotocol/server": "2.0.0",
         "@react-email/render": "2.1.0",
         "ai": "7.0.107",
         "basalt-ui": "1.30.2",
@@ -189,6 +190,10 @@
     "@mantine/core": ["@mantine/core@9.6.2", "", { "dependencies": { "@floating-ui/react": "^0.27.20", "clsx": "^2.1.1", "react-number-format": "^5.4.5", "react-remove-scroll": "^2.7.2", "type-fest": "^5.8.0" }, "peerDependencies": { "@mantine/hooks": "9.6.2", "react": "^19.2.0", "react-dom": "^19.2.0" } }, "sha512-6W7xA3FRlGMclVDCY5U6rqhgzc+x+7G3nR9rntcjtF/Slnkp79Em8yjAB01F0wBSnrBUMK1TqKENf5o5WHiPOA=="],
 
     "@mantine/hooks": ["@mantine/hooks@9.6.2", "", { "peerDependencies": { "react": "^19.2.0" } }, "sha512-SfNY0FvYi8vMytZbioQVx5JyX0dmLUQEmbgbQQXqe4iOto0QZ896XwhgMQ6g/FCWkvc9JHeHp7iPu4msqQFIEw=="],
+
+    "@modelcontextprotocol/core": ["@modelcontextprotocol/core@2.0.0", "", { "dependencies": { "zod": "^4.2.0" } }, "sha512-pJCEwGG7Lfr/+PQp9ZTwKXNeO5wzbfKL7H3MYpCorM4oFBoQrdjnBgEoqG+RjhsvS1FKrDbKux+M1HhlnGWqcA=="],
+
+    "@modelcontextprotocol/server": ["@modelcontextprotocol/server@2.0.0", "", { "dependencies": { "@modelcontextprotocol/core": "2.0.0", "zod": "^4.2.0" } }, "sha512-YhHWdHfpFMQfd0prsEnxKeS3Qz3ytIGmsS0sth4KDjnacIT7hxk6hXHkJ9KysxlkvTM+WZAtQbbcUhdoP4Hvtw=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.151.0", "", {}, "sha512-J1yXrIlNDZVzE3ada310xeAw7nH8yCAyLPuUIsjKatFPmfn5bS1oW+cM+QsGOtVWd5nhSpbwZWx/rue+r5Z+PA=="],
 

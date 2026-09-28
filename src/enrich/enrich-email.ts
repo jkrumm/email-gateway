@@ -2,8 +2,7 @@ import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import { CATEGORIES } from "./categories";
 import { getLlmConfig, getModel, getModelId } from "../llm/model";
-
-const MAX_PROMPT_TEXT_LENGTH = 12_000;
+import { plainText } from "../utils/html";
 
 export type EmailDirection = "inbound" | "outbound";
 
@@ -68,22 +67,6 @@ export interface EmailForEnrichment {
 
 export type EnrichEmailOutcome =
   { ok: true; result: EnrichmentResult } | { ok: false; error: string };
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function plainText(email: EmailForEnrichment): string {
-  const raw = email.text ?? (email.html ? stripHtml(email.html) : "");
-  return raw.length > MAX_PROMPT_TEXT_LENGTH
-    ? raw.slice(0, MAX_PROMPT_TEXT_LENGTH)
-    : raw;
-}
 
 export function buildEmailPayload(email: EmailForEnrichment) {
   return {

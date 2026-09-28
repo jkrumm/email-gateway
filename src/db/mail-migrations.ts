@@ -148,6 +148,31 @@ export const MAIL_MIGRATIONS: Migration[] = [
         ON send_log (provider, updated_at);
     `,
   },
+  {
+    // Wave 8: cached LLM thread summaries, keyed by the message's own key when
+    // it has no threadKey (src/services/agent-api.ts). message_count lets a
+    // cached row be invalidated when the thread gains a message.
+    version: 3,
+    up: `
+      CREATE TABLE thread_summaries (
+        thread_key TEXT PRIMARY KEY,
+        summary TEXT NOT NULL,
+        model TEXT,
+        message_count INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    // Wave 8 follow-up: invalidate the cache on the thread's newest message
+    // key instead of its row count, which a thread longer than one page can
+    // never advance (src/services/agent-api.ts getThreadSummary). Existing
+    // rows get NULL, so the next call re-summarizes and repopulates.
+    version: 4,
+    up: `
+      ALTER TABLE thread_summaries ADD COLUMN latest_key TEXT;
+    `,
+  },
 ];
 
 export function runMailMigrations(

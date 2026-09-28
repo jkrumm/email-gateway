@@ -14,6 +14,7 @@ file is what a dispatched agent needs before touching code.
 | `README.md`            | Endpoints, env, spam gate, Jev queue, storage tables, sync and IMAP rules — first               |
 | `docs/vision.md`       | Where this is going, in the owner's words                                                       |
 | `docs/architecture.md` | The settled target: provider port, lean store, jobs, client, agent API, topology, **Decisions** |
+| `docs/agent-api.md`    | Hermes-facing contract: curl for every `/api/*` route, the `/mcp` client config, tool list      |
 | `docs/waves/PLAN.md`   | The wave chain building it; exactly one wave is `active`                                        |
 
 ## Stack
@@ -136,7 +137,10 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   the old in-memory kick; `classify.ts`, `jev-judge.ts`)
 - `src/enrich/` LLM enrichment logic (`enrich-email.ts`) + `jev-email.ts`,
   both now called from job handlers, not a poll loop; `src/llm/` model
-  factories (`model.ts`, `jev.ts`)
+  factories (`model.ts`, `jev.ts`) plus `thread-summary.ts`/`draft-reply.ts`
+  (Wave 8's two prompt builders for the agent API, both modelled on
+  `enrich-email.ts`: same model plumbing, untrusted-data framing and 30-min
+  hang guard)
 - `src/db/jobs.ts` + `src/jobs/runner.ts` + `src/jobs/idle-watchdog.ts` +
   `src/jobs/rate-limit.ts`'s `isRateLimitError` (job-queue-owned, not an LLM
   concept, despite classifying LLM-gateway 429s among other things): the
@@ -171,16 +175,17 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   a stored account id.
 - `src/db/mail-index.ts` (Wave 4): the `mail.sqlite` repo singletons
   (`accountsRepo`, `messagesRepo`, `mailSubmissionsRepo`, `templatesRepo`,
-  `sendLogRepo`), each bound to `mailDb` the same way the old-store repos
+  `sendLogRepo`, `threadSummariesRepo` — Wave 8's cached LLM thread
+  summaries), each bound to `mailDb` the same way the old-store repos
   below are bound to `db`. `src/db/mail-migrations.ts`
   - `src/db/mail-client.ts` own the schema (`docs/architecture.md` §Lean
     store) and the `mailDb` singleton, opened alongside — never replacing — the
     untouched `email-gateway.sqlite`/`db` from `src/db/client.ts`; both share
     `src/db/migration-runner.ts`'s generic `applyMigrations`, and
     `mail-client.ts` also calls `ensureJobsSchema` so `jobs` is real there.
-    `src/db/{accounts,messages,mail-submissions,templates,send-log}.ts` are the
-    domain repos over that schema (same `createXRepo(db)`/`XRepo` shape as the
-    repos below).
+    `src/db/{accounts,messages,mail-submissions,templates,send-log,thread-summaries}.ts`
+    are the domain repos over that schema (same `createXRepo(db)`/`XRepo` shape
+    as the repos below).
 - `src/providers/port.ts` the `MailProvider` interface (capabilities, list,
   read, search, setFlags, move, send, watch) every mailbox sits behind;
   `src/providers/imap/adapter.ts` grows the old IMAP port with Bridge/Gmail
@@ -226,14 +231,31 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   `isSameOrigin`, `sessionValue`/`isSessionValue` — the signed payload carries
   an absolute expiry both doors validate, `sessionSecret`) used by both `src/web`
   and `src/api`; `src/host-gate.ts` the `MAIL_HOST` gate (`hostAllowed` +
-  `createApp`'s scoped `.guard`) — a mismatching Host 404s `/app` and `/api`
-  while the send routes and `/health` stay on any Host.
+  `createApp`'s scoped `.guard`) — a mismatching Host 404s `/app`, `/api` and
+  `/mcp` while the send routes and `/health` stay on any Host.
 - `src/api/plugin.ts` bearer JSON API; a same-origin request carrying the valid
   `/app` session cookie is accepted as an alternative to the bearer (the browser
-  client's door) — bearer semantics for agents are unchanged. `src/test/` fakes
-  and setup; `scripts/seed-demo.ts` (submissions-only fixtures for the old
-  store), `scripts/import-legacy.ts` (one-shot: old store's `submissions` →
+  client's door) — bearer semantics for agents are unchanged. Wave 8 added
+  `GET /api/threads/:key/summary`, `POST /api/drafts`, `POST /api/sends` and
+  `GET /api/needs-action`, and removed the legacy `/api/emails*` aliases; the
+  four call `src/services/agent-api.ts`'s `createAgentApi` — the one service
+  layer both the REST routes and the MCP tools share, never talking
+  to SQLite or a provider directly (injectable deps default to the production
+  singletons, `createApiRoutes`'s own DI style). `src/test/` fakes and setup;
+  `scripts/seed-demo.ts` (submissions-only fixtures for the old store),
+  `scripts/import-legacy.ts` (one-shot: old store's `submissions` →
   `mail.sqlite`)
+- `src/mcp/plugin.ts` (`createMcpRoutes`/`mcpRoutes`, Wave 8): the `/mcp` door
+  onto the same `createAgentApi` service layer, `@modelcontextprotocol/server`
+  2.0.0 `createMcpHandler` (per-request `McpServer`, `responseMode: 'sse'`,
+  legacy stateless fallback) mounted as `.post('/')` + `.get('/')`. Seven
+  tools — `search_mail`, `read_message`, `summarize_thread`, `needs_action`,
+  `draft_reply`, `send_template`, `job_status` — each a thin wrapper returning
+  `{ content, structuredContent }`, or `{ content, isError: true }` naming the
+  service's error code. Bearer-only (`env.API_KEY` + `timingSafeEqualStrings`,
+  no session cookie), `.onBeforeHandle` before the mount; unset `API_KEY`
+  404s the prefix like `/api`. `createMcpRoutes`'s `apiKey`/`agentApi` are
+  injectable for tests.
 
 ## Conventions
 

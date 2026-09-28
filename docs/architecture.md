@@ -233,15 +233,52 @@ later wave doesn't rediscover them by surprise.
   bypass the SDK with a raw, abortable `fetch()` against Resend's REST API for
   this one read, which is more surface than this job's read path has
   warranted so far.
-- **`POST /api/templates/:id/test-send`'s three writes aren't atomic
-  (Wave 7).** `insertSendLog` → `jobs.enqueue` → `recordTestSend` run as
-  separate statements with no rollback; if either of the last two throws, the
-  send_log row from the first write is left behind describing a send that
-  never happened (and a retry mints a fresh row rather than reusing it).
-  Mirrors the same accepted tension in Wave 4's submission-then-Jev-enqueue
-  path — not fixed there either, for the same reason: wrapping a
-  non-authoritative side effect in the same transaction as the row it
-  describes risks rolling back state that's otherwise fine on its own.
+- **`POST /api/templates/:id/test-send`'s last write is outside its
+  transaction (Wave 7/8).** `insertSendLog` and `jobs.enqueue` now share one
+  transaction (`src/services/template-send.ts`, the helper the agent
+  `POST /api/sends` path uses too), but `templates.recordTestSend` runs after
+  it — if that write throws, the send job is real and will deliver while
+  `last_test_send_at` stays unset. Real fix: fold `recordTestSend` into the
+  same transaction rather than leaving one side effect behind.
+- **A thread longer than 100 messages is summarized from its newest 100 and
+  never re-caps past that (Wave 8).** `src/services/agent-api.ts`'s
+  `getThreadSummary` fetches thread rows with `limit: 100` (the store's
+  `MAX_LIST_LIMIT`) and always summarizes from that one page, so a thread
+  longer than 100 messages is summarized from its newest 100 only — older
+  messages never enter the prompt. Cache invalidation itself is no longer the
+  bug (fixed in the same wave: the cache is keyed on the thread's newest
+  message key, not the row count, so a thread under the cap is never
+  permanently stale). Real fix for the cap itself: page the thread fully
+  before the summary claims to cover the whole conversation.
+- **`POST /api/sends` can send as the owner to any recipient, with no throttle
+  (Wave 8).** Any bearer-key holder — and, once episode 2 wires the MCP tools,
+  an LLM-driven agent — can send through the owner's Resend identity to an
+  arbitrary address with no rate limit and no recipient allowlist; a leaked
+  bearer key today only grants mailbox read, this upgrades that to
+  send-as-owner with no throttle. Real fix: a rate limit, a domain/recipient
+  allowlist, or scoped bearer tiers before this door is exposed more widely.
+- **`templateProps` has no per-template schema (Wave 8).** `src/emails/
+registry.ts`'s `renderTemplateElement` casts unchecked, and `POST /api/sends`
+  is the first caller passing agent-supplied props straight through to a
+  component. Real fix: a zod schema per `emailRegistry` entry, validated before
+  the send job is enqueued.
+- **`getThreadSummary`'s cache is neither atomic nor content-sensitive
+  (Wave 8).** Its read-then-write isn't atomic, so two concurrent requests for
+  the same uncached thread can both call the LLM (doubled spend, no correctness
+  bug), and it invalidates only on the thread's newest message key changing —
+  a re-sighted message whose content changed but which is not a new arrival
+  (same key, same position) serves a stale cached summary indefinitely. Real
+  fix: a per-thread guard (or an upsert keyed on a content hash) plus an
+  invalidation signal the re-sight path bumps.
+- **`enrich-email.ts`'s LLM prompt has the same unescaped-delimiter exposure
+  Wave 8 fixed for its own two prompt builders (pre-existing, out of scope).**
+  `src/enrich/enrich-email.ts` embeds `JSON.stringify(payload)` directly
+  between its `<email>`/`</email>` delimiters, same as `draft-reply.ts`/
+  `thread-summary.ts` before Wave 8's fix (`src/utils/prompt.ts`'s
+  `serializeUntrusted`) — a subject or body containing a literal `</email>`
+  could close the untrusted block early. Real fix: route `enrich-email.ts`
+  through `serializeUntrusted` too; flagged here rather than fixed since the
+  file predates this wave and touching it is out of Wave 8's scope.
 
 ## Client
 

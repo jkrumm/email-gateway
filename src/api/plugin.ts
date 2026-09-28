@@ -1,6 +1,8 @@
 import { render } from "@react-email/render";
+import type { Database } from "bun:sqlite";
 import { Elysia, t } from "elysia";
-import { timingSafeEqualStrings } from "../auth";
+import { extractBearerToken, timingSafeEqualStrings } from "../auth";
+import { splitCsv as splitList } from "../utils/csv";
 import { env } from "../env";
 import {
   handleCookieSignatureError,
@@ -11,16 +13,16 @@ import {
 } from "../session";
 import {
   accountsRepo as defaultAccounts,
+  mailDb as defaultMailDb,
   messagesRepo as defaultMessages,
   mailSubmissionsRepo as defaultMailSubmissions,
   sendLogRepo as defaultSendLog,
   templatesRepo as defaultTemplates,
+  threadSummariesRepo as defaultThreadSummaries,
 } from "../db/mail-index";
 import type { AccountsRepo } from "../db/accounts";
 import type {
-  Classification,
   ListMessagesFilters,
-  MessageEnvelope,
   MessageLocation,
   MessagesRepo,
 } from "../db/messages";
@@ -31,8 +33,8 @@ import type {
 } from "../db/mail-submissions";
 import type { SendLogRepo } from "../db/send-log";
 import type { TemplatesRepo } from "../db/templates";
+import type { ThreadSummariesRepo } from "../db/thread-summaries";
 import { findTemplateEntry, renderTemplateElement } from "../emails/registry";
-import type { SendJobPayload } from "../jobs/send";
 import { enqueueSyncTick, jobQueue as defaultJobQueue } from "../jobs/queue";
 import type { JobQueue } from "../db/jobs";
 import { accountIdFor } from "../sync/ingest";
@@ -41,7 +43,13 @@ import {
   providerForAccountId as defaultProviderFor,
 } from "../providers/from-env";
 import type { MailProvider, MessageRef } from "../providers/port";
-import { DEFAULT_FROM } from "../utils/send-mail";
+import {
+  agentErrorStatus,
+  createAgentApi,
+  isInvalidCursorError,
+  type AgentApi,
+} from "../services/agent-api";
+import { enqueueTemplateSend } from "../services/template-send";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60_000;
 
@@ -61,27 +69,6 @@ function parseFlag(value: string | undefined): boolean | undefined {
   if (value === "0" || value === "false") return false;
   return undefined;
 }
-
-// src/db/messages.ts, src/db/mail-submissions.ts and src/db/send-log.ts's
-// cursor decoders all throw this same message on a malformed cursor. The
-// cursor arrives straight from a `?cursor=` query param validated only as an
-// opaque string, so a garbage value would otherwise surface as an unhandled
-// 500 instead of a clean 400.
-function isInvalidCursorError(error: unknown): boolean {
-  return error instanceof Error && error.message === "Invalid cursor";
-}
-
-function splitList(value: string | undefined): string[] | undefined {
-  const parts = value
-    ?.split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  return parts && parts.length > 0 ? parts : undefined;
-}
-
-type MessageSummary = MessageEnvelope & {
-  classification: Classification | null;
-};
 
 function messagesFilters(query: {
   account?: string;
@@ -107,53 +94,6 @@ function messagesFilters(query: {
   };
 }
 
-// Reshapes a new-schema message into a subset of the old `/api/emails*`
-// field names — NOT a byte-compatible replay of the pre-Wave-4 shape.
-// Confirmed 2026-09-28: Hermes has no live caller of `/api/emails*` today
-// (it reads Gmail through argo's own proxy; Wave 8 is what repoints it to
-// this API), so nothing currently depends on exact compatibility. Dropped
-// vs. the old shape: text/html (use `?include=body` on the new
-// `/api/messages/:key` instead), attachments, cc/bcc/replyTo, source,
-// provider, mailbox, messageId; `source`/`provider`/`mailbox`/`from`/`to`/`q`
-// query filters are gone and `category` no longer accepts a comma-separated
-// list; `POST /api/emails/:id/enrich` now returns `{ enqueued: true }`
-// instead of a synchronous enrichment result. Whoever wires a real caller
-// onto this alias (or onto `/api/messages` directly, the intended
-// replacement) needs to account for all of that — this function exists so
-// the alias doesn't 404, not so it round-trips the old contract.
-function toLegacyEmail(row: MessageSummary) {
-  const classification = row.classification;
-  return {
-    id: row.key,
-    direction: row.direction,
-    fromAddress: row.fromAddress,
-    toAddresses: row.toAddresses,
-    subject: row.subject,
-    createdAt: row.date,
-    enrichment: classification
-      ? {
-          category: classification.category,
-          priority: classification.priority,
-          actionRequired: classification.actionRequired,
-          summary: classification.summary,
-          suggestedAction: classification.suggestedAction,
-          language: classification.language,
-          facts: classification.facts,
-          model: classification.model,
-          error: classification.error,
-          jev: {
-            spamProbability: classification.jevSpamProbability,
-            category: classification.jevCategory,
-            categoryConfidence: classification.jevCategoryConfidence,
-            latencyMs: classification.jevLatencyMs,
-            model: classification.jevModel,
-            error: classification.jevError,
-          },
-        }
-      : null,
-  };
-}
-
 function findLocation(
   locations: MessageLocation[],
   mailbox: string,
@@ -173,28 +113,31 @@ const messagesListQuery = t.Object({
   cursor: t.Optional(t.String()),
 });
 
-// Same shape as messagesListQuery — kept as a distinct schema (rather than a
-// shared reference) so the two endpoints can diverge later without a
-// coupled edit, matching this file's existing style (emailsListQuery already
-// duplicated most of these fields before this rewrite).
-const emailsListQuery = t.Object({
+// GET /api/needs-action's own query: messagesListQuery minus the filters that
+// are meaningless here (direction/category/needs_me/action_required — this
+// endpoint IS the actionRequired: true filter).
+const needsActionQuery = t.Object({
   account: t.Optional(t.String()),
-  direction: t.Optional(t.Union([t.Literal("inbound"), t.Literal("outbound")])),
-  category: t.Optional(t.String()),
-  action_required: t.Optional(t.String()),
-  needs_me: t.Optional(t.String()),
   since: t.Optional(t.String()),
   until: t.Optional(t.String()),
-  // Retired: the old enrichment-queue `status` (pending/done/failed) has no
-  // equivalent on the new `classifications` table — that state now lives on
-  // `jobs`, not joinable here without real complexity. Accepted but ignored.
-  status: t.Optional(t.String()),
   limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100 })),
   cursor: t.Optional(t.String()),
 });
 
-const emailByIdQuery = t.Object({
-  include: t.Optional(t.String()),
+const draftBody = t.Object({
+  key: t.String(),
+  instructions: t.Optional(t.String()),
+});
+
+const sendBody = t.Object({
+  templateId: t.String(),
+  to: t.String({ format: "email" }),
+  // Required: a bare t.Unknown() would accept an omitted field, and
+  // src/jobs/send.ts's renderTemplateElement then defaults to the template's
+  // previewProps — silently mailing demo content to a real recipient.
+  templateProps: t.Record(t.String(), t.Unknown()),
+  subject: t.Optional(t.String()),
+  replyTo: t.Optional(t.String({ format: "email" })),
 });
 
 const messageByKeyQuery = t.Object({
@@ -248,30 +191,51 @@ const moveBody = t.Object({
 export function createApiRoutes({
   apiKey,
   session,
+  db = defaultMailDb,
   messages = defaultMessages,
   mailSubmissions = defaultMailSubmissions,
   accounts = defaultAccounts,
   jobs = defaultJobQueue,
   templates = defaultTemplates,
   sendLog = defaultSendLog,
+  threadSummaries = defaultThreadSummaries,
   providerFor = defaultProviderFor,
   configuredProviders = defaultConfiguredProviders,
+  agentApi,
 }: {
   apiKey: string | undefined;
   // When set, a same-origin request carrying the /app session cookie is
   // accepted as an alternative to the bearer — that is how the browser client
   // reads data. The bearer contract for agents is unchanged.
   session?: { secret: string; now?: () => number };
+  // The write connection the send/test-send transaction helper wraps; defaults
+  // to the production mail.sqlite singleton and matches the repos above.
+  db?: Database;
   messages?: MessagesRepo;
   mailSubmissions?: MailSubmissionsRepo;
   accounts?: AccountsRepo;
   jobs?: JobQueue;
   templates?: TemplatesRepo;
   sendLog?: SendLogRepo;
+  threadSummaries?: ThreadSummariesRepo;
   providerFor?: (accountId: string) => MailProvider | null;
   configuredProviders?: () => MailProvider[];
+  // Injectable for tests; defaulted from the repos above so the routes and
+  // (later) the MCP tools share one implementation.
+  agentApi?: AgentApi;
 }) {
   const configured = apiKey !== undefined || session !== undefined;
+
+  const service =
+    agentApi ??
+    createAgentApi({
+      db,
+      messages,
+      jobs,
+      sendLog,
+      threadSummaries,
+      providerFor,
+    });
 
   // Shared by /messages/:key/flags and /messages/:key/move: both need the
   // same message → location → provider chain before doing anything specific.
@@ -311,10 +275,7 @@ export function createApiRoutes({
         return { error: "not_found" };
       }
 
-      const authorization = headers.authorization;
-      const token = authorization?.startsWith("Bearer ")
-        ? authorization.slice("Bearer ".length)
-        : undefined;
+      const token = extractBearerToken(headers.authorization);
 
       if (
         token &&
@@ -362,61 +323,119 @@ export function createApiRoutes({
     .get(
       "/messages/:key",
       ({ params, query, set }) => {
-        const message = messages.getMessage(params.key);
-        if (!message) {
+        const outcome = service.readMessage({
+          key: params.key,
+          includeBody: query.include === "body",
+        });
+        if (!outcome.ok) {
           set.status = 404;
-          return { error: "not_found" };
+          return { error: outcome.error };
         }
 
-        const classification = messages.getClassification(params.key);
-        const base = { ...message, classification };
-        if (query.include !== "body") return base;
-
-        return { ...base, body: messages.getBody(params.key) };
+        return outcome.message;
       },
       { params: t.Object({ key: t.String() }), query: messageByKeyQuery },
     )
     .get(
       "/threads/:key",
       ({ params, set }) => {
-        const message = messages.getMessage(params.key);
-        if (!message) {
+        const outcome = service.getThread({ key: params.key });
+        if (!outcome.ok) {
           set.status = 404;
-          return { error: "not_found" };
+          return { error: outcome.error };
         }
 
-        if (!message.threadKey) {
-          const classification = messages.getClassification(params.key);
-          return { rows: [{ ...message, classification }], nextCursor: null };
+        return outcome.thread;
+      },
+      { params: t.Object({ key: t.String() }) },
+    )
+    .get(
+      "/threads/:key/summary",
+      async ({ params, set }) => {
+        const outcome = await service.getThreadSummary({ key: params.key });
+        if (!outcome.ok) {
+          const { status, code } = agentErrorStatus(outcome.error);
+          set.status = status;
+          return { error: code };
         }
 
-        return messages.listMessages({ threadKey: message.threadKey });
+        return {
+          summary: outcome.summary,
+          model: outcome.model,
+          messageCount: outcome.messageCount,
+          cached: outcome.cached,
+        };
       },
       { params: t.Object({ key: t.String() }) },
     )
     .get(
       "/search",
-      ({ query }) => {
-        const keys = messages.searchMessages(query.q, {
+      ({ query }) =>
+        service.searchMail({
+          q: query.q,
           accountIds: splitList(query.account),
           limit: query.limit,
+        }),
+      { query: searchQuery },
+    )
+    .post(
+      "/drafts",
+      async ({ body, set }) => {
+        const outcome = await service.draftReply({
+          key: body.key,
+          instructions: body.instructions,
         });
+        if (!outcome.ok) {
+          const { status, code } = agentErrorStatus(outcome.error);
+          set.status = status;
+          return { error: code };
+        }
+
+        return { draft: outcome.draft, model: outcome.model };
+      },
+      { body: draftBody },
+    )
+    .post(
+      "/sends",
+      ({ body, set }) => {
+        const outcome = service.sendTemplate({
+          templateId: body.templateId,
+          to: body.to,
+          templateProps: body.templateProps,
+          subject: body.subject,
+          replyTo: body.replyTo,
+        });
+        if (!outcome.ok) {
+          set.status = 404;
+          return { error: "not_found" };
+        }
 
         return {
-          via: "fts" as const,
-          keys: keys
-            .map((key) => {
-              const message = messages.getMessage(key);
-              if (!message) return null;
-              return {
-                ...message,
-                classification: messages.getClassification(key),
-              };
-            })
-            .filter((row): row is NonNullable<typeof row> => row !== null),
+          enqueued: true,
+          sendLogId: outcome.sendLogId,
+          jobId: outcome.jobId,
         };
       },
-      { query: searchQuery },
+      { body: sendBody },
+    )
+    .get(
+      "/needs-action",
+      ({ query, set }) => {
+        try {
+          return service.listNeedsAction({
+            accountIds: splitList(query.account),
+            since: query.since,
+            until: query.until,
+            limit: query.limit,
+            cursor: query.cursor,
+          });
+        } catch (error) {
+          if (!isInvalidCursorError(error)) throw error;
+          set.status = 400;
+          return { error: "invalid_cursor" };
+        }
+      },
+      { query: needsActionQuery },
     )
     .post(
       "/messages/:key/flags",
@@ -543,26 +562,16 @@ export function createApiRoutes({
           return { error: "not_found" };
         }
 
-        const sendLogId = crypto.randomUUID();
-        sendLog.insertSendLog({
-          id: sendLogId,
-          templateId: entry.id,
-          recipients: [env.RECEIVER_EMAIL],
-          provider: "resend",
-          requestedBy: "test-send",
-        });
-        const jobId = jobs.enqueue({
-          kind: "send",
-          payload: {
-            id: sendLogId,
-            from: DEFAULT_FROM,
+        const { sendLogId, jobId } = enqueueTemplateSend(
+          { db, jobs, sendLog },
+          {
+            templateId: entry.id,
             to: env.RECEIVER_EMAIL,
             subject: `Test send: ${entry.name}`,
-            templateName: entry.id,
             templateProps: entry.previewProps,
-          } satisfies SendJobPayload,
-          subjectKey: sendLogId,
-        });
+            requestedBy: "test-send",
+          },
+        );
         templates.recordTestSend(entry.id);
 
         return { enqueued: true, sendLogId, jobId };
@@ -619,61 +628,6 @@ export function createApiRoutes({
           return { error: "not_found" };
         }
         return job;
-      },
-      { params: t.Object({ id: t.String() }) },
-    )
-    .get(
-      "/emails",
-      ({ query, set }) => {
-        try {
-          const result = messages.listMessages(messagesFilters(query));
-          return {
-            data: result.rows.map(toLegacyEmail),
-            nextCursor: result.nextCursor,
-          };
-        } catch (error) {
-          if (!isInvalidCursorError(error)) throw error;
-          set.status = 400;
-          return { error: "invalid_cursor" };
-        }
-      },
-      { query: emailsListQuery },
-    )
-    .get(
-      "/emails/:id",
-      ({ params, query, set }) => {
-        const message = messages.getMessage(params.id);
-        if (!message) {
-          set.status = 404;
-          return { error: "not_found" };
-        }
-
-        const classification = messages.getClassification(params.id);
-        const base = toLegacyEmail({ ...message, classification });
-        if (query.include !== "html") return base;
-
-        // Never triggers a live provider read — only the message/threads
-        // routes and the classify job populate body_cache.
-        const body = messages.getBody(params.id);
-        return { ...base, html: body?.html ?? null, text: body?.text ?? null };
-      },
-      { params: t.Object({ id: t.String() }), query: emailByIdQuery },
-    )
-    .post(
-      "/emails/:id/enrich",
-      ({ params, set }) => {
-        const existing = messages.getMessage(params.id);
-        if (!existing) {
-          set.status = 404;
-          return { error: "not_found" };
-        }
-
-        jobs.enqueue({
-          kind: "classify",
-          payload: { key: params.id },
-          subjectKey: params.id,
-        });
-        return { enqueued: true };
       },
       { params: t.Object({ id: t.String() }) },
     );

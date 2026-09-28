@@ -8,6 +8,7 @@ import { createSendLogRepo } from "../db/send-log";
 import { createTemplatesRepo } from "../db/templates";
 import { createJobQueue } from "../db/jobs";
 import { TEMPLATE_IDS } from "../emails/registry";
+import type { AgentApi } from "../services/agent-api";
 import type { MailProvider, Message, MessageRef } from "../providers/port";
 
 const API_KEY = "local-api-key-1234567";
@@ -79,9 +80,11 @@ function testApp(
   {
     providerFor,
     configuredProviders,
+    agentApi,
   }: {
     providerFor?: (accountId: string) => MailProvider | null;
     configuredProviders?: () => MailProvider[];
+    agentApi?: AgentApi;
   } = {},
 ) {
   const db = openMailDatabase(":memory:");
@@ -99,6 +102,7 @@ function testApp(
 
   const app = createApiRoutes({
     apiKey,
+    db,
     messages,
     mailSubmissions,
     accounts,
@@ -107,6 +111,7 @@ function testApp(
     jobs,
     providerFor: providerFor ?? (() => null),
     configuredProviders: configuredProviders ?? (() => []),
+    agentApi,
   });
 
   return { app, messages, mailSubmissions, accounts, jobs, templates, sendLog };
@@ -809,62 +814,282 @@ describe("GET /api/jobs/:id", () => {
   });
 });
 
-describe("GET /api/emails (legacy alias)", () => {
-  test("reshapes new-schema rows into the old field names", async () => {
-    const { app, messages } = testApp(API_KEY);
-    messages.upsertMessage(
-      envelope({
-        key: "in_1",
-        direction: "inbound",
-        date: "2026-01-01T00:00:00.000Z",
-      }),
-    );
-    messages.upsertMessage(
-      envelope({
-        key: "out_1",
-        direction: "outbound",
-        date: "2026-01-02T00:00:00.000Z",
-      }),
-    );
+function fakeAgentApi(overrides: Partial<AgentApi> = {}): AgentApi {
+  return {
+    searchMail: () => ({ via: "fts" as const, keys: [] }),
+    readMessage: () => ({ ok: false as const, error: "not_found" as const }),
+    getThread: () => ({ ok: false as const, error: "not_found" as const }),
+    getThreadSummary: async () => ({
+      ok: false as const,
+      error: "not_found" as const,
+    }),
+    listNeedsAction: () => ({ rows: [], nextCursor: null }),
+    draftReply: async () => ({
+      ok: false as const,
+      error: "not_found" as const,
+    }),
+    sendTemplate: () => ({ ok: false as const, error: "not_found" as const }),
+    getJobStatus: () => ({ ok: false as const, error: "not_found" as const }),
+    ...overrides,
+  };
+}
+
+describe("GET /api/threads/:key/summary", () => {
+  test("404 for an unknown key", async () => {
+    const { app } = testApp(API_KEY);
 
     const response = await app.handle(
-      new Request("http://localhost/api/emails?direction=inbound", {
+      new Request("http://localhost/api/threads/missing/summary", {
         headers: authHeaders(),
       }),
     );
-    const body = (await json(response)) as { data: Record<string, unknown>[] };
-    expect(body.data).toEqual([
-      {
-        id: "in_1",
-        direction: "inbound",
-        fromAddress: "sender@example.com",
-        toAddresses: ["hello@example.com"],
-        subject: "Hello there",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        enrichment: null,
-      },
-    ]);
+
+    expect(response.status).toBe(404);
+    expect(await json(response)).toEqual({ error: "not_found" });
   });
 
-  test("a status query param is accepted but has no effect", async () => {
+  test("503 when the LLM is not configured", async () => {
     const { app, messages } = testApp(API_KEY);
     messages.upsertMessage(envelope());
 
     const response = await app.handle(
-      new Request("http://localhost/api/emails?status=pending", {
+      new Request("http://localhost/api/threads/msg-1/summary", {
         headers: authHeaders(),
       }),
     );
+
+    expect(response.status).toBe(503);
+    expect(await json(response)).toEqual({ error: "llm_not_configured" });
+  });
+
+  test("returns the service's summary payload on success", async () => {
+    const { app } = testApp(API_KEY, {
+      agentApi: fakeAgentApi({
+        getThreadSummary: async () => ({
+          ok: true as const,
+          summary: "They agreed on August.",
+          model: "test-model",
+          messageCount: 3,
+          cached: false,
+        }),
+      }),
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/threads/msg-1/summary", {
+        headers: authHeaders(),
+      }),
+    );
+
     expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      summary: "They agreed on August.",
+      model: "test-model",
+      messageCount: 3,
+      cached: false,
+    });
+  });
+});
+
+describe("POST /api/drafts", () => {
+  test("404 for an unknown key", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/drafts", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ key: "missing" }),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("503 when the LLM is not configured", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(envelope());
+
+    const response = await app.handle(
+      new Request("http://localhost/api/drafts", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ key: "msg-1" }),
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(await json(response)).toEqual({ error: "llm_not_configured" });
+  });
+
+  test("returns the drafted reply on success", async () => {
+    const { app } = testApp(API_KEY, {
+      agentApi: fakeAgentApi({
+        draftReply: async () => ({
+          ok: true as const,
+          draft: "Yes — August is open.",
+          model: "test-model",
+        }),
+      }),
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/drafts", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ key: "msg-1", instructions: "be brief" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      draft: "Yes — August is open.",
+      model: "test-model",
+    });
+  });
+});
+
+describe("POST /api/sends", () => {
+  test("404 for an unknown template id", async () => {
+    const { app, sendLog } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/sends", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({
+          templateId: "missing",
+          to: "jane@example.com",
+          templateProps: {},
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    expect(sendLog.listSendLog().data).toHaveLength(0);
+  });
+
+  test("inserts an agent send_log row, enqueues a send job and defaults the subject", async () => {
+    const { app, sendLog, jobs } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/sends", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({
+          templateId: TEMPLATE_IDS.fppSender,
+          to: "jane@example.com",
+          templateProps: { name: "Jane" },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await json(response);
+    expect(body.enqueued).toBe(true);
+
+    expect(sendLog.getSendLog(body.sendLogId as string)).toMatchObject({
+      templateId: TEMPLATE_IDS.fppSender,
+      recipients: ["jane@example.com"],
+      provider: "resend",
+      requestedBy: "agent",
+    });
+    expect(jobs.getJob(body.jobId as string)).toMatchObject({
+      kind: "send",
+      status: "pending",
+    });
+  });
+
+  test("rejects a malformed recipient address", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/sends", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({
+          templateId: TEMPLATE_IDS.fppSender,
+          to: "not-an-email",
+          templateProps: {},
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(422);
+  });
+
+  test("rejects an omitted templateProps instead of mailing the template's preview props", async () => {
+    const { app, sendLog } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/sends", {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({
+          templateId: TEMPLATE_IDS.fppSender,
+          to: "jane@example.com",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(422);
+    expect(sendLog.listSendLog().data).toHaveLength(0);
+  });
+});
+
+describe("GET /api/needs-action", () => {
+  test("returns only action-required messages, newest first", async () => {
+    const { app, messages } = testApp(API_KEY);
+    messages.upsertMessage(
+      envelope({ key: "msg-a", date: "2026-01-01T00:00:00.000Z" }),
+    );
+    messages.upsertMessage(
+      envelope({ key: "msg-b", date: "2026-01-02T00:00:00.000Z" }),
+    );
+    messages.saveEnrichment("msg-a", {
+      category: "urgent",
+      priority: "high",
+      actionRequired: true,
+      summary: null,
+      suggestedAction: null,
+      language: null,
+      facts: null,
+      model: "m",
+      error: null,
+    });
+    messages.saveEnrichment("msg-b", {
+      category: "newsletter",
+      priority: "low",
+      actionRequired: false,
+      summary: null,
+      suggestedAction: null,
+      language: null,
+      facts: null,
+      model: "m",
+      error: null,
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/needs-action", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await json(response)) as { rows: { key: string }[] };
+    expect(body.rows.map((r) => r.key)).toEqual(["msg-a"]);
   });
 
   test("a garbage cursor is a clean 400, not a 500", async () => {
     const { app } = testApp(API_KEY);
 
     const response = await app.handle(
-      new Request("http://localhost/api/emails?cursor=not-a-real-cursor", {
-        headers: authHeaders(),
-      }),
+      new Request(
+        "http://localhost/api/needs-action?cursor=not-a-real-cursor",
+        {
+          headers: authHeaders(),
+        },
+      ),
     );
 
     expect(response.status).toBe(400);
@@ -872,71 +1097,16 @@ describe("GET /api/emails (legacy alias)", () => {
   });
 });
 
-describe("GET /api/emails/:id (legacy alias)", () => {
-  test("404 for an unknown id", async () => {
+describe("removed legacy /api/emails* aliases", () => {
+  test("404 now", async () => {
     const { app } = testApp(API_KEY);
 
-    const response = await app.handle(
-      new Request("http://localhost/api/emails/missing", {
-        headers: authHeaders(),
-      }),
-    );
-    expect(response.status).toBe(404);
-  });
-
-  test("excludes body by default and includes it with ?include=html", async () => {
-    const { app, messages } = testApp(API_KEY);
-    messages.upsertMessage(envelope());
-    messages.saveBody("msg-1", { html: "<p>hi</p>", text: "hi" });
-
-    const withoutHtml = await json(
-      await app.handle(
-        new Request("http://localhost/api/emails/msg-1", {
-          headers: authHeaders(),
-        }),
-      ),
-    );
-    expect(withoutHtml.html).toBeUndefined();
-
-    const withHtml = await json(
-      await app.handle(
-        new Request("http://localhost/api/emails/msg-1?include=html", {
-          headers: authHeaders(),
-        }),
-      ),
-    );
-    expect(withHtml.html).toBe("<p>hi</p>");
-    expect(withHtml.text).toBe("hi");
-  });
-});
-
-describe("POST /api/emails/:id/enrich (legacy alias)", () => {
-  test("404 for an unknown id", async () => {
-    const { app } = testApp(API_KEY);
-
-    const response = await app.handle(
-      new Request("http://localhost/api/emails/missing/enrich", {
-        method: "POST",
-        headers: authHeaders(),
-      }),
-    );
-    expect(response.status).toBe(404);
-  });
-
-  test("enqueues a classify job and returns immediately", async () => {
-    const { app, messages, jobs } = testApp(API_KEY);
-    messages.upsertMessage(envelope());
-
-    const response = await app.handle(
-      new Request("http://localhost/api/emails/msg-1/enrich", {
-        method: "POST",
-        headers: authHeaders(),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(await json(response)).toEqual({ enqueued: true });
-    expect(jobs.counts()).toEqual({ pending: 1, failed: 0 });
+    for (const path of ["/api/emails", "/api/emails/msg-1"]) {
+      const response = await app.handle(
+        new Request(`http://localhost${path}`, { headers: authHeaders() }),
+      );
+      expect(response.status).toBe(404);
+    }
   });
 });
 
