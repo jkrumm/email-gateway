@@ -4,7 +4,10 @@ import { openMailDatabase } from "../db/mail-client";
 import { createAccountsRepo } from "../db/accounts";
 import { createMessagesRepo, type MessageEnvelope } from "../db/messages";
 import { createMailSubmissionsRepo } from "../db/mail-submissions";
+import { createSendLogRepo } from "../db/send-log";
+import { createTemplatesRepo } from "../db/templates";
 import { createJobQueue } from "../db/jobs";
+import { TEMPLATE_IDS } from "../emails/registry";
 import type { MailProvider, Message, MessageRef } from "../providers/port";
 
 const API_KEY = "local-api-key-1234567";
@@ -85,6 +88,8 @@ function testApp(
   const accounts = createAccountsRepo(db);
   const messages = createMessagesRepo(db);
   const mailSubmissions = createMailSubmissionsRepo(db);
+  const templates = createTemplatesRepo(db);
+  const sendLog = createSendLogRepo(db);
   const jobs = createJobQueue({ db, claimedBy: "test:1" });
   accounts.upsertAccount({
     id: ACCOUNT_ID,
@@ -97,12 +102,14 @@ function testApp(
     messages,
     mailSubmissions,
     accounts,
+    templates,
+    sendLog,
     jobs,
     providerFor: providerFor ?? (() => null),
     configuredProviders: configuredProviders ?? (() => []),
   });
 
-  return { app, messages, mailSubmissions, accounts, jobs };
+  return { app, messages, mailSubmissions, accounts, jobs, templates, sendLog };
 }
 
 function authHeaders(key = API_KEY) {
@@ -930,5 +937,146 @@ describe("POST /api/emails/:id/enrich (legacy alias)", () => {
     expect(response.status).toBe(200);
     expect(await json(response)).toEqual({ enqueued: true });
     expect(jobs.counts()).toEqual({ pending: 1, failed: 0 });
+  });
+});
+
+describe("GET /api/templates", () => {
+  test("lists every template row", async () => {
+    const { app, templates } = testApp(API_KEY);
+    templates.upsertTemplate({ id: "welcome", name: "Welcome" });
+    templates.upsertTemplate({ id: "digest", name: "Digest" });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/templates", { headers: authHeaders() }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { id: string }[];
+    expect(body.map((t) => t.id).sort()).toEqual(["digest", "welcome"]);
+  });
+});
+
+describe("GET /api/templates/:id/preview", () => {
+  test("404 for an unknown template id", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/templates/missing/preview", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await json(response)).toEqual({ error: "not_found" });
+  });
+
+  test("renders the registry template as html", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request(
+        `http://localhost/api/templates/${TEMPLATE_IDS.fppSender}/preview?width=375`,
+        { headers: authHeaders() },
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect((await response.text()).length).toBeGreaterThan(0);
+  });
+});
+
+describe("POST /api/templates/:id/test-send", () => {
+  test("404 for an unknown template id", async () => {
+    const { app, sendLog } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/templates/missing/test-send", {
+        method: "POST",
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    expect(sendLog.listSendLog().data).toHaveLength(0);
+  });
+
+  test("inserts a send_log row, enqueues a send job and records the test send", async () => {
+    const { app, sendLog, templates, jobs } = testApp(API_KEY);
+    templates.upsertTemplate({
+      id: TEMPLATE_IDS.fppSender,
+      name: "FPP – contact confirmation",
+    });
+
+    const response = await app.handle(
+      new Request(
+        `http://localhost/api/templates/${TEMPLATE_IDS.fppSender}/test-send`,
+        { method: "POST", headers: authHeaders() },
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await json(response);
+    expect(body.enqueued).toBe(true);
+    expect(typeof body.sendLogId).toBe("string");
+    expect(typeof body.jobId).toBe("string");
+
+    expect(sendLog.getSendLog(body.sendLogId as string)).toMatchObject({
+      templateId: TEMPLATE_IDS.fppSender,
+      recipients: ["receiver@example.com"],
+      provider: "resend",
+      requestedBy: "test-send",
+      status: null,
+    });
+    expect(jobs.getJob(body.jobId as string)).toMatchObject({
+      kind: "send",
+      status: "pending",
+    });
+    expect(
+      templates.getTemplate(TEMPLATE_IDS.fppSender)?.lastTestSendAt,
+    ).not.toBeNull();
+  });
+});
+
+describe("GET /api/send-log", () => {
+  test("filters by templateId and paginates newest-first", async () => {
+    const { app, sendLog } = testApp(API_KEY);
+    sendLog.insertSendLog({
+      id: "log-welcome",
+      templateId: "welcome",
+      recipients: ["jane@example.com"],
+      provider: "resend",
+      requestedBy: "route",
+    });
+    sendLog.insertSendLog({
+      id: "log-digest",
+      templateId: "digest",
+      recipients: ["jane@example.com"],
+      provider: "resend",
+      requestedBy: "route",
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/send-log?templateId=welcome", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await json(response)) as { data: { id: string }[] };
+    expect(body.data.map((row) => row.id)).toEqual(["log-welcome"]);
+  });
+
+  test("a garbage cursor is a clean 400, not a 500", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/send-log?cursor=not-a-real-cursor", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toEqual({ error: "invalid_cursor" });
   });
 });

@@ -7,7 +7,7 @@ import {
   type SendLogRepo,
 } from "../db/mail-index";
 
-const DEFAULT_FROM =
+export const DEFAULT_FROM =
   "Free-Planning-Poker.com <no-reply@free-planning-poker.com>";
 
 // Only what sendMail actually calls — narrower than the full SDK so any

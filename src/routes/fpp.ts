@@ -4,6 +4,7 @@ import { env } from "../env";
 import FppDailyAnalytics from "../emails/fpp/fpp-daily-analytics";
 import FppReceiverMail from "../emails/fpp/fpp-receiver-mail";
 import FppSenderMail from "../emails/fpp/fpp-sender-mail";
+import { TEMPLATE_IDS } from "../emails/registry";
 import { gateSubmission } from "../spam/gate";
 import { sendMail } from "../utils/send-mail";
 
@@ -34,7 +35,7 @@ export const fppRoutes = withBearerAuth(new Elysia())
             to: body.email,
             subject: "Free-Planning-Poker.com - Contact Form Submission",
             template: FppSenderMail(body),
-            source: "fpp-sender",
+            source: TEMPLATE_IDS.fppSender,
           }).catch(() => ({}));
 
           await sendMail({
@@ -42,7 +43,7 @@ export const fppRoutes = withBearerAuth(new Elysia())
             replyTo: `${body.name} <${body.email}>`,
             subject: `${subjectPrefix}Free-Planning-Poker.com - Contact Form Submission`,
             template: FppReceiverMail(body),
-            source: "fpp-receiver",
+            source: TEMPLATE_IDS.fppReceiver,
           });
         },
       });
@@ -58,7 +59,7 @@ export const fppRoutes = withBearerAuth(new Elysia())
         to: env.RECEIVER_EMAIL,
         subject: "Free-Planning-Poker.com - Daily Analytics",
         template: FppDailyAnalytics(body),
-        source: "fpp-daily-analytics",
+        source: TEMPLATE_IDS.fppDailyAnalytics,
       });
 
       console.log("Daily analytic emails sent successfully", body);

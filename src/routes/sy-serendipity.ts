@@ -2,6 +2,7 @@ import { Elysia, t } from "elysia";
 import { withBearerAuth } from "../auth";
 import { env } from "../env";
 import SySerendipityRequestMail from "../emails/sy-serendipity/request-receiver-mail";
+import { TEMPLATE_IDS } from "../emails/registry";
 import { gateSubmission } from "../spam/gate";
 import { sendMail } from "../utils/send-mail";
 
@@ -36,7 +37,7 @@ export const sySerendipityRoutes = withBearerAuth(new Elysia()).post(
           replyTo: replyToName ? `${replyToName} <${body.email}>` : body.email,
           subject: `${subjectPrefix}SY Serendipity I - Charter Request`,
           template: SySerendipityRequestMail(body),
-          source: "sy-serendipity-request",
+          source: TEMPLATE_IDS.sySerendipityRequest,
         });
       },
     });

@@ -6,6 +6,7 @@ import { logout } from "../lib/session";
 
 const NAV = [
   { to: "/inbox", label: "Inbox" },
+  { to: "/templates", label: "Templates" },
   { to: "/submissions", label: "Submissions" },
   { to: "/accounts", label: "Accounts" },
 ] as const;

@@ -79,3 +79,31 @@ export interface AccountInfo {
   provider: string;
   address: string;
 }
+
+export interface Template {
+  id: string;
+  name: string;
+  previewProps: Record<string, unknown> | null;
+  lastTestSendAt: string | null;
+  createdAt: string;
+}
+
+export type TemplateList = Template[];
+
+export interface SendLogEntry {
+  id: string;
+  templateId: string | null;
+  recipients: string[];
+  provider: string;
+  providerMessageId: string | null;
+  status: string | null;
+  lastEvent: string | null;
+  requestedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SendLogList {
+  data: SendLogEntry[];
+  nextCursor: string | null;
+}

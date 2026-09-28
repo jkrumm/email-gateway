@@ -41,3 +41,14 @@ export const jobQueue: JobQueue = new Proxy({} as JobQueue, {
 export function enqueueSyncTick(queue: JobQueue): void {
   queue.enqueue({ kind: "sync_tick", payload: {}, subjectKey: "tick" });
 }
+
+// Mirrors enqueueSyncTick: the 5-minute periodic timer re-runs the Resend
+// send_log reconciliation so a status that changed after the send job
+// recorded "sent" (delivered, bounced, …) is picked up.
+export function enqueueReconcileSendLog(queue: JobQueue): void {
+  queue.enqueue({
+    kind: "reconcile_send_log",
+    payload: {},
+    subjectKey: "reconcile_send_log",
+  });
+}

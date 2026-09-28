@@ -1,10 +1,15 @@
 import { hostname } from "node:os";
 import { defaultClaimedBy } from "../db/jobs";
 import { mailDb } from "../db/mail-index";
-import { enqueueSyncTick, jobQueue as queue } from "./queue";
+import {
+  enqueueReconcileSendLog,
+  enqueueSyncTick,
+  jobQueue as queue,
+} from "./queue";
 import { createJobRunner } from "./runner";
 import { createClassifyHandler } from "./classify";
 import { createJevMessageHandler, createJevSubmissionHandler } from "./jev";
+import { createReconcileSendLogHandler } from "./reconcile-send-log";
 import { createSendHandler } from "./send";
 import {
   createSyncTickHandler,
@@ -47,12 +52,19 @@ export function startJobSystem(): void {
   // just means one tick's work runs twice in a row — cheaper than adding a
   // pre-enqueue existence check for a case the job system already makes safe.
   const tick = (): void => enqueueSyncTick(queue);
+  // The periodic timer also reconciles send_log against Resend history; IDLE
+  // only needs the sync tick, so it keeps using `tick` directly.
+  const periodicTick = (): void => {
+    tick();
+    enqueueReconcileSendLog(queue);
+  };
 
   runner.register("sync_tick", createSyncTickHandler({ enqueueClassify }));
   runner.register("classify", createClassifyHandler({ enqueueJevMessage }));
   runner.register("jev_message", createJevMessageHandler());
   runner.register("jev_submission", createJevSubmissionHandler());
   runner.register("send", createSendHandler());
+  runner.register("reconcile_send_log", createReconcileSendLogHandler());
 
   // Guards against a new poll() tick starting a second drain() while the
   // previous one is still running a long handler (an LLM call or IMAP read,
@@ -80,8 +92,8 @@ export function startJobSystem(): void {
   pollTimer.unref();
 
   const firstRun = setTimeout(() => {
-    tick();
-    const tickTimer = setInterval(tick, SYNC_INTERVAL_MS);
+    periodicTick();
+    const tickTimer = setInterval(periodicTick, SYNC_INTERVAL_MS);
     tickTimer.unref();
   }, FIRST_RUN_DELAY_MS);
   firstRun.unref();

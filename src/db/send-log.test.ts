@@ -6,6 +6,37 @@ function setup() {
   return createSendLogRepo(openMailDatabase(":memory:"));
 }
 
+function setupWithDb() {
+  const db = openMailDatabase(":memory:");
+  return { db, sendLog: createSendLogRepo(db) };
+}
+
+// Seeds one reconcilable-candidate row through the repo's public API: a
+// provider message id (or none) and a status.
+function seed(
+  sendLog: ReturnType<typeof createSendLogRepo>,
+  id: string,
+  {
+    provider = "resend",
+    providerMessageId = `msg-${id}` as string | null,
+    status = null as string | null,
+  }: {
+    provider?: string;
+    providerMessageId?: string | null;
+    status?: string | null;
+  } = {},
+): void {
+  sendLog.insertSendLog({
+    id,
+    recipients: ["jane@example.com"],
+    provider,
+    requestedBy: "route",
+  });
+  if (providerMessageId !== null) {
+    sendLog.recordProviderResult(id, { providerMessageId, status });
+  }
+}
+
 describe("send log repo", () => {
   test("insertSendLog records a row with no provider result yet", () => {
     const sendLog = setup();
@@ -122,5 +153,71 @@ describe("send log repo", () => {
       status: "sent",
       providerMessageId: "resend-abc",
     });
+  });
+});
+
+describe("send log listReconcilable", () => {
+  test("returns only rows for the provider with an id and a non-terminal status", () => {
+    const sendLog = setup();
+    const keep = ["null", "sent", "queued", "scheduled", "delivery_delayed"];
+    for (const status of keep) {
+      seed(sendLog, `keep-${status}`, {
+        status: status === "null" ? null : status,
+      });
+    }
+    for (const status of [
+      "delivered",
+      "opened",
+      "clicked",
+      "bounced",
+      "complained",
+      "failed",
+      "canceled",
+      "suppressed",
+    ]) {
+      seed(sendLog, `drop-${status}`, { status });
+    }
+    // No provider message id yet, and a different provider's rows: both are
+    // out of scope for a Resend reconciliation pass.
+    seed(sendLog, "drop-no-id", { providerMessageId: null });
+    seed(sendLog, "drop-other-provider", {
+      provider: "postmark",
+      status: "sent",
+    });
+
+    const ids = sendLog
+      .listReconcilable({ provider: "resend", limit: 100 })
+      .map((row) => row.id)
+      .sort();
+
+    expect(ids).toEqual(keep.map((status) => `keep-${status}`).sort());
+  });
+
+  test("orders by updated_at ascending and caps at limit", () => {
+    const { db, sendLog } = setupWithDb();
+    seed(sendLog, "second");
+    seed(sendLog, "first");
+    seed(sendLog, "third");
+    db.run(
+      "UPDATE send_log SET updated_at = '2026-09-28T09:00:00.000Z' WHERE id = 'first'",
+    );
+    db.run(
+      "UPDATE send_log SET updated_at = '2026-09-28T10:00:00.000Z' WHERE id = 'second'",
+    );
+    db.run(
+      "UPDATE send_log SET updated_at = '2026-09-28T11:00:00.000Z' WHERE id = 'third'",
+    );
+
+    expect(
+      sendLog
+        .listReconcilable({ provider: "resend", limit: 100 })
+        .map((r) => r.id),
+    ).toEqual(["first", "second", "third"]);
+
+    expect(
+      sendLog
+        .listReconcilable({ provider: "resend", limit: 2 })
+        .map((r) => r.id),
+    ).toEqual(["first", "second"]);
   });
 });

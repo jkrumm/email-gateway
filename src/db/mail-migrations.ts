@@ -138,6 +138,16 @@ export const MAIL_MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Wave 7: src/jobs/reconcile-send-log.ts's listReconcilable runs every
+    // 5 minutes, filtering send_log by provider and ordering by updated_at —
+    // a pattern neither of version 1's send_log indexes cover.
+    version: 2,
+    up: `
+      CREATE INDEX idx_send_log_provider_updated_at
+        ON send_log (provider, updated_at);
+    `,
+  },
 ];
 
 export function runMailMigrations(

@@ -3,8 +3,10 @@ import type {
   AccountInfo,
   MessageDetail,
   MessageList,
+  SendLogList,
   Stats,
   SubmissionList,
+  TemplateList,
 } from "./types";
 
 function toError(error: unknown): Error {
@@ -81,4 +83,37 @@ export async function listAccounts(): Promise<AccountInfo[]> {
   const { data, error } = await api.api.accounts.get();
   if (error) throw toError(error);
   return data as unknown as AccountInfo[];
+}
+
+export async function listTemplates(): Promise<TemplateList> {
+  const { data, error } = await api.api.templates.get();
+  if (error) throw toError(error);
+  return data as unknown as TemplateList;
+}
+
+export async function testSendTemplate(
+  id: string,
+): Promise<{ enqueued: boolean; sendLogId: string; jobId: string }> {
+  const { data, error } = await api.api.templates({ id })["test-send"].post();
+  if (error) throw toError(error);
+  return data as unknown as {
+    enqueued: boolean;
+    sendLogId: string;
+    jobId: string;
+  };
+}
+
+export interface SendLogFilters {
+  templateId?: string;
+  cursor?: string;
+}
+
+export async function listSendLog(
+  filters: SendLogFilters = {},
+): Promise<SendLogList> {
+  const { data, error } = await api.api["send-log"].get({
+    query: { limit: 50, ...filters },
+  });
+  if (error) throw toError(error);
+  return data as unknown as SendLogList;
 }

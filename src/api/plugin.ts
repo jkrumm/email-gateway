@@ -1,3 +1,4 @@
+import { render } from "@react-email/render";
 import { Elysia, t } from "elysia";
 import { timingSafeEqualStrings } from "../auth";
 import { env } from "../env";
@@ -12,6 +13,8 @@ import {
   accountsRepo as defaultAccounts,
   messagesRepo as defaultMessages,
   mailSubmissionsRepo as defaultMailSubmissions,
+  sendLogRepo as defaultSendLog,
+  templatesRepo as defaultTemplates,
 } from "../db/mail-index";
 import type { AccountsRepo } from "../db/accounts";
 import type {
@@ -26,6 +29,10 @@ import type {
   SubmissionSource,
   Verdict,
 } from "../db/mail-submissions";
+import type { SendLogRepo } from "../db/send-log";
+import type { TemplatesRepo } from "../db/templates";
+import { findTemplateEntry, renderTemplateElement } from "../emails/registry";
+import type { SendJobPayload } from "../jobs/send";
 import { enqueueSyncTick, jobQueue as defaultJobQueue } from "../jobs/queue";
 import type { JobQueue } from "../db/jobs";
 import { accountIdFor } from "../sync/ingest";
@@ -34,6 +41,7 @@ import {
   providerForAccountId as defaultProviderFor,
 } from "../providers/from-env";
 import type { MailProvider, MessageRef } from "../providers/port";
+import { DEFAULT_FROM } from "../utils/send-mail";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60_000;
 
@@ -207,6 +215,18 @@ const submissionsListQuery = t.Object({
   cursor: t.Optional(t.String()),
 });
 
+const sendLogListQuery = t.Object({
+  templateId: t.Optional(t.String()),
+  limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100 })),
+  cursor: t.Optional(t.String()),
+});
+
+// `width` is advisory only: the client uses it to frame its own preview, so
+// the server validates it as a number and otherwise ignores it.
+const templatePreviewQuery = t.Object({
+  width: t.Optional(t.Numeric()),
+});
+
 const searchQuery = t.Object({
   q: t.String(),
   account: t.Optional(t.String()),
@@ -232,6 +252,8 @@ export function createApiRoutes({
   mailSubmissions = defaultMailSubmissions,
   accounts = defaultAccounts,
   jobs = defaultJobQueue,
+  templates = defaultTemplates,
+  sendLog = defaultSendLog,
   providerFor = defaultProviderFor,
   configuredProviders = defaultConfiguredProviders,
 }: {
@@ -244,6 +266,8 @@ export function createApiRoutes({
   mailSubmissions?: MailSubmissionsRepo;
   accounts?: AccountsRepo;
   jobs?: JobQueue;
+  templates?: TemplatesRepo;
+  sendLog?: SendLogRepo;
   providerFor?: (accountId: string) => MailProvider | null;
   configuredProviders?: () => MailProvider[];
 }) {
@@ -488,6 +512,79 @@ export function createApiRoutes({
         }
       },
       { query: submissionsListQuery },
+    )
+    .get("/templates", () => templates.listTemplates())
+    .get(
+      "/templates/:id/preview",
+      async ({ params, set }) => {
+        const entry = findTemplateEntry(params.id);
+        if (!entry) {
+          set.status = 404;
+          return { error: "not_found" };
+        }
+
+        const html = await render(renderTemplateElement(entry));
+        set.headers["content-type"] = "text/html; charset=utf-8";
+        // Belt-and-suspenders against the client's own iframe sandboxing:
+        // this response is safe to load directly (a bookmark, a middle-click
+        // "open in new tab" on the raw-HTML link) regardless of how it's
+        // reached, not just when embedded through the sandboxed iframe.
+        set.headers["content-security-policy"] = "sandbox";
+        return html;
+      },
+      { params: t.Object({ id: t.String() }), query: templatePreviewQuery },
+    )
+    .post(
+      "/templates/:id/test-send",
+      ({ params, set }) => {
+        const entry = findTemplateEntry(params.id);
+        if (!entry) {
+          set.status = 404;
+          return { error: "not_found" };
+        }
+
+        const sendLogId = crypto.randomUUID();
+        sendLog.insertSendLog({
+          id: sendLogId,
+          templateId: entry.id,
+          recipients: [env.RECEIVER_EMAIL],
+          provider: "resend",
+          requestedBy: "test-send",
+        });
+        const jobId = jobs.enqueue({
+          kind: "send",
+          payload: {
+            id: sendLogId,
+            from: DEFAULT_FROM,
+            to: env.RECEIVER_EMAIL,
+            subject: `Test send: ${entry.name}`,
+            templateName: entry.id,
+            templateProps: entry.previewProps,
+          } satisfies SendJobPayload,
+          subjectKey: sendLogId,
+        });
+        templates.recordTestSend(entry.id);
+
+        return { enqueued: true, sendLogId, jobId };
+      },
+      { params: t.Object({ id: t.String() }) },
+    )
+    .get(
+      "/send-log",
+      ({ query, set }) => {
+        try {
+          return sendLog.listSendLog({
+            templateId: query.templateId,
+            limit: query.limit,
+            cursor: query.cursor,
+          });
+        } catch (error) {
+          if (!isInvalidCursorError(error)) throw error;
+          set.status = 400;
+          return { error: "invalid_cursor" };
+        }
+      },
+      { query: sendLogListQuery },
     )
     .get(
       "/stats",

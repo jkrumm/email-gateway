@@ -204,6 +204,44 @@ later wave doesn't rediscover them by surprise.
   IMAP's CONDSTORE extension has no server-side LIMIT, so a real fix needs a
   windowed changedSince strategy (e.g. paging by UID range with `changedSince`
   applied per window), not a client-side slice.
+- **A `send` job that exhausts its nine attempts never writes back to
+  `send_log` (Wave 7).** `src/jobs/send.ts`'s handler only calls
+  `sendLog.recordProviderResult()` on success; a job the runner eventually
+  marks terminally `failed` leaves the row's `status` at whatever it was
+  (`null` for a fresh row) forever — `listReconcilable` also can't pick it up,
+  since it requires `provider_message_id IS NOT NULL`, which a send that
+  never reached Resend never gets. The Templates page's send log then shows a
+  permanently-failed send as an indistinguishable "queued" badge. Real fix
+  needs the job runner to expose a terminal-failure hook a handler can use to
+  write domain-specific state, not something specific to `send_log`.
+- **A renamed or removed template id leaves an orphaned `templates` row
+  (Wave 7).** `syncTemplateRegistry()` only upserts every current
+  `emailRegistry` entry on boot; it never deletes a row whose id is no longer
+  in the registry. `GET /api/templates` (and the client's list page) reads
+  the DB, so a stale row keeps showing up — and then 404s on
+  preview/test-send, which resolve against the live registry, not the DB.
+  Real fix: prune rows whose id isn't in the current registry as part of the
+  same boot-time sync (a delete-then-upsert in one transaction), or have the
+  list endpoint read the registry directly instead of the DB.
+- **`reconcile_send_log`'s per-call timeout can't cancel the underlying
+  request (Wave 7).** `resend@6.28.1`'s `emails.get(id)` takes no options at
+  all — no `AbortSignal`, no fetch override — so `src/jobs/reconcile-send-log.ts`'s
+  timeout only stops _awaiting_ a hung call; the socket stays open in the
+  background past it. Bounded, not unbounded — `RECONCILE_BATCH_LIMIT` (25)
+  caps how many can accumulate per 5-minute pass — but a sustained total
+  outage to Resend's API would still leak sockets over many hours. Real fix:
+  bypass the SDK with a raw, abortable `fetch()` against Resend's REST API for
+  this one read, which is more surface than this job's read path has
+  warranted so far.
+- **`POST /api/templates/:id/test-send`'s three writes aren't atomic
+  (Wave 7).** `insertSendLog` → `jobs.enqueue` → `recordTestSend` run as
+  separate statements with no rollback; if either of the last two throws, the
+  send_log row from the first write is left behind describing a send that
+  never happened (and a retry mints a fresh row rather than reusing it).
+  Mirrors the same accepted tension in Wave 4's submission-then-Jev-enqueue
+  path — not fixed there either, for the same reason: wrapping a
+  non-authoritative side effect in the same transaction as the row it
+  describes risks rolling back state that's otherwise fine on its own.
 
 ## Client
 

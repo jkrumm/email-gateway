@@ -33,6 +33,11 @@ export interface ListSendLogFilters {
   cursor?: string;
 }
 
+export interface ListReconcilableInput {
+  provider: string;
+  limit: number;
+}
+
 export interface ListSendLogResult {
   data: SendLogEntry[];
   nextCursor: string | null;
@@ -182,7 +187,36 @@ export function createSendLogRepo(db: Database) {
     return { data, nextCursor };
   }
 
-  return { insertSendLog, recordProviderResult, listSendLog, getSendLog };
+  // Rows a reconciliation pass still has to refresh: a known provider message
+  // id whose status has not yet reached a terminal value. Terminal statuses
+  // are never rechecked again, so a delivered/bounced/… row leaves this list
+  // for good. Oldest-updated first, so successive runs make forward progress
+  // instead of repeatedly reading the same head of the queue.
+  function listReconcilable({
+    provider,
+    limit,
+  }: ListReconcilableInput): SendLogEntry[] {
+    const capped = Math.min(Math.max(limit, 1), MAX_LIST_LIMIT);
+    return db
+      .query<SendLogRow, [string, number]>(
+        `SELECT * FROM send_log
+         WHERE provider = ?
+           AND provider_message_id IS NOT NULL
+           AND (status IS NULL OR status IN ('sent', 'queued', 'scheduled', 'delivery_delayed'))
+         ORDER BY updated_at ASC
+         LIMIT ?`,
+      )
+      .all(provider, capped)
+      .map(toSendLogEntry);
+  }
+
+  return {
+    insertSendLog,
+    recordProviderResult,
+    listSendLog,
+    getSendLog,
+    listReconcilable,
+  };
 }
 
 export type SendLogRepo = ReturnType<typeof createSendLogRepo>;

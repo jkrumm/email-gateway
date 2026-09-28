@@ -684,21 +684,119 @@ the second Traefik router and publishing the hostname stay Wave 9
       green on format, typecheck (now covering the client too — new since
       this wave), and `bun test` (416 pass).
 
-## Wave 7 — Templates and the send log <!-- status: active -->
+## Wave 7 — Templates and the send log <!-- status: done -->
 
-- [ ] `templates` table seeded from `src/emails/registry.ts` (id, name, preview
+- [x] `templates` table seeded from `src/emails/registry.ts` (id, name, preview
       props); the routes' `source` ids come from the registry, not hand-typed
       strings (drift test).
-- [ ] `send_log` rows for every send (template id, recipients, provider id,
+- [x] `send_log` rows for every send (template id, recipients, provider id,
       status/last event, requested by: route / test-send / agent), filled in
       by Resend history sync.
-- [ ] `POST /api/templates/:id/test-send` (to the owner's address, `send` job);
+- [x] `POST /api/templates/:id/test-send` (to the owner's address, `send` job);
       `GET /api/templates`, `GET /api/templates/:id/preview?width=`.
-- [ ] Client pages: Templates (preview at 375/600, test-send) and Send log per
+- [x] Client pages: Templates (preview at 375/600, test-send) and Send log per
       template; README §Endpoints/§Templates; `AGENTS.md` file map.
-      **Left behind:**
+      **Left behind:** A priority fix landed first, as its own commit
+      (`00ca5b4`, before this wave's own diff): a clean `cd client && bun run
+build` failed because basalt-ui 1.30.2 imports `motion/react` eagerly
+      (its own bundled docs: "motion is required, not optional") while
+      `client/package.json` never declared it as a dependency — it only built
+      in the Wave 6 checkout by accident (a stale local `node_modules`).
+      Verified independently (grepped basalt-ui's own comment, confirmed the
+      dep was absent, rebuilt clean before and after) before applying the fix.
 
-## Wave 8 — Agent API: REST v2 complete + MCP + Hermes <!-- status: pending -->
+      Built across two in-place `mcp__sideclaw__dispatch` episodes (backend,
+      then client) plus one round of hand fixes. `TEMPLATE_IDS` in
+      `src/emails/registry.ts` is the drift-proof source of truth for every
+      template id — `findTemplateEntry`/`renderTemplateElement` (also new)
+      are the one shared lookup/render every caller (`src/api/plugin.ts`,
+      `src/jobs/send.ts`) now goes through instead of three separate copies.
+      `syncTemplateRegistry()` (new `src/emails/sync-registry.ts`) pushes the
+      registry into `templates` on every boot, wrapped in try/catch in
+      `src/index.ts` so a boot-time DB hiccup there can't take
+      `startJobSystem()` down with it. `send_log` reconciliation is a new
+      `reconcile_send_log` job (`src/jobs/reconcile-send-log.ts`) riding the
+      same 5-minute timer as `sync_tick`: `sendLogRepo.listReconcilable()`
+      (new) finds rows still short of a terminal Resend `last_event`, re-reads
+      `emails.get()` per row under a 10s timeout, and touches `updated_at` on
+      failure too so a permanently-failing row (e.g. `RESEND_ADMIN_API_KEY`
+      unset in prod today) rotates to the back of the queue instead of
+      starving every newer row forever. A new migration (version 2 —
+      version 1 already shipped, so this is additive, not an edit) adds
+      `idx_send_log_provider_updated_at` for that query. Four new API routes
+      (`GET /api/templates`, `GET /api/templates/:id/preview` — now sends
+      `Content-Security-Policy: sandbox` so it's safe to load directly, not
+      just through the client's sandboxed iframe — `POST
+      /api/templates/:id/test-send`, `GET /api/send-log`) and two new client
+      pages (`templates.tsx`, `templates.$id.tsx`: a 375/600 width toggle, a
+      test-send button with real error surfacing, and the per-template send
+      log with a truncation note past 50 rows) round it out.
+
+      **Two `/review` rounds ran**, each catching real bugs the other missed.
+      Round 1 (2 blocking): `reconcile_send_log`'s per-row catch never
+      advanced the failing row's `updated_at`, so a stuck row (guaranteed in
+      prod today, since `RESEND_ADMIN_API_KEY` is unwired) would occupy every
+      future batch forever — fixed by touching `updated_at` on failure too,
+      in its own nested try/catch so a DB error there can't abort the rest of
+      the batch; and up to 25 sequential, un-timeboxed Resend calls could
+      stall the job system's single serial drain loop indefinitely — fixed
+      with a 10s per-call timeout. Round 2 (1 blocking, applied where
+      fixable): the timeout wrapper never cleared its losing timer (now
+      does, and `unref()`s it) — but genuinely **cannot** cancel the
+      underlying HTTP request, since `resend@6.28.1`'s `emails.get(id)` has
+      no options parameter at all, no `AbortSignal`; documented as an
+      accepted, SDK-constrained gap (bounded by `RECONCILE_BATCH_LIMIT`, not
+      unbounded) rather than bypassing the SDK with a raw `fetch()` for one
+      job's read path. Also fixed from round 2: the "Open raw HTML" link
+      bypassed the iframe's `sandbox=""` on direct navigation (fixed via the
+      CSP header above, which protects the endpoint regardless of how it's
+      reached); `findTemplateEntry`/`renderTemplateElement` extracted to kill
+      a 3-way duplicate; `satisfies SendJobPayload` on the test-send job
+      payload; the client's nested ternaries flattened into small
+      early-return components (`PreviewFrame`, `SendLogSection`); the send-log
+      URL now goes through one `encodeURIComponent`-safe helper; a missing
+      `["send-log", id]` query invalidation on test-send success (4 reviewers
+      independently caught this one); the "queued" badge → Mantine's
+      `loading` prop and real error-message surfacing on the test-send
+      button; an `aria-label` on the width `SegmentedControl`; a missing
+      `suppressed` case in `listReconcilable`'s terminal-status test and the
+      README's prose (Resend's `last_event` union has 12 values, not the 11
+      first assumed). `src/db/mail-client.test.ts`'s hardcoded
+      `user_version` expectation bumped from 1 to 2 for the new migration.
+
+      Three findings judged genuine design gaps rather than this wave's bugs,
+      documented in `docs/architecture.md`'s Known gaps section instead of
+      fixed (matching Wave 4/5's own precedent): a `send` job that exhausts
+      its nine attempts never writes back to `send_log`, so a permanently
+      failed send renders as an indistinguishable "queued" badge; a renamed
+      or removed template id leaves an orphaned `templates` row that 404s on
+      click; and `test-send`'s three writes (`insertSendLog` →
+      `jobs.enqueue` → `recordTestSend`) aren't atomic, mirroring the same
+      accepted tension in Wave 4's submission-then-Jev-enqueue path. Also
+      accepted, not fixed: splitting `src/api/plugin.ts`'s templates/send-log
+      routes into their own module (two reviewers + fallow flagged the
+      file's growth; Wave 6's own history shows a careless Elysia route-chain
+      split breaks Eden's type inference, and this is quality, not a bug) and
+      the pre-existing cross-file `send-log.ts`/`mail-submissions.ts`/
+      `messages.ts`/`submissions.ts` repo-boilerplate duplication fallow
+      flags a fourth copy of. `fallow`'s remaining findings — the
+      pre-existing unused type exports and `MAIL_MIGRATIONS` export
+      (repo-interface surface, same triage as every prior wave), the `motion`
+      "unused dependency" (a false positive: basalt-ui imports it internally,
+      confirmed by rebuilding without it and watching the build fail), the
+      pre-existing `plugin.ts` auth-guard complexity and
+      `messagesListQuery`/`emailsListQuery` clone (Wave 6), and CRAP-score
+      complexity flags on two small client functions (`statusColor`,
+      `SendLogSection`) that are an artifact of this project having zero
+      client-side test infrastructure, not a real design problem — are judged
+      not worth another round, matching this plan's Wave 2–6 precedent.
+      `/check` is green: format, typecheck (server + client), 432 tests,
+      client build. `RESEND_ADMIN_API_KEY` remains unwired in prod (AGENTS.md)
+      — the delivery lead should wire it before `reconcile_send_log`'s first
+      real pass, or every row will fail with a restricted-key error (handled
+      gracefully, but reconciliation is a no-op until then).
+
+## Wave 8 — Agent API: REST v2 complete + MCP + Hermes <!-- status: active -->
 
 Follows §Agent API. `@modelcontextprotocol/server` 2.0.0 via `createMcpHandler`
 exactly as `research-gateway/src/routes/mcp.ts`.

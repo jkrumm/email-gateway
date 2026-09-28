@@ -1,8 +1,7 @@
-import { createElement, type ComponentType } from "react";
 import { resend as defaultResendClient } from "../utils/resend";
 import { sendLogRepo as defaultSendLog } from "../db/mail-index";
 import type { SendLogRepo } from "../db/send-log";
-import { emailRegistry } from "../emails/registry";
+import { findTemplateEntry, renderTemplateElement } from "../emails/registry";
 import type { JobHandler } from "./runner";
 
 // The `send` job kind's queue-plumbing (docs/architecture.md §Jobs: "sends
@@ -44,21 +43,14 @@ export function createSendHandler({
     const existing = sendLog.getSendLog(input.id);
     if (existing?.status === "sent" && existing.providerMessageId) return;
 
-    const entry = emailRegistry.find((item) => item.id === input.templateName);
+    const entry = findTemplateEntry(input.templateName);
     if (!entry) {
       throw new Error(
         `send job ${input.id}: unknown template "${input.templateName}"`,
       );
     }
 
-    // templateProps has no per-template schema until Wave 7/8's template
-    // registry grows one — a single cast down to each entry's own component
-    // type is the accepted gap until then (narrower than `never`, which
-    // disabled type checking on this call entirely).
-    const element = createElement(
-      entry.component as unknown as ComponentType<Record<string, unknown>>,
-      input.templateProps as Record<string, unknown>,
-    );
+    const element = renderTemplateElement(entry, input.templateProps);
 
     // Resend's own idempotency key (CreateEmailRequestOptions.idempotencyKey,
     // node_modules/resend/dist/index.d.mts) is the second line of defense: if

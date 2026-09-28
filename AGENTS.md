@@ -121,11 +121,16 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   `src/app.ts` mounts routes; `src/env.ts` zod env (parsed at import — modules
   that import it are untestable by design, factor pure logic out)
 - `src/routes/{fpp,sy-serendipity}.ts` + `src/auth.ts` — the public send routes
-- `src/emails/` React Email templates + `registry.ts`; `src/layouts/`;
-  `src/utils/send-mail.ts` (Resend send + a `send_log` row via
-  `src/db/mail-index.ts`'s `sendLogRepo` — no longer touches the old `emails`
-  table). The registry's preview page was retired with the SSR admin; the
-  Templates page returns in Wave 7
+- `src/emails/` React Email templates + `registry.ts` (Wave 7: `TEMPLATE_IDS`
+  is the single source of truth for every template id — the send routes and
+  the API reference it, never a hand-typed string; `sync-registry.ts`'s
+  `syncTemplateRegistry()` pushes the registry into the `templates` table on
+  every boot); `src/layouts/`; `src/utils/send-mail.ts` (Resend send + a
+  `send_log` row via `src/db/mail-index.ts`'s `sendLogRepo` — no longer
+  touches the old `emails` table). The registry's preview page was retired
+  with the SSR admin; the client's Templates page (Wave 7) replaces it, now
+  backed by `GET /api/templates(/:id/preview)` and
+  `POST /api/templates/:id/test-send`
 - `src/spam/` contact-form gate (`gate.ts` deadline race, enqueues a
   `jev_submission` job on the new `mail.sqlite` `submissions` table instead of
   the old in-memory kick; `classify.ts`, `jev-judge.ts`)
@@ -139,9 +144,13 @@ required env and `DATA_DIR=":memory:"`, so tests never need secrets.
   §Jobs), live against `mail.sqlite` via `src/jobs/queue.ts`'s `jobQueue`
   singleton. `src/jobs/register.ts` is the boot composition root
   (`startJobSystem`): registers `sync_tick`/`classify`/`jev_message`/
-  `jev_submission`/`send`, reaps this host's stale claims once, polls
-  `runner.drain()`, and wires IMAP `watch()`/IDLE to kick a debounced
-  `sync_tick`. `src/jobs/classify.ts`, `src/jobs/jev.ts`, `src/jobs/send.ts`
+  `jev_submission`/`send`/`reconcile_send_log` (Wave 7), reaps this host's
+  stale claims once, polls `runner.drain()`, and wires IMAP `watch()`/IDLE to
+  kick a debounced `sync_tick`; `reconcile_send_log` rides the same 5-minute
+  timer as `sync_tick` (`enqueueReconcileSendLog`, `src/jobs/queue.ts`).
+  `src/jobs/classify.ts`, `src/jobs/jev.ts`, `src/jobs/send.ts`,
+  `src/jobs/reconcile-send-log.ts` (Wave 7: re-reads Resend's own status for
+  `send_log` rows short of a terminal state, via `sendLogRepo.listReconcilable`)
   are the handler factories; `runner.ts`'s `runOnce` now classifies a caught
   error via `isRateLimitError` and calls `fail({ rateLimited: true })` so a
   429 parks on `jobs.rate_limits`'s own escalating ladder (1m → 5m → 15m →

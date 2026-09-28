@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { ReactElement } from "react";
 import { render } from "react-email";
-import { emailRegistry, type EmailTemplateEntry } from "./registry";
+import {
+  emailRegistry,
+  TEMPLATE_IDS,
+  type EmailTemplateEntry,
+} from "./registry";
 
 function testEntryRendersToHtml<Props>(entry: EmailTemplateEntry<Props>) {
   test(`${entry.id} renders to non-empty html`, async () => {
@@ -18,4 +22,10 @@ describe("email registry", () => {
   testEntryRendersToHtml(emailRegistry[1]);
   testEntryRendersToHtml(emailRegistry[2]);
   testEntryRendersToHtml(emailRegistry[3]);
+
+  test("every registry entry id comes from TEMPLATE_IDS, and nothing is missing", () => {
+    expect(emailRegistry.map((entry) => entry.id).sort()).toEqual(
+      Object.values(TEMPLATE_IDS).sort(),
+    );
+  });
 });
