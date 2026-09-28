@@ -155,7 +155,7 @@ behaviour change for callers: the existing sync keeps working behind the port.
       moved); the three unused `@fontsource-variable/*` deps (pre-existing,
       unrelated to mail).
 
-## Wave 3 — One job table <!-- status: pending -->
+## Wave 3 — One job table <!-- status: active -->
 
 Follows §Jobs. Existing schema stays; only queue state moves.
 
