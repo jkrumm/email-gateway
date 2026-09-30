@@ -1,19 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Alert,
-  Badge,
-  Card,
-  Group,
-  Loader,
-  Select,
-  Stack,
-  Switch,
-  Table,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Alert, Badge, Loader, Stack, Table, Text } from "@mantine/core";
+import { createLocalStore, PageBar } from "basalt-ui";
+import { FilterSet, SelectFilter, ToggleFilter } from "basalt-ui/controls";
+import { field } from "basalt-ui/state";
 import { listAccounts, listMessages } from "../lib/api";
 import { formatDate } from "../lib/format";
 import { compareMessages, isUnread, messageRowView } from "../lib/messages";
@@ -22,6 +13,7 @@ import { DataTable } from "../components/DataTable";
 export const Route = createFileRoute("/inbox")({ component: InboxPage });
 
 const CATEGORIES = [
+  "all",
   "inquiry",
   "customer",
   "support",
@@ -33,16 +25,30 @@ const CATEGORIES = [
   "spam",
   "personal",
   "other",
-];
+] as const;
 
-const PRIORITIES = ["high", "medium", "low"];
+const PRIORITIES = ["all", "high", "medium", "low"] as const;
+
+const inboxStore = createLocalStore({
+  key: "email-gateway:inbox",
+  fields: {
+    needsMe: field.boolean(false),
+    unreadOnly: field.boolean(false),
+    category: field.enum(CATEGORIES, "all"),
+    priority: field.enum(PRIORITIES, "all"),
+    account: field.string(),
+  },
+}).labels({
+  category: { all: "All" },
+  priority: { all: "All" },
+});
 
 function InboxPage() {
-  const [needsMe, setNeedsMe] = useState(false);
-  const [category, setCategory] = useState<string | null>(null);
-  const [account, setAccount] = useState<string | null>(null);
-  const [priority, setPriority] = useState<string | null>(null);
-  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [needsMe] = inboxStore.field.needsMe.use();
+  const [unreadOnly] = inboxStore.field.unreadOnly.use();
+  const [category] = inboxStore.field.category.use();
+  const [priority] = inboxStore.field.priority.use();
+  const [account] = inboxStore.field.account.use();
 
   const accountsQuery = useQuery({
     queryKey: ["accounts"],
@@ -54,8 +60,8 @@ function InboxPage() {
     queryFn: () =>
       listMessages({
         needs_me: needsMe ? "1" : undefined,
-        category: category ?? undefined,
-        account: account ?? undefined,
+        category: category === "all" ? undefined : category,
+        account: account || undefined,
         limit: 100,
       }),
   });
@@ -65,67 +71,55 @@ function InboxPage() {
     return all
       .filter((message) => (unreadOnly ? isUnread(message) : true))
       .filter((message) =>
-        priority ? message.classification?.priority === priority : true,
+        priority === "all"
+          ? true
+          : message.classification?.priority === priority,
       )
       .sort(compareMessages);
   }, [messagesQuery.data, unreadOnly, priority]);
 
-  const accountOptions =
-    accountsQuery.data?.map((entry) => ({
+  const accountOptions = [
+    { value: "", label: "All" },
+    ...(accountsQuery.data?.map((entry) => ({
       value: entry.id,
       label: `${entry.provider} · ${entry.address}`,
-    })) ?? [];
+    })) ?? []),
+  ];
 
   return (
     <Stack>
-      <Group justify="space-between">
-        <Title order={2}>Inbox</Title>
-        <Text size="sm" c="dimmed">
-          {rows.length} message{rows.length === 1 ? "" : "s"}
-        </Text>
-      </Group>
+      <PageBar
+        title="Inbox"
+        filters={
+          <FilterSet>
+            <ToggleFilter field={inboxStore.field.needsMe} label="Needs me" />
+            <ToggleFilter
+              field={inboxStore.field.unreadOnly}
+              label="Unread only"
+            />
+            <SelectFilter
+              field={inboxStore.field.category}
+              label="Category"
+              clearable
+            />
+            <SelectFilter
+              field={inboxStore.field.priority}
+              label="Priority"
+              clearable
+            />
+            <SelectFilter
+              field={inboxStore.field.account}
+              label="Account"
+              options={accountOptions}
+              clearable
+            />
+          </FilterSet>
+        }
+      />
 
-      <Card withBorder padding="md">
-        <Group align="flex-end" gap="md">
-          <Switch
-            label="Needs me"
-            checked={needsMe}
-            onChange={(event) => setNeedsMe(event.currentTarget.checked)}
-          />
-          <Switch
-            label="Unread only"
-            checked={unreadOnly}
-            onChange={(event) => setUnreadOnly(event.currentTarget.checked)}
-          />
-          <Select
-            label="Category"
-            placeholder="All"
-            clearable
-            data={CATEGORIES}
-            value={category}
-            onChange={setCategory}
-            w={180}
-          />
-          <Select
-            label="Priority"
-            placeholder="All"
-            clearable
-            data={PRIORITIES}
-            value={priority}
-            onChange={setPriority}
-            w={140}
-          />
-          <Select
-            label="Account"
-            placeholder="All"
-            clearable
-            data={accountOptions}
-            value={account}
-            onChange={setAccount}
-            w={260}
-          />
-        </Group>
-      </Card>
+      <Text size="sm" c="dimmed">
+        {rows.length} message{rows.length === 1 ? "" : "s"}
+      </Text>
 
       {messagesQuery.isError ? (
         <Alert color="red">Could not load messages.</Alert>

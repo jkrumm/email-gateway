@@ -37,7 +37,12 @@ function AccountsPage() {
       <Title order={2}>Accounts &amp; health</Title>
 
       {stats ? (
-        <SimpleGrid cols={{ base: 1, sm: 3 }}>
+        <SimpleGrid
+          type="container"
+          // WORKAROUND: 480px = CONTAINER_CLASSES.regular, which basalt-ui/tokens
+          // does not export at 1.32.0.
+          cols={{ base: 1, "480px": 3 }}
+        >
           <Card withBorder padding="md">
             <Text size="sm" c="dimmed">
               Messages (30d)

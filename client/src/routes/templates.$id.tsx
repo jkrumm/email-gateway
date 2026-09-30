@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   useMutation,
@@ -13,12 +12,14 @@ import {
   Card,
   Group,
   Loader,
-  SegmentedControl,
   Stack,
   Table,
   Text,
   Title,
 } from "@mantine/core";
+import { createLocalStore, WidgetHeader } from "basalt-ui";
+import { ViewTabs } from "basalt-ui/controls";
+import { field } from "basalt-ui/state";
 import { listSendLog, listTemplates, testSendTemplate } from "../lib/api";
 import { formatDate } from "../lib/format";
 import { DataTable } from "../components/DataTable";
@@ -34,6 +35,14 @@ function statusColor(status: string | null): string {
   if (status === "sent") return "blue";
   return "gray";
 }
+
+// Memory lane: the preview width never needs to be linkable or survive a reload.
+const previewStore = createLocalStore({
+  key: "email-gateway:template-preview",
+  fields: {
+    width: field.enum(["375", "600"], "600", { persist: false }),
+  },
+});
 
 function templatePreviewPath(id: string, width: string): string {
   return `/api/templates/${encodeURIComponent(id)}/preview?width=${encodeURIComponent(width)}`;
@@ -54,9 +63,7 @@ function TemplatePreviewCard({
   testSendError: Error | null;
   testSendSucceeded: boolean;
 }) {
-  // TanStack Router search params would need a schema for one field; local
-  // state is simpler for a value that never needs to be linkable.
-  const [width, setWidth] = useState("600");
+  const [width] = previewStore.field.width.use();
 
   const previewUrl = templatePreviewPath(id, width);
   const previewQuery = useQuery({
@@ -77,23 +84,14 @@ function TemplatePreviewCard({
   return (
     <Card withBorder padding="md">
       <Stack gap="sm">
-        <Group justify="space-between" align="flex-start">
-          <div>
-            <Title order={3}>{template.name}</Title>
-            <Text size="sm" c="dimmed">
-              {template.id}
-            </Text>
-          </div>
-          <SegmentedControl
-            aria-label="Preview width"
-            value={width}
-            onChange={setWidth}
-            data={[
-              { label: "375", value: "375" },
-              { label: "600", value: "600" },
-            ]}
-          />
-        </Group>
+        <WidgetHeader
+          tier="widget"
+          title={template.name}
+          subtitle={template.id}
+          actions={
+            <ViewTabs field={previewStore.field.width} label="Preview width" />
+          }
+        />
 
         <Group gap="xs" align="center">
           <Button size="xs" loading={testSendPending} onClick={onTestSend}>
