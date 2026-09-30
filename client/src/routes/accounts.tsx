@@ -12,6 +12,7 @@ import {
   Text,
   Title,
 } from "@mantine/core";
+import { CONTAINER_CLASSES } from "basalt-ui/tokens";
 import { getStats, listAccounts } from "../lib/api";
 import { formatDate } from "../lib/format";
 
@@ -39,9 +40,7 @@ function AccountsPage() {
       {stats ? (
         <SimpleGrid
           type="container"
-          // WORKAROUND: 480px = CONTAINER_CLASSES.regular, which basalt-ui/tokens
-          // does not export at 1.32.0.
-          cols={{ base: 1, "480px": 3 }}
+          cols={{ base: 1, [`${CONTAINER_CLASSES.regular}px`]: 3 }}
         >
           <Card withBorder padding="md">
             <Text size="sm" c="dimmed">
