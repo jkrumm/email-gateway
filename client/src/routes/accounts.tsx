@@ -12,6 +12,7 @@ import {
   Text,
   Title,
 } from "@mantine/core";
+import { PageBar } from "basalt-ui";
 import { CONTAINER_CLASSES } from "basalt-ui/tokens";
 import { getStats, listAccounts } from "../lib/api";
 import { formatDate } from "../lib/format";
@@ -35,14 +36,14 @@ function AccountsPage() {
 
   return (
     <Stack>
-      <Title order={2}>Accounts &amp; health</Title>
+      <PageBar title="Accounts & health" />
 
       {stats ? (
         <SimpleGrid
           type="container"
           cols={{ base: 1, [`${CONTAINER_CLASSES.regular}px`]: 3 }}
         >
-          <Card withBorder padding="md">
+          <Card padding="md">
             <Text size="sm" c="dimmed">
               Messages (30d)
             </Text>
@@ -53,7 +54,7 @@ function AccountsPage() {
               {stats.messages.inbound} in / {stats.messages.outbound} out
             </Text>
           </Card>
-          <Card withBorder padding="md">
+          <Card padding="md">
             <Text size="sm" c="dimmed">
               Jobs pending
             </Text>
@@ -64,7 +65,7 @@ function AccountsPage() {
               {stats.jobs.failed} failed
             </Text>
           </Card>
-          <Card withBorder padding="md">
+          <Card padding="md">
             <Text size="sm" c="dimmed">
               Accounts
             </Text>
@@ -75,7 +76,7 @@ function AccountsPage() {
         </SimpleGrid>
       ) : null}
 
-      <Card withBorder padding="md">
+      <Card padding="md">
         <Group justify="space-between" mb="sm">
           <Title order={4}>Configured accounts</Title>
         </Group>

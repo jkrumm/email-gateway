@@ -51,7 +51,7 @@ function ClassificationPanel({
 }) {
   const rows = classificationRows(classification);
   return (
-    <Card withBorder padding="md">
+    <Card padding="md">
       <Title order={4} mb="xs">
         Classification
       </Title>
@@ -150,7 +150,7 @@ function MessageHeader({
   onMove: (toMailbox: string) => void;
 }) {
   return (
-    <Card withBorder padding="md">
+    <Card padding="md">
       <Stack gap="xs">
         <Title order={3}>{message.subject ?? "(no subject)"}</Title>
         <Group gap="xs">
@@ -181,7 +181,7 @@ function MessageHeader({
 function MessageBody({ body }: { body: MessageDetail["body"] }) {
   const { html, text } = body ?? { html: null, text: null };
   return (
-    <Card withBorder padding={0}>
+    <Card padding={0}>
       <Divider />
       {html ? (
         // Untrusted mail HTML: sandbox="" disables scripts, forms and

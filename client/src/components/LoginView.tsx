@@ -33,7 +33,7 @@ export function LoginView() {
 
   return (
     <Center h="100vh">
-      <Card withBorder padding="lg" w={340}>
+      <Card padding="lg" w={340}>
         <form onSubmit={handleSubmit}>
           <Stack>
             <Title order={3}>email-gateway</Title>
