@@ -13,7 +13,7 @@ import {
   Title,
 } from "@mantine/core";
 import { PageBar } from "basalt-ui";
-import { CONTAINER_CLASSES, VX } from "basalt-ui/tokens";
+import { CONTAINER_KEYS, VX } from "basalt-ui/tokens";
 import { getStats, listAccounts } from "../lib/api";
 import { formatDate } from "../lib/format";
 
@@ -41,7 +41,7 @@ function AccountsPage() {
       {stats ? (
         <SimpleGrid
           type="container"
-          cols={{ base: 1, [`${CONTAINER_CLASSES.regular}px`]: 3 }}
+          cols={{ base: 1, [CONTAINER_KEYS.regular]: 3 }}
         >
           <Card py="xs" px="sm">
             <Text size="sm" c="dimmed">
