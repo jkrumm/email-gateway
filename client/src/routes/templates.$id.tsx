@@ -82,7 +82,7 @@ function TemplatePreviewCard({
   });
 
   return (
-    <Card padding="md">
+    <Card py="xs" px="sm">
       <Stack gap="sm">
         <WidgetHeader
           tier="widget"
@@ -165,7 +165,7 @@ function TemplateSendLogCard({
   hasMore: boolean;
 }) {
   return (
-    <Card padding="md" style={{ overflowX: "auto" }}>
+    <Card py="xs" px="sm" style={{ overflowX: "auto" }}>
       <Title order={4} mb="sm">
         Send log
       </Title>

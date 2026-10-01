@@ -23,7 +23,7 @@ function TemplatesPage() {
 
   return (
     <Group align="flex-start" gap="md" wrap="nowrap">
-      <Card padding="md" style={{ flex: 1, overflowX: "auto" }}>
+      <Card py="xs" px="sm" style={{ flex: 1, overflowX: "auto" }}>
         <Title order={3} mb="sm">
           Templates
         </Title>

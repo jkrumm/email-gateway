@@ -40,7 +40,7 @@ bun run test               # bun test, preload src/test/setup.ts (in-memory DB, 
 bun run build          # build the client SPA into client/dist (cd client && vite build)
 bun run client:dev     # Vite dev server, proxies /api and the /app session routes
 bun run format:check   # prettier — the gate runs this, run `bun run format` before committing
-bun run lint           # basalt-ui check-theme over client/ (the text/CSS lane of basalt's guards)
+bun run lint           # client/: oxlint (basalt preset via .oxlintrc.json) + basalt-ui check-theme
 bun run email          # react-email preview of src/emails
 bun run seed:demo      # fake submissions into the old email-gateway.sqlite (refuses NODE_ENV=production)
 bun run import-legacy  # one-shot: copy the old store's submissions into mail.sqlite
@@ -49,9 +49,9 @@ make check             # format:check + lint + typecheck + test in one shot; `ma
 
 Gate for every change: `/check` (format:check, typecheck, `bun test`, fallow),
 then `/review` on code. `typecheck` now covers both the server and the client
-workspace. `lint` is basalt-ui's `check-theme` only — oxlint (basalt's AST
-lane: `control-outside-home`, `raw-breakpoint`, `card-inset`, …) is not wired;
-prettier is the formatter.
+workspace. `lint` runs both basalt guard lanes over the client:
+oxlint (`client/.oxlintrc.json` extends basalt-ui's shipped preset) and
+`check-theme`; the server has no linter, prettier is the formatter.
 
 ## Invariants that change a decision
 

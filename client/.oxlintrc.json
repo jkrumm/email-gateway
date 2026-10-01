@@ -1,0 +1,5 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "extends": ["../node_modules/basalt-ui/configs/oxlint.json"],
+  "ignorePatterns": ["dist/**", "src/routeTree.gen.ts"]
+}

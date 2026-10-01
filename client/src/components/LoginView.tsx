@@ -33,7 +33,7 @@ export function LoginView() {
 
   return (
     <Center h="100vh">
-      <Card padding="lg" w={340}>
+      <Card py="xs" px="sm" w={340}>
         <form onSubmit={handleSubmit}>
           <Stack>
             <Title order={3}>email-gateway</Title>
@@ -41,6 +41,8 @@ export function LoginView() {
               label="Password"
               value={password}
               onChange={(event) => setPassword(event.currentTarget.value)}
+              // The login screen's only field: focusing it is the whole point of the page.
+              // oxlint-disable-next-line jsx-a11y/no-autofocus
               autoFocus
               required
             />

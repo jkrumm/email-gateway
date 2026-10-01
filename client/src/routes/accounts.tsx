@@ -13,7 +13,7 @@ import {
   Title,
 } from "@mantine/core";
 import { PageBar } from "basalt-ui";
-import { CONTAINER_CLASSES } from "basalt-ui/tokens";
+import { CONTAINER_CLASSES, VX } from "basalt-ui/tokens";
 import { getStats, listAccounts } from "../lib/api";
 import { formatDate } from "../lib/format";
 
@@ -43,40 +43,40 @@ function AccountsPage() {
           type="container"
           cols={{ base: 1, [`${CONTAINER_CLASSES.regular}px`]: 3 }}
         >
-          <Card padding="md">
+          <Card py="xs" px="sm">
             <Text size="sm" c="dimmed">
               Messages (30d)
             </Text>
-            <Text fz={28} fw={600}>
+            <Text fz={VX.text.kpi} fw={600}>
               {stats.messages.total}
             </Text>
             <Text size="xs" c="dimmed">
               {stats.messages.inbound} in / {stats.messages.outbound} out
             </Text>
           </Card>
-          <Card padding="md">
+          <Card py="xs" px="sm">
             <Text size="sm" c="dimmed">
               Jobs pending
             </Text>
-            <Text fz={28} fw={600}>
+            <Text fz={VX.text.kpi} fw={600}>
               {stats.jobs.pending}
             </Text>
             <Text size="xs" c="dimmed">
               {stats.jobs.failed} failed
             </Text>
           </Card>
-          <Card padding="md">
+          <Card py="xs" px="sm">
             <Text size="sm" c="dimmed">
               Accounts
             </Text>
-            <Text fz={28} fw={600}>
+            <Text fz={VX.text.kpi} fw={600}>
               {accounts.length}
             </Text>
           </Card>
         </SimpleGrid>
       ) : null}
 
-      <Card padding="md">
+      <Card py="xs" px="sm">
         <Group justify="space-between" mb="sm">
           <Title order={4}>Configured accounts</Title>
         </Group>

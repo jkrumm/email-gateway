@@ -25,7 +25,7 @@ export default defineConfig({
   server: {
     ...basalt.server,
     proxy: {
-      ...(basalt.server?.proxy ?? {}),
+      ...basalt.server?.proxy,
       "/app/login": API_ORIGIN,
       "/app/logout": API_ORIGIN,
       "/app/session": API_ORIGIN,

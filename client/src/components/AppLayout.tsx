@@ -1,20 +1,43 @@
 import type { ReactNode } from "react";
-import { AppShell, Button, Group, NavLink, Stack, Title } from "@mantine/core";
-import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { linkOptions, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
+import { BasaltShell, type SettingsMenuItem } from "basalt-ui";
+import { defineNav, navGroup, useNav } from "basalt-ui/router-tanstack";
 import { logout } from "../lib/session";
 
-const NAV = [
-  { to: "/inbox", label: "Inbox" },
-  { to: "/templates", label: "Templates" },
-  { to: "/submissions", label: "Submissions" },
-  { to: "/accounts", label: "Accounts" },
-] as const;
+const NAV = defineNav({
+  groups: [
+    navGroup({ id: "mail", label: "Mail" }, [
+      {
+        id: "inbox",
+        label: "Inbox",
+        mobile: "tab",
+        link: linkOptions({ to: "/inbox" }),
+      },
+      {
+        id: "templates",
+        label: "Templates",
+        mobile: "tab",
+        link: linkOptions({ to: "/templates" }),
+      },
+      {
+        id: "submissions",
+        label: "Submissions",
+        mobile: "tab",
+        link: linkOptions({ to: "/submissions" }),
+      },
+      {
+        id: "accounts",
+        label: "Accounts",
+        mobile: "tab",
+        link: linkOptions({ to: "/accounts" }),
+      },
+    ]),
+  ],
+});
 
 export function AppLayout({ children }: { children: ReactNode }) {
-  const pathname = useRouterState({
-    select: (state) => state.location.pathname,
-  });
+  const nav = useNav(NAV);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -24,34 +47,17 @@ export function AppLayout({ children }: { children: ReactNode }) {
     await navigate({ to: "/inbox" });
   }
 
+  const settingsMenuItems: SettingsMenuItem[] = [
+    { key: "logout", label: "Log out", onClick: () => void handleLogout() },
+  ];
+
   return (
-    <AppShell
-      header={{ height: 52 }}
-      navbar={{ width: 200, breakpoint: "sm" }}
-      padding="md"
+    <BasaltShell
+      brand={{ name: "email-gateway" }}
+      {...nav}
+      settingsMenuItems={settingsMenuItems}
     >
-      <AppShell.Header>
-        <Group h="100%" px="md" justify="space-between">
-          <Title order={4}>email-gateway</Title>
-          <Button variant="subtle" size="xs" onClick={handleLogout}>
-            Log out
-          </Button>
-        </Group>
-      </AppShell.Header>
-      <AppShell.Navbar p="xs">
-        <Stack gap={4}>
-          {NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              component={Link}
-              to={item.to}
-              label={item.label}
-              active={pathname.startsWith(item.to)}
-            />
-          ))}
-        </Stack>
-      </AppShell.Navbar>
-      <AppShell.Main>{children}</AppShell.Main>
-    </AppShell>
+      {children}
+    </BasaltShell>
   );
 }
