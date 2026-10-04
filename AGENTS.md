@@ -29,7 +29,7 @@ by Elysia at `/app` from `client/dist` · zod 4 · TypeScript strict,
 `client/dist` by the Dockerfile's client stage; the server itself still runs
 `src/index.ts` directly.
 
-## Commands
+## Validate
 
 ```bash
 bun install --frozen-lockfile
@@ -52,6 +52,11 @@ then `/review` on code. `typecheck` now covers both the server and the client
 workspace. `lint` runs both basalt guard lanes over the client:
 oxlint (`client/.oxlintrc.json` extends basalt-ui's shipped preset) and
 `check-theme`; the server has no linter, prettier is the formatter.
+
+`make check` is exactly `bun run format:check && bun run lint && bun run
+typecheck && bun test`. It does **not** cover the client bundle (`bun run
+build`, built by the Dockerfile's client stage) or the React Email preview
+(`bun run email`); neither runs in CI, since deploys have no test gate (§Deploy).
 
 ## Invariants that change a decision
 
@@ -99,12 +104,22 @@ uidValidity:uid)`, never attacker-influenced, so `ON CONFLICT DO UPDATE`ing
   browser door is the signed `/app` session cookie, accepted by `/api` only for
   same-origin requests; the bearer contract for agents does not change.
 
-## Production
+## Deploy
+
+Every push to `master` ships: GitHub Actions
+(`.github/workflows/deploy.yml`) calls RollHook (OIDC) for a zero-downtime
+rolling update. There is no CI test gate, so `make check` is the only gate and
+it must pass locally before pushing. `make deploy` confirms CI owns this — it
+prints `deployed by CI on push` and exits 0. On a health-check failure during a
+rollout RollHook rolls back to the previous container; to undo a change
+deliberately, revert it on `master` and push. Traefik's active `/health` probe
+stops routing to a draining instance the moment the container's Docker
+HEALTHCHECK flips unhealthy (see §Verify & Monitor).
 
 VPS container, `vps/apps/email-gateway/compose.yml` (image
 `rollhook.jkrumm.com/email-gateway`, port 3010, `/var/lib/email-gateway:/data`,
 Traefik host `email-gateway.<domain>` behind Cloudflare Tunnel, rate-limit +
-security-headers middlewares, `/health` check, Uptime Kuma monitor). Secrets:
+security-headers middlewares). Secrets:
 `vps/apps/email-gateway/.env.tpl` → `make email-gateway-env` (1Password). Bridge
 lives on the homelab (`homelab/docs/proton-bridge.md`), IMAP only, on the
 tailnet; the tailnet ACL grants VPS → homelab `tcp:1143`. Gmail joins directly
@@ -120,6 +135,21 @@ today: `RESEND_ADMIN_API_KEY`, `IMAP_TLS_CERT` (runs `IMAP_TLS_INSECURE=true`),
 `IMAP_MAILBOXES`, `GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` (awaiting the app
 password) — `docs/vps-cutover.md` has the ready-to-apply `.env.tpl`/
 `compose.yml` changes for all of these plus the tailnet-only `MAIL_HOST` door.
+
+## Verify & Monitor
+
+- **Health URL (full):** `https://email-gateway.<your-domain>/health` — `GET`
+  returns `{"ok":true}`; it is public (Cloudflare Tunnel → Traefik) and
+  deliberately never lists real mail addresses. The host is a placeholder
+  because this repo is public (`rules/security.md`).
+- **Uptime Kuma monitor:** `EmailGateway - HTTP` — a keyword monitor on that URL
+  (keyword `{"ok":true}`) in the Kuma `VPS` group.
+- **OTel `service.name`:** `none` — email-gateway is not OpenTelemetry-
+  instrumented (no OTel SDK dependency or env anywhere in this repo); it logs to
+  stdout.
+- `make verify` probes the deployed container's `/health` over ssh
+  (`HEALTH_URL=<public-url>` probes the public URL instead); `make logs` prints
+  the last 200 container log lines, then exits.
 
 ## Local dev
 
