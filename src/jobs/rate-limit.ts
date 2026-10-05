@@ -1,5 +1,5 @@
 import { GatewayRateLimitError } from "@ai-sdk/gateway";
-import { APICallError } from "@ai-sdk/provider";
+import { APICallError } from "ai";
 
 // Fallback substrings for rate-limit signals that don't arrive as a typed
 // `GatewayRateLimitError` — e.g. a generic Error wrapping an upstream
