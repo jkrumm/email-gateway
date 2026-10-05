@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { GatewayRateLimitError } from "@ai-sdk/gateway";
+import { APICallError } from "@ai-sdk/provider";
 import { isRateLimitError } from "./rate-limit";
 
 describe("isRateLimitError", () => {
@@ -18,6 +19,26 @@ describe("isRateLimitError", () => {
     "server under HIGH DEMAND",
   ])("recognises a fallback substring in %p", (message) => {
     expect(isRateLimitError(new Error(message))).toBe(true);
+  });
+
+  test("recognises any provider's HTTP 429 APICallError", () => {
+    const error = new APICallError({
+      message: "HTTP 429: Capacity temporarily exceeded",
+      url: "https://openrouter.ai/api/alpha/decisions",
+      requestBodyValues: {},
+      statusCode: 429,
+    });
+    expect(isRateLimitError(error)).toBe(true);
+  });
+
+  test("does not treat a non-429 APICallError as a rate limit", () => {
+    const error = new APICallError({
+      message: "Forbidden",
+      url: "https://openrouter.ai/api/alpha/decisions",
+      requestBodyValues: {},
+      statusCode: 403,
+    });
+    expect(isRateLimitError(error)).toBe(false);
   });
 
   test("returns false for an unrelated Error", () => {
