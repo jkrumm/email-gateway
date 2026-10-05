@@ -48,6 +48,7 @@ export function judgeSubmissionWithJev({
   return decideShadow({
     config,
     model,
+    subTool: "decision-submission",
     state: { sites: SITES, source, submission },
     questions: { verdict: JEV_VERDICT_QUESTION },
     pick: ({ verdict }) => ({

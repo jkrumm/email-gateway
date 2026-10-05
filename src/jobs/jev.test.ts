@@ -6,7 +6,7 @@ import { createMailSubmissionsRepo } from "../db/mail-submissions";
 import type { MailProvider, Message, MessageRef } from "../providers/port";
 import { createJevMessageHandler, createJevSubmissionHandler } from "./jev";
 
-const JEV_CONFIG = { apiKey: "k", model: "typesafe-ai/jev" };
+const JEV_CONFIG = { apiKey: "k", model: "cloudflare/clef" };
 const ACCOUNT_ID = "proton:hello@example.com";
 
 function envelope(overrides: Partial<MessageEnvelope> = {}): MessageEnvelope {
@@ -85,7 +85,7 @@ describe("createJevSubmissionHandler", () => {
           confidence: 0.8,
           probabilities: { legit: 0.2, spam: 0.8, marketing: 0 },
           latencyMs: 12,
-          model: "typesafe-ai/jev",
+          model: "cloudflare/clef",
         }) as never,
     });
 
@@ -190,7 +190,7 @@ describe("createJevMessageHandler", () => {
           category: "customer",
           categoryConfidence: 0.9,
           latencyMs: 5,
-          model: "typesafe-ai/jev",
+          model: "cloudflare/clef",
         }) as never,
     });
 
@@ -253,7 +253,7 @@ describe("createJevMessageHandler", () => {
           category: "customer",
           categoryConfidence: 0.95,
           latencyMs: 7,
-          model: "typesafe-ai/jev",
+          model: "cloudflare/clef",
         }) as never,
     });
 

@@ -2,6 +2,7 @@ import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import type { SubmissionSource, Verdict } from "../db/mail-submissions";
 import { getLlmConfig, getModel, getModelId } from "../llm/model";
+import { trackLlmCall } from "../usage/argo";
 
 const SUPPRESS_CONFIDENCE_THRESHOLD = 0.7;
 
@@ -54,17 +55,22 @@ export async function classifySubmission({
 
   try {
     const resolvedModel = model ?? getModel();
-    const result = await generateText({
-      model: resolvedModel,
-      system: SYSTEM_PROMPT,
-      prompt: `Source: ${source}\n\n<submission>\n${JSON.stringify(submission)}\n</submission>`,
-      output: Output.object({ schema: verdictSchema }),
-      // Hang guard, not a budget: form submitters never wait synchronously
-      // on this call regardless of how long it takes — src/spam/gate.ts
-      // races it against a short decision deadline instead. Per house
-      // rules a single non-streaming LLM call never carries a tight
-      // timeout — only a >=30min hang guard.
-      abortSignal: AbortSignal.timeout(30 * 60_000),
+    const result = await trackLlmCall({
+      subTool: "spam-classify",
+      model: getModelId(resolvedModel),
+      run: () =>
+        generateText({
+          model: resolvedModel,
+          system: SYSTEM_PROMPT,
+          prompt: `Source: ${source}\n\n<submission>\n${JSON.stringify(submission)}\n</submission>`,
+          output: Output.object({ schema: verdictSchema }),
+          // Hang guard, not a budget: form submitters never wait synchronously
+          // on this call regardless of how long it takes — src/spam/gate.ts
+          // races it against a short decision deadline instead. Per house
+          // rules a single non-streaming LLM call never carries a tight
+          // timeout — only a >=30min hang guard.
+          abortSignal: AbortSignal.timeout(30 * 60_000),
+        }),
     });
 
     return { ...result.output, model: getModelId(resolvedModel) };

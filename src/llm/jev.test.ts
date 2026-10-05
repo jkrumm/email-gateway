@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { fakeJevModel, typesafeConfidence } from "../test/fake-jev";
+import { fakeJevModel, openrouterMetadata } from "../test/fake-jev";
+import type { UsageInput } from "../usage/argo";
 import { decide, decideShadow, type JevConfig } from "./jev";
 
-const config: JevConfig = { apiKey: "test-key", model: "typesafe-ai/jev" };
+const config: JevConfig = { apiKey: "test-key", model: "cloudflare/clef" };
 
 const questions = {
   verdict: {
@@ -37,13 +38,14 @@ describe("decide", () => {
     const { model, calls } = fakeJevModel(() => ({
       answers: rawAnswers,
       warnings: [],
-      providerMetadata: typesafeConfidence({ verdict: 0.97 }),
+      providerMetadata: openrouterMetadata({ confidence: { verdict: 0.97 } }),
     }));
 
     const { answers } = await decide({
       config,
       model,
       state: { subject: "SEO audit" },
+      subTool: "decision-email",
       questions,
     });
 
@@ -68,7 +70,13 @@ describe("decide", () => {
     });
 
     await expect(
-      decide({ config, model, state: { subject: "x" }, questions }),
+      decide({
+        config,
+        model,
+        state: { subject: "x" },
+        questions,
+        subTool: "decision-email",
+      }),
     ).rejects.toThrow("high demand");
 
     // maxRetries: 0 means exactly one HTTP-equivalent attempt; a leftover
@@ -76,25 +84,11 @@ describe("decide", () => {
     expect(calls).toHaveLength(1);
   });
 
-  test("prefers typesafe-ai on the gateway, digitalocean as fallback", async () => {
-    const { model, calls } = fakeJevModel(() => ({
-      answers: rawAnswers,
-      warnings: [],
-      providerMetadata: typesafeConfidence({ verdict: 0.97 }),
-    }));
-
-    await decide({ config, model, state: { subject: "x" }, questions });
-
-    expect(calls[0]!.providerOptions).toEqual({
-      gateway: { order: ["typesafe-ai", "digitalocean"] },
-    });
-  });
-
   test("falls back to the choice's probability when no confidence is reported", async () => {
     for (const providerMetadata of [
       undefined,
-      typesafeConfidence({ other: 0.5 }),
-      typesafeConfidence({ verdict: 1.5 }),
+      openrouterMetadata({ confidence: { other: 0.5 } }),
+      openrouterMetadata({ confidence: { verdict: 1.5 } }),
     ]) {
       const { model } = fakeJevModel(() => ({
         answers: { verdict: rawAnswers.verdict },
@@ -106,6 +100,7 @@ describe("decide", () => {
         config,
         model,
         state: "x",
+        subTool: "decision-email",
         questions: { verdict: questions.verdict },
       });
 
@@ -124,6 +119,7 @@ describe("decide", () => {
         config,
         model,
         state: "x",
+        subTool: "decision-email",
         questions: { verdict: questions.verdict },
       }),
     ).rejects.toThrow('no confidence for "verdict"');
@@ -136,7 +132,13 @@ describe("decide", () => {
     }));
 
     await expect(
-      decide({ config: null, model, state: "x", questions }),
+      decide({
+        config: null,
+        model,
+        state: "x",
+        questions,
+        subTool: "decision-email",
+      }),
     ).rejects.toThrow("Jev not configured");
     expect(calls).toHaveLength(0);
   });
@@ -151,10 +153,117 @@ describe("decide", () => {
         config,
         model,
         state: "x",
+        subTool: "decision-email",
         questions: { is_spam: questions.is_spam },
         // SDK retries transient failures; a plain Error is not retried.
       }),
     ).rejects.toThrow("gateway 529");
+  });
+});
+
+describe("decide usage", () => {
+  const reportsTo = () => {
+    const reports: UsageInput[] = [];
+    return {
+      reports,
+      report: async (input: UsageInput) => void reports.push(input),
+    };
+  };
+
+  test("reads confidence and cost from providerMetadata.openrouter and reports them", async () => {
+    const { model } = fakeJevModel(() => ({
+      answers: { verdict: rawAnswers.verdict },
+      warnings: [],
+      usage: { inputTokens: 147, outputTokens: 3 },
+      providerMetadata: openrouterMetadata({
+        confidence: { verdict: 0.91 },
+        cost: 0.00003528,
+      }),
+    }));
+    const { reports, report } = reportsTo();
+
+    const { answers, usage } = await decide({
+      config,
+      model,
+      state: "x",
+      questions: { verdict: questions.verdict },
+      subTool: "decision-submission",
+      report,
+    });
+
+    expect(answers.verdict.confidence).toBe(0.91);
+    expect(usage).toEqual({
+      inputTokens: 147,
+      outputTokens: 3,
+      costUsd: 0.00003528,
+    });
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      subTool: "decision-submission",
+      model: "cloudflare/clef",
+      billing: "openrouter",
+      outcome: "ok",
+      tokens: {
+        inputTokens: 147,
+        outputTokens: 3,
+        cacheReadTokens: 0,
+        reasoningTokens: 0,
+      },
+      cost: { usd: 0.00003528, source: "reported" },
+    });
+  });
+
+  test("a malformed cost or missing metadata reports cost source none", async () => {
+    for (const providerMetadata of [
+      undefined,
+      { openrouter: { usage: { cost: "free" } } },
+      { openrouter: { usage: { cost: -1 } } },
+    ]) {
+      const { model } = fakeJevModel(() => ({
+        answers: { is_spam: rawAnswers.is_spam },
+        warnings: [],
+        providerMetadata,
+      }));
+      const { reports, report } = reportsTo();
+
+      const { usage } = await decide({
+        config,
+        model,
+        state: "x",
+        questions: { is_spam: questions.is_spam },
+        subTool: "decision-email",
+        report,
+      });
+
+      expect(usage.costUsd).toBeNull();
+      expect(reports[0]!.cost).toEqual({ usd: null, source: "none" });
+    }
+  });
+
+  test("reports a failed call with zero usage and rethrows", async () => {
+    const { model } = fakeJevModel(() => {
+      throw new Error("openrouter 402");
+    });
+    const { reports, report } = reportsTo();
+
+    await expect(
+      decide({
+        config,
+        model,
+        state: "x",
+        questions: { is_spam: questions.is_spam },
+        subTool: "decision-email",
+        report,
+      }),
+    ).rejects.toThrow("402");
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      outcome: "error",
+      billing: "openrouter",
+      tokens: { inputTokens: 0, outputTokens: 0 },
+      cost: { usd: null, source: "none" },
+    });
   });
 });
 
@@ -168,6 +277,7 @@ describe("decideShadow", () => {
     expect(
       decideShadow({
         state: "x",
+        subTool: "decision-email" as const,
         questions: shadowQuestions,
         pick,
         config: null,
@@ -182,12 +292,13 @@ describe("decideShadow", () => {
     }));
     const success = await decideShadow({
       state: "x",
+      subTool: "decision-email" as const,
       questions: shadowQuestions,
       pick,
       config,
       model: ok.model,
     })!;
-    expect(success).toMatchObject({ spam: 0.96, model: "typesafe-ai/jev" });
+    expect(success).toMatchObject({ spam: 0.96, model: "cloudflare/clef" });
     expect(success.latencyMs).toBeGreaterThanOrEqual(0);
 
     const bad = fakeJevModel(() => {
@@ -196,6 +307,7 @@ describe("decideShadow", () => {
     await expect(
       decideShadow({
         state: "x",
+        subTool: "decision-email" as const,
         questions: shadowQuestions,
         pick,
         config,

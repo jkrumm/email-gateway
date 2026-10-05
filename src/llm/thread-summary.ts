@@ -2,6 +2,7 @@ import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import { getLlmConfig, getModel, getModelId } from "./model";
 import { serializeUntrusted } from "../utils/prompt";
+import { trackLlmCall } from "../usage/argo";
 
 export interface ThreadMessageForSummary {
   fromAddress: string | null;
@@ -43,13 +44,18 @@ export async function summarizeThread({
   try {
     const resolvedModel = model ?? getModel();
 
-    const result = await generateText({
-      model: resolvedModel,
-      system: SYSTEM_PROMPT,
-      prompt: `<thread>\n${serializeUntrusted(messages)}\n</thread>`,
-      output: Output.object({ schema: threadSummarySchema }),
-      // Hang guard, not a budget — same house rule as src/enrich/enrich-email.ts.
-      abortSignal: AbortSignal.timeout(30 * 60_000),
+    const result = await trackLlmCall({
+      subTool: "thread-summary",
+      model: getModelId(resolvedModel),
+      run: () =>
+        generateText({
+          model: resolvedModel,
+          system: SYSTEM_PROMPT,
+          prompt: `<thread>\n${serializeUntrusted(messages)}\n</thread>`,
+          output: Output.object({ schema: threadSummarySchema }),
+          // Hang guard, not a budget — same house rule as src/enrich/enrich-email.ts.
+          abortSignal: AbortSignal.timeout(30 * 60_000),
+        }),
     });
 
     return {

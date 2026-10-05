@@ -17,8 +17,14 @@ LLM_BASE_URL=op://common/anthropic/OPENAI_BASE_URL
 LLM_API_KEY=op://common/anthropic/API_KEY
 LLM_MODEL=gpt-6-luna
 
-# Jev decision model (shadow mode). Unset -> disabled.
-JEV_API_KEY=op://common/vercel/COMMON_VERCEL_AI
+# Shadow decision lane ("Jev", Clef via OpenRouter Decisions API). Unset -> disabled.
+OPENROUTER_API_KEY=op://common/openrouter/API_KEY
+
+# Usage/cost reporting to Argo (src/usage/argo.ts). Unset -> no-op; prod posts
+# to argo-api over the VPS proxy network.
+# ARGO_USAGE_URL=https://argo.<your-domain>/api/usage/records
+# ARGO_API_SECRET=op://common/api/SECRET
+# MACHINE=mini
 
 # /app session login (basic password auth, signed HttpOnly cookie); /app 404s
 # when unset.

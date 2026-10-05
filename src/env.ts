@@ -52,9 +52,14 @@ export const envSchema = z
     LLM_BASE_URL: z.string().optional(),
     LLM_API_KEY: z.string().optional(),
     LLM_MODEL: z.string().optional(),
-    // Jev decision model (shadow mode). Unset key -> Jev is disabled everywhere.
-    JEV_API_KEY: z.string().optional(),
-    JEV_MODEL: z.string().default("typesafe-ai/jev"),
+    // Shadow decision lane ("Jev", historical name): OpenRouter Decisions API.
+    // Unset key -> the lane is disabled everywhere.
+    OPENROUTER_API_KEY: z.string().optional(),
+    DECISION_MODEL: z.string().default("cloudflare/clef"),
+    // Usage reporting to Argo (src/usage/argo.ts). Either unset -> no-op.
+    ARGO_USAGE_URL: z.string().optional(),
+    ARGO_API_SECRET: z.string().optional(),
+    MACHINE: z.string().default("vps"),
     ADMIN_PASSWORD: z.string().optional(),
     // Signing secret for the /app session cookie. Falls back to
     // ADMIN_PASSWORD when unset or shorter than 12 chars (src/session.ts's

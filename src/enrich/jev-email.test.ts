@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { fakeJevModel, typesafeConfidence } from "../test/fake-jev";
+import { fakeJevModel, openrouterMetadata } from "../test/fake-jev";
 import { CATEGORIES } from "./categories";
 import { judgeEmailWithJev } from "./jev-email";
 
-const config = { apiKey: "k", model: "typesafe-ai/jev" };
+const config = { apiKey: "k", model: "cloudflare/clef" };
 const payload = {
   direction: "inbound" as const,
   from: "a@example.com",
@@ -33,7 +33,7 @@ describe("judgeEmailWithJev", () => {
         },
       },
       warnings: [],
-      providerMetadata: typesafeConfidence({ category: 0.88 }),
+      providerMetadata: openrouterMetadata({ confidence: { category: 0.88 } }),
     }));
 
     const outcome = await judgeEmailWithJev({
@@ -53,6 +53,36 @@ describe("judgeEmailWithJev", () => {
     expect(Object.keys(asked.category!.criteria as object)).toEqual([
       ...CATEGORIES,
     ]);
+  });
+
+  test("caps the text state at 6,000 chars, keeping from/subject first", async () => {
+    const { model, calls } = fakeJevModel(() => ({
+      answers: {
+        spam: { type: "boolean", probability: 0.1 },
+        category: {
+          type: "choice",
+          choice: "inquiry",
+          probabilities: Object.fromEntries(
+            CATEGORIES.map((category) => [
+              category,
+              category === "inquiry" ? 0.9 : 0.01,
+            ]),
+          ),
+        },
+      },
+      warnings: [],
+    }));
+
+    await judgeEmailWithJev({
+      payload: { ...payload, text: "x".repeat(12_000) },
+      config,
+      model,
+    })!;
+
+    const state = calls[0]!.state as typeof payload;
+    expect(state.text).toHaveLength(6_000);
+    expect(Object.keys(state).slice(0, 3)).toEqual(["direction", "from", "to"]);
+    expect(state.subject).toBe("Charter");
   });
 
   test("rejects when the call fails so the queue can retry", async () => {

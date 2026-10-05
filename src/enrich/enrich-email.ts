@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CATEGORIES } from "./categories";
 import { getLlmConfig, getModel, getModelId } from "../llm/model";
 import { plainText } from "../utils/html";
+import { trackLlmCall } from "../usage/argo";
 
 export type EmailDirection = "inbound" | "outbound";
 
@@ -93,15 +94,20 @@ export async function enrichEmail({
     const resolvedModel = model ?? getModel();
     const payload = buildEmailPayload(email);
 
-    const result = await generateText({
-      model: resolvedModel,
-      system: SYSTEM_PROMPT,
-      prompt: `<email>\n${JSON.stringify(payload)}\n</email>`,
-      output: Output.object({ schema: enrichmentSchema }),
-      // Hang guard, not a budget — see src/spam/classify.ts for the same
-      // house-rule reasoning. The enrichment worker never waits on this
-      // synchronously for a caller either.
-      abortSignal: AbortSignal.timeout(30 * 60_000),
+    const result = await trackLlmCall({
+      subTool: "enrich",
+      model: getModelId(resolvedModel),
+      run: () =>
+        generateText({
+          model: resolvedModel,
+          system: SYSTEM_PROMPT,
+          prompt: `<email>\n${JSON.stringify(payload)}\n</email>`,
+          output: Output.object({ schema: enrichmentSchema }),
+          // Hang guard, not a budget — see src/spam/classify.ts for the same
+          // house-rule reasoning. The enrichment worker never waits on this
+          // synchronously for a caller either.
+          abortSignal: AbortSignal.timeout(30 * 60_000),
+        }),
     });
 
     return {

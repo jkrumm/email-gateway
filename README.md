@@ -65,7 +65,7 @@ New env vars:
 
 ### Jev shadow mode
 
-[Jev](https://typesafe.ai) is a decision model (typed answers with calibrated probabilities, no text generation) run **in shadow mode** next to the LLM: the LLM classifier stays the only authority on drop/deliver. Jev decisions are **durable**, backed by the general `jobs` table (`src/db/jobs.ts`, `docs/architecture.md` §Jobs) rather than a dedicated queue: `src/spam/gate.ts` enqueues a `jev_submission` job after recording a submission when Jev is configured, and `src/jobs/classify.ts`'s handler enqueues a `jev_message` job for every inbound message it classifies. Enqueueing never delays or changes the delivery decision.
+The shadow decision lane — "Jev" is its historical name (job kinds, `jev_*` columns and function names keep it); the model is now Cloudflare's **Clef** via OpenRouter's Decisions API — is a decision model (typed answers with calibrated probabilities, no text generation) run **in shadow mode** next to the LLM: the LLM classifier stays the only authority on drop/deliver. Jev decisions are **durable**, backed by the general `jobs` table (`src/db/jobs.ts`, `docs/architecture.md` §Jobs) rather than a dedicated queue: `src/spam/gate.ts` enqueues a `jev_submission` job after recording a submission when Jev is configured, and `src/jobs/classify.ts`'s handler enqueues a `jev_message` job for every inbound message it classifies. Enqueueing never delays or changes the delivery decision.
 
 `src/jobs/runner.ts` claims and runs both kinds (`src/jobs/jev.ts`) alongside every other job kind — there's no separate Jev worker or poll interval anymore. A job runs, writes its result (`src/db/mail-submissions.ts#saveJevResult` / `src/db/messages.ts#saveClassification`'s `jev*` columns), and completes; a thrown error fails the job onto the shared backoff ladder (1m → 5m → 15m → 1h → 3h → 6h → 12h → 24h, terminal after 9 attempts) — a rate-limited failure (429 / `rate_limit_exceeded` / "high demand") parks on its own, separate ladder instead (`jobs.rate_limits`, 1m → 5m → 15m → capped at 1h, never terminal), without ever spending an attempt. `src/llm/jev.ts` sets `maxRetries: 0` on the `evaluate()` call since the job queue owns retries. A submission or message with no Jev result yet (job still pending, or Jev was disabled when it was recorded) simply has no `jev_*` values set — there is no separate queue-state column to inspect.
 
@@ -77,10 +77,14 @@ Inbound messages get the same two Jev decisions as before — `spam_probability`
 
 Env vars (all optional):
 
-- `JEV_API_KEY` — Vercel AI Gateway key. Unset disables Jev everywhere, silently.
-- `JEV_MODEL` — gateway evaluation model id, default `typesafe-ai/jev`.
+- `OPENROUTER_API_KEY` — OpenRouter key. Unset disables the lane everywhere, silently.
+- `DECISION_MODEL` — Decisions model id, default `cloudflare/clef` (stored in the `jev_model` columns).
+- `ARGO_USAGE_URL`, `ARGO_API_SECRET` — Argo usage reporting (below); either unset makes it a no-op.
+- `MACHINE` — the `machine` field on usage records, default `vps`.
 
-Jev is called through the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) with the AI SDK's experimental `evaluate` (`src/llm/jev.ts`); no extra dependency. Choice confidence comes from the provider metadata Jev returns (falling back to the chosen option's probability).
+The lane is called through `@openrouter/ai-sdk-provider`'s `evaluationModel` with the AI SDK's experimental `evaluate` (`src/llm/jev.ts`). Choice confidence comes from `providerMetadata.openrouter.answers[question].confidence` (falling back to the chosen option's probability); the request cost (USD) from `providerMetadata.openrouter.usage.cost`. Workers AI truncates Clef's text state to ~2K tokens, so `src/enrich/jev-email.ts` caps an email's `text` at 6,000 characters before sending (from/subject stay first); the LLM enrichment path is untouched.
+
+Usage reporting: every model call — the decision lane (`decision-email`, `decision-submission`, billing `openrouter`, cost as reported) and the IU LLM calls (`spam-classify`, `enrich`, `draft-reply`, `thread-summary`, billing `iu`, cost computed from a small rate table in `src/usage/argo.ts`, none for an unknown model) — is posted fire-and-forget to Argo's `POST /usage/records` as one `request`-grain record (`workspace: private`), success and failure alike. Failures are logged, never thrown, and never awaited by the caller.
 
 ## Client
 

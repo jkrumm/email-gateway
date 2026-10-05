@@ -26,7 +26,24 @@ export function fakeJevModel(
   return { model, calls };
 }
 
-// The typesafe provider reports per-question choice confidence here.
-export function typesafeConfidence(confidence: Record<string, number>) {
-  return { typesafe: { confidence } };
+// OpenRouter's evaluation model reports per-answer choice confidence and the
+// request cost (USD) here.
+export function openrouterMetadata({
+  confidence = {},
+  cost,
+}: {
+  confidence?: Record<string, number>;
+  cost?: number;
+} = {}) {
+  return {
+    openrouter: {
+      answers: Object.fromEntries(
+        Object.entries(confidence).map(([key, value]) => [
+          key,
+          { confidence: value },
+        ]),
+      ),
+      ...(cost !== undefined && { usage: { cost } }),
+    },
+  };
 }

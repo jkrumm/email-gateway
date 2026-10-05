@@ -2,6 +2,7 @@ import { generateText, type LanguageModel } from "ai";
 import { getLlmConfig, getModel, getModelId } from "./model";
 import { plainText } from "../utils/html";
 import { serializeUntrusted } from "../utils/prompt";
+import { trackLlmCall } from "../usage/argo";
 
 export interface DraftReplyMessage {
   fromAddress: string | null;
@@ -46,12 +47,17 @@ export async function draftReply({
       ? `\n\n<instructions>\n${instructions}\n</instructions>`
       : "";
 
-    const result = await generateText({
-      model: resolvedModel,
-      system: SYSTEM_PROMPT,
-      prompt: `<email>\n${serializeUntrusted(payload)}\n</email>${instructionsBlock}`,
-      // Hang guard, not a budget — same house rule as src/enrich/enrich-email.ts.
-      abortSignal: AbortSignal.timeout(30 * 60_000),
+    const result = await trackLlmCall({
+      subTool: "draft-reply",
+      model: getModelId(resolvedModel),
+      run: () =>
+        generateText({
+          model: resolvedModel,
+          system: SYSTEM_PROMPT,
+          prompt: `<email>\n${serializeUntrusted(payload)}\n</email>${instructionsBlock}`,
+          // Hang guard, not a budget — same house rule as src/enrich/enrich-email.ts.
+          abortSignal: AbortSignal.timeout(30 * 60_000),
+        }),
     });
 
     return {

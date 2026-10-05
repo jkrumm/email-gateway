@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { fakeJevModel, typesafeConfidence } from "../test/fake-jev";
+import { fakeJevModel, openrouterMetadata } from "../test/fake-jev";
 import { judgeSubmissionWithJev } from "./jev-judge";
 
-const config = { apiKey: "k", model: "typesafe-ai/jev" };
+const config = { apiKey: "k", model: "cloudflare/clef" };
 
 describe("judgeSubmissionWithJev", () => {
   test("returns null when Jev is disabled", () => {
@@ -21,7 +21,7 @@ describe("judgeSubmissionWithJev", () => {
         },
       },
       warnings: [],
-      providerMetadata: typesafeConfidence({ verdict: 0.93 }),
+      providerMetadata: openrouterMetadata({ confidence: { verdict: 0.93 } }),
     }));
 
     const outcome = await judgeSubmissionWithJev({
@@ -35,7 +35,7 @@ describe("judgeSubmissionWithJev", () => {
       verdict: "marketing",
       confidence: 0.93,
       probabilities: { legit: 0, spam: 0, marketing: 1 },
-      model: "typesafe-ai/jev",
+      model: "cloudflare/clef",
     });
     expect(outcome.latencyMs).toBeGreaterThanOrEqual(0);
     const state = calls[0]!.state as Record<string, unknown>;

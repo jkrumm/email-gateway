@@ -11,6 +11,9 @@ export interface JevEmailResult {
   model: string;
 }
 
+// Workers AI truncates Clef's text state to ~2K tokens; 6,000 chars fits.
+const MAX_STATE_TEXT_CHARS = 6_000;
+
 const questions = {
   spam: {
     type: "boolean",
@@ -44,7 +47,10 @@ export function judgeEmailWithJev({
   return decideShadow({
     config,
     model,
-    state: payload,
+    subTool: "decision-email",
+    // Truncation is ours and deterministic (from/subject stay first), not the
+    // provider's.
+    state: { ...payload, text: payload.text.slice(0, MAX_STATE_TEXT_CHARS) },
     questions,
     pick: ({ spam, category }) => ({
       spamProbability: spam.probability,

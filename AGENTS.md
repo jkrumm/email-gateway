@@ -21,8 +21,9 @@ file is what a dispatched agent needs before touching code.
 
 Bun 1.4 · Elysia 1.4 (`@elysiajs/bearer`) · `bun:sqlite` (WAL, migrations by
 `PRAGMA user_version`, append-only) · imapflow 2 + postal-mime · resend 6 +
-react-email 6 · AI SDK 7 (`@ai-sdk/openai-compatible` for the LLM, the Vercel AI
-Gateway `evaluation` for Jev) · a Vite 8 + React 19 + basalt-ui SPA in `client/`
+react-email 6 · AI SDK 7 (`@ai-sdk/openai-compatible` for the LLM, OpenRouter's
+Decisions API via `@openrouter/ai-sdk-provider` for the shadow lane "Jev", now
+Cloudflare's Clef) · a Vite 8 + React 19 + basalt-ui SPA in `client/`
 (TanStack Router + Query, Eden Treaty typed against `src/app.ts`'s `App`) served
 by Elysia at `/app` from `client/dist` · zod 4 · TypeScript strict,
 `verbatimModuleSyntax`. One small build step now: the client is built into
@@ -179,6 +180,10 @@ tests never need secrets.
   with the SSR admin; the client's Templates page (Wave 7) replaces it, now
   backed by `GET /api/templates(/:id/preview)` and
   `POST /api/templates/:id/test-send`
+- `src/usage/argo.ts` fire-and-forget Argo usage reporter (no-op unless
+  `ARGO_USAGE_URL`/`ARGO_API_SECRET` are set; injectable `fetch`/config): record
+  builder, IU rate table, `trackLlmCall` wrapping every `generateText` site, and
+  `src/llm/jev.ts`'s `decide` reports the decision calls itself
 - `src/spam/` contact-form gate (`gate.ts` deadline race, enqueues a
   `jev_submission` job on the new `mail.sqlite` `submissions` table instead of
   the old in-memory kick; `classify.ts`, `jev-judge.ts`)
