@@ -4,13 +4,15 @@
 # commit: only op:// references or non-secret plain values, no secrets.
 # Verify exact vault/item paths with `/secrets` before relying on a new one.
 #
-# Same vault the VPS deploy reads (vps/apps/email-gateway/.env.tpl) — a solo
-# project has no separate dev secret set.
+# Only the model keys come from 1Password. Everything prod-only is a local
+# placeholder, so the mini's secrets cache never holds a key that can send real
+# mail or open the live /app. The Resend key is a dummy: local sends fail and
+# land on the job queue's retry ladder instead of reaching anyone.
 
-SECRET_KEY=op://vps/email-gateway/SECRET_KEY
-RESEND_API_KEY=op://vps/email-gateway/RESEND_API_KEY
-RECEIVER_EMAIL=op://vps/email-gateway/RECEIVER_EMAIL
-SY_SERENDIPITY_RECEIVER_EMAIL=op://vps/email-gateway/SY_SERENDIPITY_RECEIVER_EMAIL
+SECRET_KEY=local-dev-secret-key
+RESEND_API_KEY=re_local_dev_dummy
+RECEIVER_EMAIL=dev@example.com
+SY_SERENDIPITY_RECEIVER_EMAIL=dev-charter@example.com
 
 # Spam filter — shared IU endpoint creds (same item research-gateway and argo use).
 LLM_BASE_URL=op://common/anthropic/OPENAI_BASE_URL
@@ -28,10 +30,10 @@ OPENROUTER_API_KEY=op://common/openrouter/API_KEY
 
 # /app session login (basic password auth, signed HttpOnly cookie); /app 404s
 # when unset.
-ADMIN_PASSWORD=op://vps/email-gateway/ADMIN_PASSWORD
+ADMIN_PASSWORD=local-dev-password
 
 # /api/* + /mcp bearer key; both 404 when unset.
-API_KEY=op://vps/email-gateway/API_KEY
+API_KEY=local-dev-api-key
 
 # Full-access Resend key for send-log reconciliation (src/jobs/reconcile-send-log.ts).
 # Unset in prod today (README §Jev shadow mode / AGENTS.md) — uncomment once it's in 1Password.

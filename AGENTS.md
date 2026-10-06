@@ -154,10 +154,12 @@ password) — `docs/vps-cutover.md` has the ready-to-apply `.env.tpl`/
 
 ## Local dev
 
-`.env.tpl` + `secrets-run` (same vault the VPS deploy reads —
-`vps/apps/email-gateway/.env.tpl` — since this is a solo project with no
-separate dev secret set) feeds `bun run dev` / `make dev`, matching the
-siblings. Proton IMAP ingest is deliberately unreachable from here: the
+`.env.tpl` + `secrets-run` feeds `bun run dev` / `make dev`, matching the
+siblings. Only the model keys (`op://common/anthropic`, `op://common/openrouter`)
+come from 1Password; the prod-only values (send secret, Resend key, receiver
+addresses, `/app` password, API key) are local placeholders, so the mini's
+secrets cache never holds a key that sends real mail or opens the live `/app`.
+Local sends fail on the dummy Resend key by design. Proton IMAP ingest is deliberately unreachable from here: the
 tailnet ACL grants only VPS → homelab `tcp:1143`, not the mini — verify
 IMAP-touching changes against the live production container instead (Wave
 4/5's `ssh vps` + `docker exec` probe pattern in `docs/waves/PLAN.md`).
