@@ -6,7 +6,11 @@ import { createMailSubmissionsRepo } from "../db/mail-submissions";
 import type { MailProvider, Message, MessageRef } from "../providers/port";
 import { createJevMessageHandler, createJevSubmissionHandler } from "./jev";
 
-const JEV_CONFIG = { apiKey: "k", model: "cloudflare/clef" };
+const JEV_CONFIG = {
+  provider: "openrouter" as const,
+  apiKey: "k",
+  model: "cloudflare/clef",
+};
 const ACCOUNT_ID = "proton:hello@example.com";
 
 function envelope(overrides: Partial<MessageEnvelope> = {}): MessageEnvelope {

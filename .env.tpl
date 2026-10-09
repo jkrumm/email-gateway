@@ -19,7 +19,13 @@ LLM_BASE_URL=op://common/anthropic/OPENAI_BASE_URL
 LLM_API_KEY=op://common/anthropic/API_KEY
 LLM_MODEL=gpt-6-luna
 
-# Shadow decision lane ("Jev", Clef via OpenRouter Decisions API). Unset -> disabled.
+# Shadow decision lane ("Jev"). DECISION_PROVIDER=ue (default) sends `clef-eu`
+# to the IU endpoint above (LLM_BASE_URL/LLM_API_KEY); `openrouter` uses the
+# key below with an OpenRouter model id. Missing creds -> disabled.
+# DECISION_PROVIDER=ue
+# DECISION_MODEL=clef-eu
+# DECISION_PROVIDER=openrouter
+# DECISION_MODEL=cloudflare/clef
 OPENROUTER_API_KEY=op://common/openrouter/API_KEY
 
 # Usage/cost reporting to Argo (src/usage/argo.ts). Unset -> no-op; prod posts

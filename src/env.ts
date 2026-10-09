@@ -52,10 +52,14 @@ export const envSchema = z
     LLM_BASE_URL: z.string().optional(),
     LLM_API_KEY: z.string().optional(),
     LLM_MODEL: z.string().optional(),
-    // Shadow decision lane ("Jev", historical name): OpenRouter Decisions API.
-    // Unset key -> the lane is disabled everywhere.
+    // Shadow decision lane ("Jev", historical name). `ue` (default) is IU's
+    // Unified Endpoint via LLM_BASE_URL + LLM_API_KEY; `openrouter` is the
+    // OpenRouter Decisions API via OPENROUTER_API_KEY (use an OpenRouter model
+    // id such as `cloudflare/clef` with it). Missing creds -> the lane is
+    // disabled everywhere.
+    DECISION_PROVIDER: z.enum(["ue", "openrouter"]).default("ue"),
     OPENROUTER_API_KEY: z.string().optional(),
-    DECISION_MODEL: z.string().default("cloudflare/clef"),
+    DECISION_MODEL: z.string().default("clef-eu"),
     // Usage reporting to Argo (src/usage/argo.ts). Either unset -> no-op.
     ARGO_USAGE_URL: z.string().optional(),
     ARGO_API_SECRET: z.string().optional(),

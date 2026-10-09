@@ -21,9 +21,11 @@ file is what a dispatched agent needs before touching code.
 
 Bun 1.4 · Elysia 1.4 (`@elysiajs/bearer`) · `bun:sqlite` (WAL, migrations by
 `PRAGMA user_version`, append-only) · imapflow 2 + postal-mime · resend 6 +
-react-email 6 · AI SDK 7 (`@ai-sdk/openai-compatible` for the LLM, OpenRouter's
-Decisions API via `@openrouter/ai-sdk-provider` for the shadow lane "Jev", now
-Cloudflare's Clef) · a Vite 8 + React 19 + basalt-ui SPA in `client/`
+react-email 6 · AI SDK 7 (`@ai-sdk/openai-compatible` for the LLM; the shadow
+lane "Jev" runs Cloudflare's Clef as `clef-eu` on IU's Unified Endpoint through
+`src/llm/ue-decision-model.ts`, OpenRouter's Decisions API via
+`@openrouter/ai-sdk-provider` as the `DECISION_PROVIDER=openrouter`
+alternative) · a Vite 8 + React 19 + basalt-ui SPA in `client/`
 (TanStack Router + Query, Eden Treaty typed against `src/app.ts`'s `App`) served
 by Elysia at `/app` from `client/dist` · zod 4 · TypeScript strict,
 `verbatimModuleSyntax`. One small build step now: the client is built into
@@ -191,7 +193,10 @@ tests never need secrets.
   the old in-memory kick; `classify.ts`, `jev-judge.ts`)
 - `src/enrich/` LLM enrichment logic (`enrich-email.ts`) + `jev-email.ts`,
   both now called from job handlers, not a poll loop; `src/llm/` model
-  factories (`model.ts`, `jev.ts`) plus `thread-summary.ts`/`draft-reply.ts`
+  factories (`model.ts`, `jev.ts` — picks the decision provider per
+  `DECISION_PROVIDER`, default `ue`; `ue-decision-model.ts` is the UE
+  `Experimental_EvaluationModelV4`: types-only `@ai-sdk/provider` imports,
+  `APICallError` from `ai`, injectable `fetch`) plus `thread-summary.ts`/`draft-reply.ts`
   (Wave 8's two prompt builders for the agent API, both modelled on
   `enrich-email.ts`: same model plumbing, untrusted-data framing and 30-min
   hang guard)

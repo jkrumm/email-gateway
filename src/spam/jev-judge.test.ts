@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { fakeJevModel, openrouterMetadata } from "../test/fake-jev";
 import { judgeSubmissionWithJev } from "./jev-judge";
 
-const config = { apiKey: "k", model: "cloudflare/clef" };
+const config = {
+  provider: "openrouter" as const,
+  apiKey: "k",
+  model: "cloudflare/clef",
+};
 
 describe("judgeSubmissionWithJev", () => {
   test("returns null when Jev is disabled", () => {

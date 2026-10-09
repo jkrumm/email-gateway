@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { fakeJevModel, openrouterMetadata } from "../test/fake-jev";
 import type { UsageInput } from "../usage/argo";
-import { decide, decideShadow, type JevConfig } from "./jev";
+import { decide, decideShadow, jevConfigFromEnv, type JevConfig } from "./jev";
 
-const config: JevConfig = { apiKey: "test-key", model: "cloudflare/clef" };
+const config: JevConfig = {
+  provider: "openrouter",
+  apiKey: "test-key",
+  model: "cloudflare/clef",
+};
 
 const questions = {
   verdict: {
@@ -314,5 +318,105 @@ describe("decideShadow", () => {
         model: bad.model,
       })!,
     ).rejects.toThrow("gateway 529");
+  });
+});
+
+describe("jevConfigFromEnv", () => {
+  const base = {
+    DECISION_PROVIDER: "ue" as const,
+    DECISION_MODEL: "clef-eu",
+    OPENROUTER_API_KEY: undefined,
+    LLM_BASE_URL: "https://ue.example.com/openai/v1",
+    LLM_API_KEY: "ue-key",
+  };
+
+  test("ue needs LLM_BASE_URL and LLM_API_KEY", () => {
+    expect(jevConfigFromEnv(base)).toEqual({
+      provider: "ue",
+      apiKey: "ue-key",
+      baseUrl: "https://ue.example.com/openai/v1",
+      model: "clef-eu",
+    });
+    expect(jevConfigFromEnv({ ...base, LLM_API_KEY: undefined })).toBeNull();
+    expect(jevConfigFromEnv({ ...base, LLM_BASE_URL: undefined })).toBeNull();
+    // An OpenRouter key alone never enables the ue lane.
+    expect(
+      jevConfigFromEnv({
+        ...base,
+        LLM_API_KEY: undefined,
+        OPENROUTER_API_KEY: "or-key",
+      }),
+    ).toBeNull();
+  });
+
+  test("openrouter needs OPENROUTER_API_KEY only", () => {
+    const openrouter = {
+      ...base,
+      DECISION_PROVIDER: "openrouter" as const,
+      DECISION_MODEL: "cloudflare/clef",
+      OPENROUTER_API_KEY: "or-key",
+    };
+    expect(jevConfigFromEnv(openrouter)).toEqual({
+      provider: "openrouter",
+      apiKey: "or-key",
+      model: "cloudflare/clef",
+    });
+    expect(
+      jevConfigFromEnv({ ...openrouter, OPENROUTER_API_KEY: undefined }),
+    ).toBeNull();
+  });
+});
+
+describe("decide with the ue provider", () => {
+  test("reads providerMetadata.ue and reports billing iu with the reported cost", async () => {
+    const { model } = fakeJevModel(() => ({
+      answers: { verdict: rawAnswers.verdict },
+      warnings: [],
+      usage: { inputTokens: 206, outputTokens: 0 },
+      providerMetadata: {
+        ue: {
+          answers: { verdict: { confidence: 0.9 } },
+          usage: { cost: 0.00004944 },
+        },
+      },
+    }));
+    const reports: UsageInput[] = [];
+
+    const { answers, usage } = await decide({
+      config: { provider: "ue", apiKey: "k", baseUrl: "u", model: "clef-eu" },
+      model,
+      state: "x",
+      questions: { verdict: questions.verdict },
+      subTool: "decision-email",
+      report: async (input) => void reports.push(input),
+    });
+
+    expect(answers.verdict.confidence).toBe(0.9);
+    expect(usage.costUsd).toBe(0.00004944);
+    expect(reports[0]).toMatchObject({
+      model: "clef-eu",
+      billing: "iu",
+      outcome: "ok",
+      cost: { usd: 0.00004944, source: "reported" },
+    });
+  });
+
+  test("a failed ue call reports billing iu", async () => {
+    const { model } = fakeJevModel(() => {
+      throw new Error("boom");
+    });
+    const reports: UsageInput[] = [];
+
+    await expect(
+      decide({
+        config: { provider: "ue", apiKey: "k", baseUrl: "u", model: "clef-eu" },
+        model,
+        state: "x",
+        questions: { is_spam: questions.is_spam },
+        subTool: "decision-email",
+        report: async (input) => void reports.push(input),
+      }),
+    ).rejects.toThrow("boom");
+    expect(reports[0]).toMatchObject({ billing: "iu", outcome: "error" });
   });
 });

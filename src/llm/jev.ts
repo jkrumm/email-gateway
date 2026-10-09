@@ -7,6 +7,7 @@ import {
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { z } from "zod";
 import { env } from "../env";
+import { createUeDecisionModel } from "./ue-decision-model";
 import {
   NO_COST,
   ZERO_TOKENS,
@@ -18,21 +19,30 @@ import {
 
 // The shadow decision lane ("Jev" is its historical name — job kinds, `jev_*`
 // columns and function names keep it). It is a decision model: typed answers
-// with calibrated probabilities, no text generation, today Cloudflare's Clef
-// via OpenRouter's Decisions API. It is reached through the AI SDK's
+// with calibrated probabilities, no text generation, today Cloudflare's Clef:
+// `clef-eu` on IU's Unified Endpoint by default, OpenRouter's Decisions API as
+// the selectable alternative (`DECISION_PROVIDER`). It is reached through the AI SDK's
 // experimental `evaluate`, so the question and answer types are the SDK's own
 // (`choice` / `score` / `boolean`).
 
+export type JevProvider = "ue" | "openrouter";
+
 export interface JevConfig {
-  // OpenRouter API key.
+  provider: JevProvider;
+  // API key for the provider (UE: LLM_API_KEY, OpenRouter: OPENROUTER_API_KEY).
   apiKey: string;
-  // Decisions model id, e.g. `cloudflare/clef`.
+  // UE only: chat-completions base URL (LLM_BASE_URL).
+  baseUrl?: string;
+  // Decision model id: `clef-eu` on UE, `cloudflare/clef` on OpenRouter.
   model: string;
 }
 
+// Argo `billing` per provider: UE is billed to IU, OpenRouter to the owner.
+const BILLING = { ue: "iu", openrouter: "openrouter" } as const;
+
 type JevState = Parameters<typeof evaluate>[0]["state"];
 
-// OpenRouter reports per-question choice confidence in provider metadata
+// Providers report per-question choice confidence in provider metadata
 // rather than on the answer itself.
 type JevAnswer<Question extends EvaluationQuestion> =
   EvaluationAnswer<Question> extends { type: "choice" }
@@ -47,10 +57,10 @@ interface JevDecision<Questions extends Record<string, EvaluationQuestion>> {
 // see src/spam/classify.ts).
 const JEV_HANG_GUARD_MS = 30 * 60_000;
 
-// `providerMetadata.openrouter`: per-answer confidence and the request's cost
-// in USD. Each field degrades to undefined on a bad shape instead of failing
+// `providerMetadata[provider]` (`ue` / `openrouter`): per-answer confidence and
+// the request's cost in USD. Each field degrades to undefined on a bad shape instead of failing
 // the decision.
-const openrouterMetadataSchema = z.object({
+const providerMetadataSchema = z.object({
   answers: z
     .record(
       z.string(),
@@ -69,16 +79,64 @@ const openrouterMetadataSchema = z.object({
 const APP_NAME = "email-gateway";
 const APP_URL = "https://github.com/jkrumm/email-gateway";
 
+type JevEnv = Pick<
+  typeof env,
+  | "DECISION_PROVIDER"
+  | "DECISION_MODEL"
+  | "OPENROUTER_API_KEY"
+  | "LLM_BASE_URL"
+  | "LLM_API_KEY"
+>;
+
+// Pure over its env argument so provider selection is testable (`env` itself
+// is parsed at import).
+export function jevConfigFromEnv({
+  DECISION_PROVIDER,
+  DECISION_MODEL,
+  OPENROUTER_API_KEY,
+  LLM_BASE_URL,
+  LLM_API_KEY,
+}: JevEnv): JevConfig | null {
+  if (DECISION_PROVIDER === "openrouter") {
+    if (!OPENROUTER_API_KEY) return null;
+    return {
+      provider: "openrouter",
+      apiKey: OPENROUTER_API_KEY,
+      model: DECISION_MODEL,
+    };
+  }
+  if (!LLM_BASE_URL || !LLM_API_KEY) return null;
+  return {
+    provider: "ue",
+    apiKey: LLM_API_KEY,
+    baseUrl: LLM_BASE_URL,
+    model: DECISION_MODEL,
+  };
+}
+
 export function getJevConfig(): JevConfig | null {
-  const { OPENROUTER_API_KEY, DECISION_MODEL } = env;
-  if (!OPENROUTER_API_KEY) return null;
-  return { apiKey: OPENROUTER_API_KEY, model: DECISION_MODEL };
+  return jevConfigFromEnv(env);
+}
+
+function createDecisionModel(config: JevConfig): EvaluationModel {
+  if (config.provider === "openrouter") {
+    return createOpenRouter({
+      apiKey: config.apiKey,
+      appName: APP_NAME,
+      appUrl: APP_URL,
+    }).evaluationModel(config.model);
+  }
+  if (!config.baseUrl) throw new Error("Jev UE config has no baseUrl");
+  return createUeDecisionModel(config.model, {
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+  });
 }
 
 export interface JevUsage {
   inputTokens: number;
   outputTokens: number;
-  // Request cost in USD as reported by OpenRouter; null when absent.
+  // Request cost in USD as reported by the provider; null when absent.
   costUsd: number | null;
 }
 
@@ -97,7 +155,7 @@ export async function decide<
   // Argo `sub_tool` the call is reported under.
   subTool: Extract<UsageSubTool, `decision-${string}`>;
   config?: JevConfig | null;
-  // Injectable evaluation model (tests); defaults to OpenRouter's.
+  // Injectable evaluation model (tests); defaults to the configured provider's.
   model?: EvaluationModel;
   report?: UsageReporter;
 }): Promise<JevDecision<Questions> & { usage: JevUsage }> {
@@ -107,13 +165,7 @@ export async function decide<
   let result: Awaited<ReturnType<typeof evaluate<Questions>>>;
   try {
     result = await evaluate({
-      model:
-        model ??
-        createOpenRouter({
-          apiKey: config.apiKey,
-          appName: APP_NAME,
-          appUrl: APP_URL,
-        }).evaluationModel(config.model),
+      model: model ?? createDecisionModel(config),
       state,
       questions,
       // The durable job queue owns retries and backoff (src/db/jobs.ts) — the
@@ -128,7 +180,7 @@ export async function decide<
     void report({
       subTool,
       model: config.model,
-      billing: "openrouter",
+      billing: BILLING[config.provider],
       outcome: "error",
       durationMs: Date.now() - startedAt,
       tokens: ZERO_TOKENS,
@@ -137,8 +189,8 @@ export async function decide<
     throw error;
   }
 
-  const metadata = openrouterMetadataSchema.safeParse(
-    result.providerMetadata?.openrouter,
+  const metadata = providerMetadataSchema.safeParse(
+    result.providerMetadata?.[config.provider],
   );
   const answerMetadata = metadata.success ? metadata.data.answers : undefined;
   const costUsd = (metadata.success ? metadata.data.usage?.cost : null) ?? null;
@@ -155,7 +207,7 @@ export async function decide<
     void report({
       subTool,
       model: config.model,
-      billing: "openrouter",
+      billing: BILLING[config.provider],
       outcome,
       durationMs: Date.now() - startedAt,
       tokens: {
@@ -198,8 +250,8 @@ interface JevCallMeta {
 }
 
 // Runs `decide` and maps the answers with `pick`, adding latency, model and
-// usage. Returns null when the lane is disabled (no API key); rejects on
-// failure — the job queue (src/jobs/jev.ts) owns retries and backoff.
+// usage. Returns null when the lane is disabled (missing credentials); rejects
+// on failure — the job queue (src/jobs/jev.ts) owns retries and backoff.
 export function decideShadow<
   const Questions extends Record<string, EvaluationQuestion>,
   Fields extends object,

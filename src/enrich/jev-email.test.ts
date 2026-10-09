@@ -3,7 +3,11 @@ import { fakeJevModel, openrouterMetadata } from "../test/fake-jev";
 import { CATEGORIES } from "./categories";
 import { judgeEmailWithJev } from "./jev-email";
 
-const config = { apiKey: "k", model: "cloudflare/clef" };
+const config = {
+  provider: "openrouter" as const,
+  apiKey: "k",
+  model: "cloudflare/clef",
+};
 const payload = {
   direction: "inbound" as const,
   from: "a@example.com",
