@@ -4,8 +4,11 @@ import { createApiRoutes } from "./api/plugin";
 import { openMailDatabase } from "./db/mail-client";
 import { createAccountsRepo } from "./db/accounts";
 import { createMessagesRepo } from "./db/messages";
+import { createSendLogRepo } from "./db/send-log";
 import { createMailSubmissionsRepo } from "./db/mail-submissions";
 import { createJobQueue } from "./db/jobs";
+import { createSesWebhookRoutes } from "./routes/ses-webhook";
+import { SNS_REGION, SNS_TOPIC_ARN } from "./test/sns-fixture";
 
 const TEST_API_KEY = "test-api-key-1234567890";
 const MAIL_HOST = "mail.test";
@@ -120,6 +123,31 @@ describe("MAIL_HOST gate", () => {
       hostRequest("/api/stats", MAIL_HOST),
     );
     expect(withoutBearer.status).toBe(401);
+  });
+
+  test("set MAIL_HOST -> the SES webhook still answers on a Host that fails the gate", async () => {
+    const ses = createSesWebhookRoutes({
+      topicArn: SNS_TOPIC_ARN,
+      region: SNS_REGION,
+      sendLog: createSendLogRepo(openMailDatabase(":memory:")),
+    });
+    const gated = createApp({ mailHost: MAIL_HOST, ses });
+
+    const webhook = await gated.handle(
+      hostRequest("/webhooks/ses", "other.test", {
+        method: "POST",
+        body: "{not json",
+      }),
+    );
+    const api = await gated.handle(
+      hostRequest("/api/accounts", "other.test", {
+        headers: bearerHeaders("other.test"),
+      }),
+    );
+
+    // 400 = the route itself ran (bad JSON), not the gate's 404.
+    expect(webhook.status).toBe(400);
+    expect(api.status).toBe(404);
   });
 
   test("the send routes and /health stay reachable on any Host when gated", async () => {

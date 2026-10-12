@@ -1,4 +1,14 @@
 import type { Database } from "bun:sqlite";
+import { JOB_STALE_CLAIM_MS } from "./jobs";
+
+// Status of a row whose send a worker has claimed (claimSend) but not yet
+// recorded. Never a provider-reported status; ranks 0 like "sent".
+export const SENDING_STATUS = "sending";
+
+// How long a 'sending' claim is honoured before another worker may take it
+// over as a crashed worker's. Its own knob, tied to the job-claim window only
+// for now.
+export const SEND_CLAIM_STALE_MS = JOB_STALE_CLAIM_MS;
 
 export interface SendLogEntry {
   id: string;
@@ -61,6 +71,7 @@ const MAX_LIST_LIMIT = 100;
 // delivered (2) < a terminal failure (3). Referenced twice in the UPDATE
 // below, so it lives here once.
 const STATUS_RANK_SQL = (column: string) => `CASE ${column}
+  WHEN '${SENDING_STATUS}' THEN 0
   WHEN 'delivery_delayed' THEN 1
   WHEN 'delivered' THEN 2
   WHEN 'bounced' THEN 3 WHEN 'complained' THEN 3
@@ -113,10 +124,10 @@ function decodeCursor(cursor: string): { createdAt: string; id: string } {
 
 export function createSendLogRepo(db: Database) {
   // INSERT OR IGNORE rather than a plain INSERT: `id` is caller-supplied
-  // (the Resend message id, or a caller-generated id for a future send job)
-  // and this whole pipeline is built around at-least-once retry under the
-  // documented two-container deploy overlap — a retried insert of the same
-  // row must be a safe no-op, not a UNIQUE constraint error.
+  // (a random UUID for the route sends, a caller-generated id for the send
+  // job's enqueue) and this whole pipeline is built around at-least-once retry
+  // under the documented two-container deploy overlap — a retried insert of
+  // the same row must be a safe no-op, not a UNIQUE constraint error.
   function insertSendLog(input: InsertSendLogInput): void {
     const now = new Date().toISOString();
     db.run(
@@ -182,6 +193,36 @@ export function createSendLogRepo(db: Database) {
     ).changes;
   }
 
+  // Atomic claim of a send before calling the provider: marks the row
+  // 'sending' unless it already has a provider message id or another worker
+  // holds a fresh claim. A claim older than `staleBefore` (ISO timestamp) is a
+  // crashed worker's and may be taken over. One UPDATE, so two containers
+  // sharing the SQLite file cannot both win. Returns the `updated_at` stamp it
+  // wrote — the claim holder's token for releaseSend — or null when not claimed.
+  function claimSend(id: string, staleBefore: string): string | null {
+    const stamp = new Date().toISOString();
+    const changed = db.run(
+      `UPDATE send_log SET status = '${SENDING_STATUS}', updated_at = ?
+       WHERE id = ? AND provider_message_id IS NULL
+         AND (status IS NULL OR status != '${SENDING_STATUS}' OR updated_at < ?)`,
+      [stamp, id, staleBefore],
+    ).changes;
+    return changed === 1 ? stamp : null;
+  }
+
+  // Gives a failed send's claim back so the retry can claim again. Scoped to
+  // the claim holder: the row must still carry this claim's `stamp`, so a
+  // late release from a worker whose claim was taken over (and is now sending)
+  // clears nothing.
+  function releaseSend(id: string, stamp: string): void {
+    db.run(
+      `UPDATE send_log SET status = NULL, updated_at = ?
+       WHERE id = ? AND status = '${SENDING_STATUS}'
+         AND provider_message_id IS NULL AND updated_at = ?`,
+      [new Date().toISOString(), id, stamp],
+    );
+  }
+
   // Point lookup by id — used by src/jobs/send.ts's idempotency guard so a
   // retried send job (e.g. after this row's own UPDATE failed with
   // SQLITE_BUSY, per the two-container deploy overlap) can detect an
@@ -239,7 +280,9 @@ export function createSendLogRepo(db: Database) {
   // id whose status has not yet reached a terminal value. Terminal statuses
   // are never rechecked again, so a delivered/bounced/… row leaves this list
   // for good. Oldest-updated first, so successive runs make forward progress
-  // instead of repeatedly reading the same head of the queue.
+  // instead of repeatedly reading the same head of the queue. A 'sending' row
+  // is deliberately excluded: it has no provider message id yet, and once it
+  // does, the send result replaces the status.
   function listReconcilable({
     provider,
     limit,
@@ -262,6 +305,8 @@ export function createSendLogRepo(db: Database) {
     insertSendLog,
     recordProviderResult,
     recordEventByProviderMessageId,
+    claimSend,
+    releaseSend,
     listSendLog,
     getSendLog,
     listReconcilable,

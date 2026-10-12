@@ -7,6 +7,7 @@ import type { SendProvider } from "./send-port";
 import {
   resolveSendProviderName,
   SEND_PROVIDER_NAMES,
+  SES_SEND_ENV_KEYS,
   sesConfigured,
   type SendProviderName,
 } from "./send-select";
@@ -18,22 +19,19 @@ const builders: Record<SendProviderName, () => SendProvider> = {
   resend: () =>
     createResendSendProvider({ sendClient: resend, readClient: adminResend }),
   ses: () => {
+    if (!sesConfigured(env)) {
+      throw new Error(
+        `SES is not configured: set ${SES_SEND_ENV_KEYS.join(", ")}`,
+      );
+    }
+    // Destructured after the guard so the narrowed strings survive into the
+    // lazy client closure below.
     const {
       SES_REGION,
       SES_ACCESS_KEY_ID,
       SES_SECRET_ACCESS_KEY,
       SES_CONFIGURATION_SET,
     } = env;
-    if (
-      !SES_REGION ||
-      !SES_ACCESS_KEY_ID ||
-      !SES_SECRET_ACCESS_KEY ||
-      !SES_CONFIGURATION_SET
-    ) {
-      throw new Error(
-        "SES is not configured: set SES_REGION, SES_ACCESS_KEY_ID, SES_SECRET_ACCESS_KEY and SES_CONFIGURATION_SET",
-      );
-    }
     let client: SESv2Client | undefined;
     return createSesSendProvider({
       // Built on first send so the SDK is not loaded at boot. Explicit

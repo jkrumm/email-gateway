@@ -1,7 +1,7 @@
 import { renderTemplate, type SendProvider } from "../providers/send-port";
 import { sendProviderByName } from "../providers/send-registry";
 import { sendLogRepo as defaultSendLog } from "../db/mail-index";
-import type { SendLogRepo } from "../db/send-log";
+import { SEND_CLAIM_STALE_MS, type SendLogRepo } from "../db/send-log";
 import { findTemplateEntry, renderTemplateElement } from "../emails/registry";
 import type { JobHandler } from "./runner";
 
@@ -28,7 +28,10 @@ export function createSendHandler({
   sendLog = defaultSendLog,
 }: {
   providerByName?: (name: string) => SendProvider | null;
-  sendLog?: Pick<SendLogRepo, "recordProviderResult" | "getSendLog">;
+  sendLog?: Pick<
+    SendLogRepo,
+    "recordProviderResult" | "getSendLog" | "claimSend" | "releaseSend"
+  >;
 } = {}): JobHandler {
   return async (payload) => {
     const input = payload as SendJobPayload;
@@ -69,20 +72,50 @@ export function createSendHandler({
       renderTemplateElement(entry, input.templateProps),
     );
 
+    // The read above and the send below race when two containers overlap on
+    // a deploy: both could see no provider message id and both send, which a
+    // provider without an idempotency key (SES) cannot refuse. Claim the row
+    // atomically first. Not claimed means another worker is mid-send (a fresh
+    // claim) — throw so the runner retries later; never report success for a
+    // send this worker did not make. A claim older than SEND_CLAIM_STALE_MS
+    // belongs to a crashed worker and is taken over.
+    //
+    // Accepted gap: the claim stops two LIVE workers from both sending. It
+    // does not cover an ambiguous outcome — SES accepted the message but the
+    // response or the recordProviderResult write was lost — which can send
+    // again once the claim goes stale (SEND_CLAIM_STALE_MS), because SES has
+    // no idempotency key.
+    const staleBefore = new Date(
+      Date.now() - SEND_CLAIM_STALE_MS,
+    ).toISOString();
+    const claim = sendLog.claimSend(input.id, staleBefore);
+    if (!claim) {
+      throw new Error(
+        `send job ${input.id}: another worker holds the send claim, retrying later`,
+      );
+    }
+
     // The provider's own idempotency key is the second line of defense: if
     // this handler genuinely runs twice for the same send_log row (a process
     // crash mid-handler, not just the recordProviderResult write below
     // throwing), the provider refuses the duplicate itself instead of
     // sending it.
-    const { providerMessageId } = await provider.send({
-      from: input.from,
-      to: input.to,
-      replyTo: input.replyTo,
-      subject: input.subject,
-      html,
-      text,
-      idempotencyKey: input.id,
-    });
+    let providerMessageId: string;
+    try {
+      ({ providerMessageId } = await provider.send({
+        from: input.from,
+        to: input.to,
+        replyTo: input.replyTo,
+        subject: input.subject,
+        html,
+        text,
+        idempotencyKey: input.id,
+      }));
+    } catch (error) {
+      // Nothing was sent: hand the claim back so the retry can take it.
+      sendLog.releaseSend(input.id, claim);
+      throw error;
+    }
 
     // A write failure here must never propagate: the email already sent, so
     // the runner's at-least-once retry on a thrown error would call send()

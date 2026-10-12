@@ -20,6 +20,10 @@ export interface CreateAppOptions<
   // is generic so a configured seam keeps its concrete routes in `App`.
   web?: TWeb;
   api?: TApi;
+  // Same for the SES webhook, which sits outside the gate. Typed concretely
+  // (not generic like web/api): it is mounted before the `.guard`, and a
+  // generic instance there leaks into the guard's hook typing and breaks it.
+  ses?: typeof sesWebhookRoutes;
 }
 
 export function createApp<
@@ -29,6 +33,7 @@ export function createApp<
   const mailHost = options.mailHost ?? env.MAIL_HOST;
   const web = (options.web ?? webRoutes) as TWeb;
   const api = (options.api ?? apiRoutes) as TApi;
+  const ses = options.ses ?? sesWebhookRoutes;
 
   return (
     new Elysia()
@@ -46,7 +51,7 @@ export function createApp<
       // SNS -> send_log delivery events. On the public door like the send
       // routes (SNS cannot reach the MAIL_HOST-gated surface); the SNS
       // signature is its only auth, and unset SES_SNS_TOPIC_ARN 404s it.
-      .use(sesWebhookRoutes)
+      .use(ses)
       // The mail surface (/app, /api, /mcp) sits behind MAIL_HOST; the send
       // routes above and /health never do. A mismatching Host 404s these
       // routes entirely. A `.guard()` (not a separate plugin used via `.use`,

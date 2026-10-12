@@ -157,6 +157,16 @@ export const envSchema = z
         ["SES_REGION"],
         "SES_SNS_TOPIC_ARN is set",
       );
+      // arn:aws:sns:<region>:<account>:<topic> — the webhook pins the SNS
+      // host to SES_REGION, so a topic in another region could never verify.
+      const topicRegion = value.SES_SNS_TOPIC_ARN.split(":")[3];
+      if (value.SES_REGION && topicRegion !== value.SES_REGION) {
+        context.addIssue({
+          code: "custom",
+          path: ["SES_SNS_TOPIC_ARN"],
+          message: "SES_SNS_TOPIC_ARN must be a topic in SES_REGION",
+        });
+      }
     }
 
     if (value.IMAP_HOST) {

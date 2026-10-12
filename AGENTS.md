@@ -106,8 +106,12 @@ uidValidity:uid)`, never attacker-influenced, so `ON CONFLICT DO UPDATE`ing
   off. **SES is off while its env is unset** (`SES_REGION`/`_ACCESS_KEY_ID`/
   `_SECRET_ACCESS_KEY`/`_CONFIGURATION_SET`; `SES_SNS_TOPIC_ARN` gates the
   webhook, unset → 404); routing a template to `ses` without that config fails
-  startup. SES has no idempotency key — the `send` job's "skip when a
-  provider message id is recorded" guard is the only duplicate-send defence.
+  startup. SES has no idempotency key: the `send` job skips a row that has a
+  provider message id and takes an atomic `send_log` claim (`claimSend`: status
+  `sending`, stale after `SEND_CLAIM_STALE_MS`, released by its holder if the
+  provider throws). The claim stops two live workers from both sending; it does
+  not cover an ambiguous outcome (SES accepted but the response or the DB write
+  was lost), which can re-send once the claim goes stale — accepted gap.
 - **Migrations are append-only**; `accounts.provider` has a CHECK constraint, so a
   new provider is a migration.
 - **No timeouts on agent-style work** (`rules/agent-limits.md`): the LLM calls

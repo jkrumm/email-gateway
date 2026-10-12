@@ -12,6 +12,41 @@ import {
 } from "../providers/ses/sns-verify";
 
 const MAX_BODY_BYTES = 256 * 1024;
+const CONFIRM_FETCH_TIMEOUT_MS = 5_000;
+
+// Reads the request body as text, but never more than MAX_BODY_BYTES: a
+// declared Content-Length over the cap is refused before reading, and the
+// stream is counted chunk by chunk and cancelled the moment the total passes
+// it (a chunked or lying-Content-Length body is never buffered whole). Returns
+// BODY_TOO_LARGE on overflow: a throw from an Elysia parser surfaces as a 400
+// parse error, so the handler turns the sentinel into the 413 instead.
+const BODY_TOO_LARGE = Symbol("body too large");
+
+async function readCappedText(
+  request: Request,
+): Promise<string | typeof BODY_TOO_LARGE> {
+  const declared = Number(request.headers.get("content-length"));
+  if (declared > MAX_BODY_BYTES) {
+    await request.body?.cancel().catch(() => {});
+    return BODY_TOO_LARGE;
+  }
+  if (!request.body) return "";
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      return BODY_TOO_LARGE;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
 
 // Amazon SNS -> send_log. SES publishes delivery events to an SNS topic, and
 // SNS POSTs them here (as text/plain). The route is public by necessity: the
@@ -20,6 +55,12 @@ const MAX_BODY_BYTES = 256 * 1024;
 // OFF on the topic, since the signed SNS envelope is what gets verified.
 // Unset topic ARN (or region) -> the path 404s. Logs carry event types and
 // message ids only, never the payload (recipient addresses).
+//
+// A replayed, captured signed Notification is accepted on purpose: the
+// send_log status-rank guard makes it a no-op or an identical re-apply of the
+// same event, so Timestamp freshness is deliberately not enforced.
+// A DB write failure is likewise left to surface as a 5xx on purpose: SNS
+// retries a non-2xx, and the rank guard makes the retry idempotent.
 export function createSesWebhookRoutes({
   topicArn,
   region,
@@ -31,7 +72,7 @@ export function createSesWebhookRoutes({
   region: string | undefined;
   verifier?: SnsVerifier;
   // Used only to confirm a subscription (GET SubscribeURL).
-  fetch?: (url: string) => Promise<Response>;
+  fetch?: (url: string, init?: RequestInit) => Promise<Response>;
   sendLog?: SendLogRepo;
 }) {
   async function confirmSubscription(message: SnsMessage, snsRegion: string) {
@@ -45,7 +86,11 @@ export function createSesWebhookRoutes({
       return;
     }
     try {
-      const response = await fetchUrl(url.href);
+      // redirect: "error" — a 3xx must not walk the GET off the pinned host.
+      const response = await fetchUrl(url.href, {
+        signal: AbortSignal.timeout(CONFIRM_FETCH_TIMEOUT_MS),
+        redirect: "error",
+      });
       if (!response.ok) throw new Error(`status ${response.status}`);
       console.log(
         `ses webhook: confirmed subscription ${message.MessageId} for ${message.TopicArn}`,
@@ -95,26 +140,20 @@ export function createSesWebhookRoutes({
 
   return new Elysia().post(
     "/webhooks/ses",
-    async ({ body, request, set }) => {
+    async ({ body, set }) => {
       if (!topicArn || !region || !verifier) {
         set.status = 404;
         return { message: "Not Found" };
       }
 
-      // Declared size first so an oversize body is refused unread; the byte
-      // check covers a missing or lying Content-Length.
-      const declared = Number(request.headers.get("content-length"));
-      if (
-        declared > MAX_BODY_BYTES ||
-        Buffer.byteLength(String(body ?? "")) > MAX_BODY_BYTES
-      ) {
+      if (body === BODY_TOO_LARGE) {
         set.status = 413;
         return { message: "Payload Too Large" };
       }
 
       let json: unknown;
       try {
-        json = JSON.parse(String(body ?? ""));
+        json = JSON.parse(String(body));
       } catch {
         set.status = 400;
         return { message: "Bad Request" };
@@ -154,7 +193,9 @@ export function createSesWebhookRoutes({
       }
       return { ok: true };
     },
-    { parse: "text" },
+    // SNS posts text/plain, so Elysia's JSON parser would not run anyway;
+    // this reads whatever arrives, capped.
+    { parse: ({ request }) => readCappedText(request) },
   );
 }
 

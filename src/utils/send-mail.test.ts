@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { recordSendLog, sendMail } from "./send-mail";
 import type { InsertSendLogInput, SendLogRepo } from "../db/mail-index";
+import { openMailDatabase } from "../db/mail-client";
+import { createSendLogRepo } from "../db/send-log";
 import { createFakeSendProvider } from "../test/fake-send-provider";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const TEMPLATE = createElement("p", null, "Hello guest");
 
@@ -70,7 +74,7 @@ describe("sendMail", () => {
     expect(provider.sent[0]?.idempotencyKey).toBeUndefined();
     expect(rows).toEqual([
       {
-        id: expect.not.stringMatching(/^email_42$/),
+        id: expect.stringMatching(UUID),
         templateId: "fpp-sender",
         recipients: ["guest@example.com"],
         provider: "fake",
@@ -78,6 +82,29 @@ describe("sendMail", () => {
         status: "sent",
         requestedBy: "route",
       },
+    ]);
+  });
+
+  test("two sends returning the same provider message id get two distinct rows", async () => {
+    const sendLog = createSendLogRepo(openMailDatabase(":memory:"));
+    const provider = createFakeSendProvider({ providerMessageId: "same-id" });
+
+    for (const to of ["a@example.com", "b@example.com"]) {
+      await sendMail({
+        to,
+        subject: "Hello",
+        template: TEMPLATE,
+        provider,
+        sendLog,
+      });
+    }
+
+    const { data } = sendLog.listSendLog();
+    expect(data).toHaveLength(2);
+    expect(data[0]!.id).not.toBe(data[1]!.id);
+    expect(data.map((row) => row.providerMessageId)).toEqual([
+      "same-id",
+      "same-id",
     ]);
   });
 

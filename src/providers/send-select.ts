@@ -19,9 +19,11 @@ export const SES_SEND_ENV_KEYS = [
   "SES_CONFIGURATION_SET",
 ] as const;
 
-export function sesConfigured(
-  value: Partial<Record<(typeof SES_SEND_ENV_KEYS)[number], string>>,
-): boolean {
+type SesSendEnvKey = (typeof SES_SEND_ENV_KEYS)[number];
+
+export function sesConfigured<T extends Partial<Record<SesSendEnvKey, string>>>(
+  value: T,
+): value is T & Record<SesSendEnvKey, string> {
   return SES_SEND_ENV_KEYS.every((key) => Boolean(value[key]));
 }
 

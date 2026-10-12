@@ -319,3 +319,92 @@ describe("recordEventByProviderMessageId", () => {
     expect(sendLog.getSendLog("row")!.lastEvent).toBe("bounced:Permanent");
   });
 });
+
+describe("claimSend / releaseSend", () => {
+  const EPOCH = "1970-01-01T00:00:00.000Z";
+
+  function setupClaim() {
+    const { db, sendLog } = setupWithDb();
+    seed(sendLog, "row", { providerMessageId: null });
+    return { db, sendLog };
+  }
+
+  test("the first claim wins and marks the row sending; a second fails", () => {
+    const { sendLog } = setupClaim();
+
+    expect(sendLog.claimSend("row", EPOCH)).toEqual(expect.any(String));
+    expect(sendLog.claimSend("row", EPOCH)).toBeNull();
+    expect(sendLog.getSendLog("row")!.status).toBe("sending");
+  });
+
+  test("a claim older than the cutoff is reclaimable", () => {
+    const { db, sendLog } = setupClaim();
+    sendLog.claimSend("row", EPOCH);
+    db.run("UPDATE send_log SET updated_at = '2026-01-01T00:00:00.000Z'");
+
+    expect(sendLog.claimSend("row", "2026-01-01T00:00:01.000Z")).toEqual(
+      expect.any(String),
+    );
+    expect(sendLog.claimSend("row", "2026-01-01T00:00:01.000Z")).toBeNull();
+  });
+
+  test("a row with a provider message id or no row cannot be claimed", () => {
+    const sendLog = setup();
+    seed(sendLog, "sent-row", { providerMessageId: "m1", status: "sent" });
+
+    expect(sendLog.claimSend("sent-row", EPOCH)).toBeNull();
+    expect(sendLog.claimSend("missing", EPOCH)).toBeNull();
+  });
+
+  test("release resets a held claim so it can be claimed again", () => {
+    const { sendLog } = setupClaim();
+    const stamp = sendLog.claimSend("row", EPOCH)!;
+
+    sendLog.releaseSend("row", stamp);
+
+    expect(sendLog.getSendLog("row")!.status).toBeNull();
+    expect(sendLog.claimSend("row", EPOCH)).toEqual(expect.any(String));
+  });
+
+  test("a takeover by worker B is not cleared by A's late release", () => {
+    const { db, sendLog } = setupClaim();
+    const stampA = sendLog.claimSend("row", EPOCH)!;
+    db.run("UPDATE send_log SET updated_at = '2020-01-01T00:00:00.000Z'");
+    Bun.sleepSync(2); // stamps are millisecond ISO strings
+    const stampB = sendLog.claimSend("row", "2026-01-01T00:00:00.000Z")!;
+    expect(stampB).not.toBe(stampA);
+
+    sendLog.releaseSend("row", stampA);
+
+    expect(sendLog.getSendLog("row")!.status).toBe("sending");
+    expect(sendLog.claimSend("row", EPOCH)).toBeNull();
+    sendLog.releaseSend("row", stampB);
+    expect(sendLog.getSendLog("row")!.status).toBeNull();
+  });
+
+  test("release leaves a row that already has a provider message id alone", () => {
+    const sendLog = setup();
+    seed(sendLog, "row", { providerMessageId: "m1", status: "sending" });
+
+    sendLog.releaseSend("row", "any-stamp");
+
+    expect(sendLog.getSendLog("row")!.status).toBe("sending");
+  });
+
+  test("a sending row is not reconcilable and ranks as sent for events", () => {
+    const { sendLog } = setupClaim();
+    sendLog.claimSend("row", EPOCH);
+
+    sendLog.recordProviderResult("row", { providerMessageId: "m9" });
+    expect(sendLog.getSendLog("row")!.status).toBe("sending");
+    expect(sendLog.listReconcilable({ provider: "resend", limit: 10 })).toEqual(
+      [],
+    );
+    expect(
+      sendLog.recordEventByProviderMessageId("resend", "m9", {
+        status: "delivery_delayed",
+        lastEvent: "delivery_delayed",
+      }),
+    ).toBe(1);
+  });
+});

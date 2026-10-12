@@ -28,6 +28,12 @@ export function recordSendLog(
   }
 }
 
+/**
+ * Sends one rendered template through the selected provider and records a
+ * send_log row. The returned `id` is the PROVIDER's message id (what the
+ * caller can look up at the provider), not the send_log row id, which is a
+ * separate random UUID.
+ */
 export async function sendMail({
   from = DEFAULT_FROM,
   to,

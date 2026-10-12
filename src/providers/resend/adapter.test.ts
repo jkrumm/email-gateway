@@ -59,10 +59,9 @@ function fakeResend({
       get: get(sentItems, {}),
       send: async (input: unknown) => {
         sendCalls.push(input);
-        // A fresh id per call: sendMail() writes a send_log row keyed by this
-        // id, and that repo is insert-only — a literal shared across tests
-        // would collide on the second send() in the same process (mailDb's
-        // singleton is shared across test files unless overridden).
+        // A fresh id per call keeps each send's provider message id distinct
+        // in the shared mailDb singleton (sendMail's send_log row id is its
+        // own random UUID, not this id).
         return {
           data: { id: `email_sent_${crypto.randomUUID()}` },
           error: null,

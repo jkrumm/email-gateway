@@ -257,4 +257,15 @@ describe("SES env validation", () => {
       }).success,
     ).toBe(true);
   });
+
+  test("a topic ARN in another region than SES_REGION fails startup", () => {
+    const result = envSchema.safeParse({
+      ...base,
+      SES_REGION: "eu-central-1",
+      SES_SNS_TOPIC_ARN: "arn:aws:sns:us-east-1:111122223333:ses-events",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["SES_SNS_TOPIC_ARN"]);
+  });
 });

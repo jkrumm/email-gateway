@@ -1117,43 +1117,76 @@ isolation in reconcile, the id/name assertion and `Object.hasOwn`.
   to `delivered` by reconcile falls through to the provider's idempotency
   key; render failures in `sendMail` are not logged like send failures.
 
-## Wave 12 — SES adapter and events <!-- status: active -->
+## Wave 12 — SES adapter and events <!-- status: done -->
 
 Code only; SES stays switched off (env unset) until Wave 13 provisions it.
 
-- [ ] `/research` first: `@aws-sdk/client-sesv2` current version and
+- [x] `/research` first: `@aws-sdk/client-sesv2` current version and
       `SendEmail` with a configuration set; SNS HTTPS subscription
       confirmation and message-signature verification (SignatureVersion 2,
       cert URL host check); the SES event JSON for Delivery, Bounce,
       Complaint, Reject, DeliveryDelay. Bake the facts into code comments
       only where they change a decision.
-- [ ] Before SES carries anything: route sends get a provider-independent
+- [x] Before SES carries anything: route sends get a provider-independent
       `send_log.id` (not the provider message id — two providers could
       collide on `INSERT OR IGNORE`), and the send job's "already sent" guard
       skips on any recorded `provider_message_id`, not only
       `status === "sent"` — a row reconciled to `delivered` must never be
       re-sent, and SES has no idempotency key to catch it.
-- [ ] `src/providers/ses/`: a `SendProvider` on SESv2 `SendEmail` (region,
+- [x] `src/providers/ses/`: a `SendProvider` on SESv2 `SendEmail` (region,
       configuration-set name, credentials from env; all optional — unset
       means SES unavailable and the route stays on Resend). No idempotency
       key exists on SES: the `send_log` guard in the send job is the only
       duplicate protection, so keep it.
-- [ ] `POST /webhooks/ses` on the public door (D5 amends D1): verify the SNS
+- [x] `POST /webhooks/ses` on the public door (D5 amends D1): verify the SNS
       signature and topic ARN, confirm the subscription, map events onto
       `send_log.status`/`last_event` by `provider_message_id`; 2xx on
       anything it cannot match so SNS stops retrying. Rate-limit stays
       Traefik's. Host gate unaffected (`/webhooks` is not mail surface).
-- [ ] Tests with a fake SES client and signed SNS fixtures (a test key pair,
+- [x] Tests with a fake SES client and signed SNS fixtures (a test key pair,
       never a real AWS cert).
-- [ ] README.md (endpoint, env, event mapping) + AGENTS.md in the same
+- [x] README.md (endpoint, env, event mapping) + AGENTS.md in the same
       commit.
 
 **Acceptance:** `make check` green; `/review --deep` clean (public,
 security-adjacent route); prod deploy unchanged in behaviour (SES env unset).
 
-**Left behind:**
+**Left behind:** Shipped as two commits (SES provider + webhook, then the
+review fix-ups). `src/providers/ses/{send,events,sns-verify}.ts`,
+`src/routes/ses-webhook.ts` (public, outside the MAIL_HOST guard, 404 while
+`SES_SNS_TOPIC_ARN` is unset), `send_log.recordEventByProviderMessageId`
+(status never regresses: sent < delivery_delayed < delivered < bounced /
+complained / rejected / failed). Env: `SES_REGION`, `SES_ACCESS_KEY_ID`,
+`SES_SECRET_ACCESS_KEY`, `SES_CONFIGURATION_SET`, `SES_SNS_TOPIC_ARN`; routing
+a template to `ses` without the first four fails startup, and the topic ARN's
+region must equal `SES_REGION`. `@aws-sdk/client-sesv2` is pinned at 3.1148.0
+(3.1149.0 was inside the release cooldown) and loaded lazily on first send.
+Wave 11's carry-overs are done: route sends get a random UUID `send_log.id`
+(the returned receipt id is still the provider message id), and the send job
+skips on any recorded provider message id and takes an atomic `sending` claim
+(`claimSend`/`releaseSend`, holder-scoped) before calling the provider.
+`make check` green (662 tests); `/review` ran two rounds. Round 1 blocking: the
+256 KB webhook cap ran after the body was buffered (now a streaming parser,
+413) and the SES double-send race (the claim). Round 2: release scoped to the
+claim holder, constants, cancel handling.
 
-## Wave 13 — SES provisioning <!-- status: pending -->
+For Wave 13:
+- The SNS topic must keep raw message delivery off and should be set to
+  `SignatureVersion` 2 (v1 also verifies).
+- Accepted gaps: an ambiguous outcome (SES accepted but the response or the DB
+  write was lost) can re-send after `SEND_CLAIM_STALE_MS`, since SES has no
+  idempotency key; contention on a fresh claim spends a job attempt; a replayed
+  signed Notification is accepted (the status-rank guard makes it a no-op) and
+  Timestamp freshness is not enforced; a webhook event that beats the
+  `send_log` write of its message id is dropped (200, logged).
+- Never exercised against real AWS: the SDK call shape and the SNS cert fetch
+  are covered by fakes and a generated key pair only. Wave 13's simulator and
+  test-send are the first real proof.
+- No prod behaviour change: SES env is unset. The Wave 11 acceptance check
+  (`provider_message_id` on a route send) is still pending the next prod send.
+
+
+## Wave 13 — SES provisioning <!-- status: active -->
 
 Owner gates first; the agent prepares everything around them.
 

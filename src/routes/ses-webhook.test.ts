@@ -11,7 +11,10 @@ import {
 } from "../test/sns-fixture";
 import { createSesWebhookRoutes } from "./ses-webhook";
 
-function setup({ configured = true } = {}) {
+function setup({
+  configured = true,
+  failWrites = false,
+}: { configured?: boolean; failWrites?: boolean } = {}) {
   const sendLog = createSendLogRepo(openMailDatabase(":memory:"));
   const certFetches: string[] = [];
   const confirmFetches: string[] = [];
@@ -29,7 +32,14 @@ function setup({ configured = true } = {}) {
       confirmFetches.push(url);
       return new Response("ok");
     },
-    sendLog,
+    sendLog: failWrites
+      ? {
+          ...sendLog,
+          recordEventByProviderMessageId: () => {
+            throw new Error("SQLITE_BUSY");
+          },
+        }
+      : sendLog,
   });
 
   sendLog.insertSendLog({
@@ -62,7 +72,7 @@ function setup({ configured = true } = {}) {
   }
 
   const row = () => sendLog.getSendLog("row-1")!;
-  return { post, postEvent, row, sendLog, certFetches, confirmFetches };
+  return { app, post, postEvent, row, sendLog, certFetches, confirmFetches };
 }
 
 describe("POST /webhooks/ses", () => {
@@ -84,12 +94,78 @@ describe("POST /webhooks/ses", () => {
     expect(certFetches).toEqual([]);
   });
 
-  test("a body over 256 KB is 413", async () => {
+  test("a body over 256 KB with a Content-Length is 413", async () => {
     const { post } = setup();
 
     const response = await post("x".repeat(256 * 1024 + 1));
 
     expect(response.status).toBe(413);
+  });
+
+  test("a chunked body over 256 KB is 413 and is not read to the end", async () => {
+    const { app } = setup();
+    const chunk = new Uint8Array(64 * 1024).fill(120);
+    const totalChunks = 1000;
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled === totalChunks) return controller.close();
+        pulled += 1;
+        controller.enqueue(chunk);
+      },
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/webhooks/ses", {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body,
+        duplex: "half",
+      } as RequestInit),
+    );
+
+    expect(response.status).toBe(413);
+    expect(pulled).toBeLessThan(totalChunks / 2);
+  });
+
+  test("a rejecting stream cancel still yields 413", async () => {
+    const { app } = setup();
+    const chunk = new Uint8Array(64 * 1024).fill(120);
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        throw new Error("cancel failed");
+      },
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/webhooks/ses", {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body,
+        duplex: "half",
+      } as RequestInit),
+    );
+
+    expect(response.status).toBe(413);
+  });
+
+  test("a body exactly at the cap is not refused for size", async () => {
+    const { post } = setup();
+
+    const response = await post("x".repeat(256 * 1024));
+
+    expect(response.status).toBe(400);
+  });
+
+  test("a database write failure surfaces as 500 so SNS retries", async () => {
+    const { postEvent } = setup({ failWrites: true });
+
+    const response = await postEvent("Delivery");
+
+    expect(response.status).toBe(500);
   });
 
   test("a different TopicArn is 403 and fetches nothing", async () => {
