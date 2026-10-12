@@ -1166,11 +1166,11 @@ Wave 11's carry-overs are done: route sends get a random UUID `send_log.id`
 skips on any recorded provider message id and takes an atomic `sending` claim
 (`claimSend`/`releaseSend`, holder-scoped) before calling the provider.
 `make check` green (662 tests); `/review` ran two rounds. Round 1 blocking: the
-256 KB webhook cap ran after the body was buffered (now a streaming parser,
-413) and the SES double-send race (the claim). Round 2: release scoped to the
+256 KB webhook cap ran after the body was buffered (now a streaming parser, 413) and the SES double-send race (the claim). Round 2: release scoped to the
 claim holder, constants, cancel handling.
 
 For Wave 13:
+
 - The SNS topic must keep raw message delivery off and should be set to
   `SignatureVersion` 2 (v1 also verifies).
 - Accepted gaps: an ambiguous outcome (SES accepted but the response or the DB
@@ -1185,8 +1185,48 @@ For Wave 13:
 - No prod behaviour change: SES env is unset. The Wave 11 acceptance check
   (`provider_message_id` on a route send) is still pending the next prod send.
 
-
 ## Wave 13 — SES provisioning <!-- status: active -->
+
+**Owner inputs (2026-10-12):** the AWS account exists. The owner asked to
+"set up SES and migrate everything away from Resend over to AWS SES", which
+covers the three current domains (`<fpp-domain>`, `<shutterflow-domain>`,
+`<personal-domain>` — the real names are in Resend's `GET /domains` and in
+this repo's git history of `src/utils/send-mail.ts`; never write them into
+tracked files) and their DNS records. Further domains are not listed yet.
+
+How to work this wave:
+
+- **AWS access** is the mini's `jk-ses` profile: `aws login` console
+  credentials as root, auto-refreshing for up to 12 hours from 2026-10-12
+  ~14:55 local. Pass `--profile jk-ses --region eu-central-1` on every call.
+  The mini's `default` and `aws.CP.*` profiles are IU's: never touch them.
+  If the session has expired, stop and ask the orchestrator for a new
+  `aws login --remote`. No long-lived admin key is created, ever.
+- **Provisioning as code:** `scripts/ses-provision.ts`, an idempotent Bun
+  script shelling out to the `aws` CLI (no new dependencies). Domains come
+  from argv. Each run converges: SES identities (Easy DKIM 2048) with a
+  custom MAIL FROM on a new subdomain (not `send.`, which Resend still
+  uses); configuration set `email-gateway`; SNS topic in `eu-central-1` with
+  the configuration set's event destination (send, delivery, bounce,
+  complaint, reject, delivery delay); an IAM user scoped to
+  `ses:SendEmail`/`ses:SendRawEmail` on those identities + the configuration
+  set. It prints the DNS records it needs and never prints secrets except on
+  the one call that creates the access key.
+- **Secrets:** the sending key is production (T2). It goes to 1Password
+  `vps/email-gateway` (fields `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY`)
+  through `ask-human.sh` on the MacBook, and never into `headless.refs`.
+  Wire `SES_*` into `vps/apps/email-gateway/.env.tpl` + `compose.yml` per
+  `/secrets`.
+- **DNS:** `/cloudflare`, only additions: three DKIM CNAMEs, the MAIL FROM MX
+  and SPF TXT per domain. Do not touch existing records (Proton MX, the
+  `send.` and `resend._domainkey` records, DMARC).
+- **Order:** deploy the gateway with `SES_SNS_TOPIC_ARN` set (so
+  `/webhooks/ses` answers) before creating the HTTPS subscription, or the
+  confirmation 404s. No template routes to `ses` yet.
+- **Production access:** submit it with `aws sesv2 put-account-details`
+  (transactional, the personal domain as website, the owner's `hello@`
+  address as contact, a short honest use-case text); record the request,
+  not the answer — AWS replies within about 24 hours.
 
 Owner gates first; the agent prepares everything around them.
 
