@@ -83,6 +83,10 @@ export const envSchema = z
     DATA_DIR: z.string().default("./data"),
     // Bearer key for /api/*. Unset -> every /api route 404s.
     API_KEY: z.string().min(16).optional(),
+    // Read-only bearer key for GET /sy-serendipity/requests (the SY Serendipity
+    // admin panel). Opens nothing else: not /api, not the send routes. Unset ->
+    // the route 404s.
+    SY_SERENDIPITY_READ_KEY: z.string().min(32).optional(),
 
     // IMAP ingest (Proton Mail Bridge). Unset host -> IMAP ingest disabled.
     IMAP_HOST: z.string().optional(),

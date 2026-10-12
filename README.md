@@ -48,6 +48,7 @@ This project was created using `bun init` in bun v1.0.7. [Bun](https://bun.sh) i
 - `POST /fpp` — bearer `SECRET_KEY`. Body: `{ name, email, subject, message }`. Sends a contact-form confirmation to the sender and forwards it to `RECEIVER_EMAIL`.
 - `POST /fpp-daily-analytics` — bearer `SECRET_KEY`. Body: `{ votes, estimations, rooms, unique_users, page_views }`. Sends a daily analytics summary to `RECEIVER_EMAIL`.
 - `POST /sy-serendipity` — bearer `SECRET_KEY`. Body: `{ firstName, lastName, email, numberOfPeople, destination, duration, arrivalDate, departureDate, phone, message }` (all fields except `email` are nullable). Sends a charter-request email to `SY_SERENDIPITY_RECEIVER_EMAIL`; uses `SY_SERENDIPITY_FROM_EMAIL` as the sender when set, otherwise falls back to the default `sendMail` sender.
+- `GET /sy-serendipity/requests` — bearer `SY_SERENDIPITY_READ_KEY` (read-only; `SECRET_KEY` and `API_KEY` are rejected). Query: `since` (ISO timestamp, inclusive), `limit` (1–200, default 100). Returns `{ requests, total }`: every `sy-serendipity` submission in the window, all verdicts (`legit`/`spam`/`marketing`) with `delivered`, newest first, form fields only — no classifier reason/confidence/model or `jev_*`. `total` counts the window before `limit`. Unset key → 404; wrong/missing token → `401 { "message": "Unauthorized" }`. Not behind `MAIL_HOST`. Feeds the SY Serendipity admin panel (Netlify Function).
 
 ## Spam filter
 
@@ -229,3 +230,4 @@ curl -H "Authorization: Bearer $API_KEY" "https://<host>/api/messages?needs_me=1
 New env var:
 
 - `API_KEY` — bearer key for `/api/*`, min 16 chars. Unset → the whole `/api/*` prefix 404s.
+- `SY_SERENDIPITY_READ_KEY` — bearer key for `GET /sy-serendipity/requests` only, min 32 chars. Unset → that route 404s.

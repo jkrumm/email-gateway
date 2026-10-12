@@ -70,6 +70,19 @@ export interface ListSubmissionsResult {
   nextCursor: string | null;
 }
 
+export interface ListBySourceInput {
+  source: SubmissionSource;
+  // Inclusive lower bound on received_at (UTC ISO string, same format as stored).
+  since?: string;
+  limit: number;
+}
+
+export interface ListBySourceResult {
+  data: SubmissionRecord[];
+  // Rows matching source + since, before `limit` is applied.
+  total: number;
+}
+
 export interface JevComparison {
   compared: number;
   agreed: number;
@@ -290,6 +303,36 @@ export function createMailSubmissionsRepo(db: Database) {
     return { data, nextCursor };
   }
 
+  // Newest-first window over one source, all verdicts. Offset-free: callers
+  // narrow with `since`, not pages.
+  function listBySource({
+    source,
+    since,
+    limit,
+  }: ListBySourceInput): ListBySourceResult {
+    const where = since
+      ? "WHERE source = ? AND received_at >= ?"
+      : "WHERE source = ?";
+    const params = since ? [source, since] : [source];
+
+    const rows = db
+      .query<SubmissionRow, (string | number)[]>(
+        `SELECT * FROM submissions
+         ${where}
+         ORDER BY received_at DESC, id DESC
+         LIMIT ?`,
+      )
+      .all(...params, limit);
+
+    const { total } = db
+      .query<{ total: number }, string[]>(
+        `SELECT COUNT(*) AS total FROM submissions ${where}`,
+      )
+      .get(...params)!;
+
+    return { data: rows.map(toSubmissionRecord), total };
+  }
+
   // LLM<->Jev agreement plus median latencies over submissions Jev has
   // recorded a verdict for since `since`.
   function getJevComparison({ since }: { since: string }): JevComparison {
@@ -331,6 +374,7 @@ export function createMailSubmissionsRepo(db: Database) {
     getSubmission,
     saveJevResult,
     listSubmissions,
+    listBySource,
     getJevComparison,
   };
 }

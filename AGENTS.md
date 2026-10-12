@@ -174,6 +174,9 @@ tests never need secrets.
   `src/app.ts` mounts routes; `src/env.ts` zod env (parsed at import — modules
   that import it are untestable by design, factor pure logic out)
 - `src/routes/{fpp,sy-serendipity}.ts` + `src/auth.ts` — the public send routes
+- `src/routes/sy-serendipity-requests.ts` — `GET /sy-serendipity/requests`, the
+  read-only admin feed over `mail-submissions.ts`'s `listBySource`; own key
+  `SY_SERENDIPITY_READ_KEY` (unset → 404), never `SECRET_KEY`/`API_KEY`, not host-gated
 - `src/emails/` React Email templates + `registry.ts` (Wave 7: `TEMPLATE_IDS`
   is the single source of truth for every template id — the send routes and
   the API reference it, never a hand-typed string; `sync-registry.ts`'s

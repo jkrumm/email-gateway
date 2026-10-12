@@ -41,6 +41,10 @@ ADMIN_PASSWORD=local-dev-password
 # /api/* + /mcp bearer key; both 404 when unset.
 API_KEY=local-dev-api-key
 
+# GET /sy-serendipity/requests bearer key (read-only SY Serendipity admin feed);
+# 404 when unset, min 32 chars. Prod: op://vps/email-gateway/SY_SERENDIPITY_READ_KEY.
+SY_SERENDIPITY_READ_KEY=local-dev-sy-serendipity-read-key-0123
+
 # Full-access Resend key for send-log reconciliation (src/jobs/reconcile-send-log.ts).
 # Unset in prod today (README §Jev shadow mode / AGENTS.md) — uncomment once it's in 1Password.
 # RESEND_ADMIN_API_KEY=op://vps/email-gateway/RESEND_ADMIN_API_KEY

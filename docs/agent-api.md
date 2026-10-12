@@ -12,6 +12,19 @@ opens `/api` to an agent, and never opens `/mcp` at all: MCP is agent-only.
 Both doors sit behind the `MAIL_HOST` gate (a mismatching `Host` 404s them) and
 are reached at `https://mail.<domain>`. All examples below use that host.
 
+Not part of this surface: `GET /sy-serendipity/requests` is a separate read-only
+feed for the SY Serendipity admin panel. It takes its own key,
+`Authorization: Bearer $SY_SERENDIPITY_READ_KEY` (min 32 chars; unset 404s the
+route), rejects `API_KEY` and `SECRET_KEY`, and is not behind `MAIL_HOST`:
+
+```bash
+curl -H "Authorization: Bearer $SY_SERENDIPITY_READ_KEY" \
+  "https://email-gateway.<domain>/sy-serendipity/requests?since=2026-10-01T00:00:00Z&limit=50"
+# -> { "requests": [{ id, receivedAt, verdict, delivered, firstName, lastName, email,
+#      phone, numberOfPeople, destination, duration, arrivalDate, departureDate,
+#      message }], "total": 12 }   (newest first, all verdicts; total = window before limit)
+```
+
 ## REST `/api/*`
 
 Responses are JSON. List endpoints are keyset-paginated (`limit`, `cursor`,

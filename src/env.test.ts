@@ -144,3 +144,17 @@ describe("Gmail IMAP env validation", () => {
     ]);
   });
 });
+
+describe("SY_SERENDIPITY_READ_KEY", () => {
+  test("is optional, but must be at least 32 chars when set", () => {
+    expect(envSchema.parse(base).SY_SERENDIPITY_READ_KEY).toBeUndefined();
+    expect(
+      envSchema.safeParse({ ...base, SY_SERENDIPITY_READ_KEY: "short" })
+        .success,
+    ).toBe(false);
+    expect(
+      envSchema.safeParse({ ...base, SY_SERENDIPITY_READ_KEY: "k".repeat(32) })
+        .success,
+    ).toBe(true);
+  });
+});

@@ -7,3 +7,5 @@ process.env.SY_SERENDIPITY_RECEIVER_EMAIL ??= "sy-receiver@example.com";
 // Keep the default db singleton (src/db/client.ts) in-memory during tests so
 // importing route/admin modules never touches the filesystem.
 process.env.DATA_DIR ??= ":memory:";
+process.env.SY_SERENDIPITY_READ_KEY ??=
+  "test-sy-serendipity-read-key-0123456789";
