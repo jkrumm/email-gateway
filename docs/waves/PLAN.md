@@ -1251,16 +1251,16 @@ bounce and a real delivery both land in `send_log` via `/webhooks/ses`.
 **Left behind:** Status stays `active`: acceptance is not met. Done, in
 account `jk-ses` / `eu-central-1`: `scripts/ses-provision.ts` (+ tests,
 README §Amazon SES → Provisioning, AGENTS file map) ran for two domains, FPP
-(`free-planning-poker.com`) and the personal one (`jkrumm.com`) — the
+(`<fpp-domain>`) and the personal one (`<personal-domain>`) — the
 Shutterflow/sy-serendipity domain is not provisioned (the sender is on
-`jkrumm.com` today). Created: both SES identities (Easy DKIM 2048, MAIL FROM
+`<personal-domain>` today). Created: both SES identities (Easy DKIM 2048, MAIL FROM
 `ses.<domain>`), configuration set `email-gateway` with an SNS event
 destination (all six event types), SNS topic `email-gateway-ses` (publish
 limited to that set), IAM user `email-gateway-ses` (send-only, scoped), one
 access key. DNS: the 10 records (3 DKIM CNAME + MX + SPF TXT per domain) were
 added through the Cloudflare API on the VPS, additions only. Both identities verified (DKIM and MAIL FROM `SUCCESS`) within minutes; production access was submitted with
-`put-account-details` (transactional, `https://jkrumm.com`, contact
-`hello@jkrumm.com`, under 200 msgs/day) at 2026-10-12 ~14:57 local — AWS
+`put-account-details` (transactional, `https://<personal-domain>`, contact
+the owner's `hello@` address, under 200 msgs/day) at 2026-10-12 ~14:57 local — AWS
 answers in about a day.
 
 Open, in this order (the first blocks the rest):
