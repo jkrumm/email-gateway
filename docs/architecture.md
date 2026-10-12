@@ -464,6 +464,29 @@ deployable at every commit" for the **mail** surface only: the three public
 send routes still have third-party callers and must work again the moment the
 service is back.
 
+### D5 — Send provider (2026-10-12, Wave 10)
+
+Put to the owner with the options table in
+[docs/decisions/send-provider.md](decisions/send-provider.md); Resend Pro was
+the recommendation. The answers:
+
+> Amazon SES eu-central-1
+
+> 11 to 110 [sending domains within a year]
+
+> Route it through the gateway but we mayb eneed to fill aissue or so on the
+> shutterflow repo I will triage that than manualyl on my MAcBook
+
+**App mail moves to Amazon SES in `eu-central-1`** behind a provider-neutral
+send port; Resend stays configured as the fallback until each send route is
+verified delivering through SES in prod, one route at a time. This amends D1:
+the public door gains one route besides the send routes and `/health` — the
+signed SNS event webhook SES posts delivery, bounce and complaint events to.
+**Shutterflow stops calling Resend directly** and sends through the gateway;
+its side is a Shutterflow issue the owner triages. The AWS account, SES
+production access and every per-domain DNS change (DKIM CNAMEs, MAIL FROM)
+stay owner gates.
+
 ## Constraints the design honours
 
 - **Live callers.** `POST /fpp` (FPP web, 7 s abort), `POST /fpp-daily-analytics`

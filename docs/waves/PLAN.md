@@ -1011,14 +1011,14 @@ email-gateway/*` vault the VPS deploy does (solo project, no separate
       than spawning a successor regardless of gate state. No Wave 10
       exists; `rd wave` should not be invoked from here.
 
-## Wave 10 — Send-provider decision <!-- status: active -->
+## Wave 10 — Send-provider decision <!-- status: done -->
 
 Opened 2026-10-12 by the owner. Resend caps custom sending domains below the
 number the gateway has to send from, and more are coming. This wave decides
 the replacement and plans the migration. It writes no product code. The parked
 cutover (`docs/vps-cutover.md` §7) is out of scope.
 
-- [ ] Inventory every sending domain and caller. The full domain list comes
+- [x] Inventory every sending domain and caller. The full domain list comes
       from the owner; tracked files use placeholders only. Done from prod
       2026-10-12: three verified Resend domains (the Free-plan cap),
       Shutterflow shares the team; the owner's full list is still open.
@@ -1032,8 +1032,128 @@ cutover (`docs/vps-cutover.md` §7) is out of scope.
 - [x] `docs/decisions/send-provider.md`: an options table, a recommendation
       and the architecture delta. Then stop: the provider and the spend are
       the owner's call.
-- [ ] After the owner decides: record the decision in `docs/architecture.md`
+- [x] After the owner decides: record the decision in `docs/architecture.md`
       §Decisions in the owner's words, then append the implementation waves.
       Each wave gets acceptance criteria. Send routes cut over one at a time,
       and Resend stays the fallback until the new provider is verified in
       prod.
+
+**Left behind:** owner chose Amazon SES `eu-central-1` (D5 in
+`docs/architecture.md`, verbatim), expects 11–110 sending domains within a
+year (the list itself was not given — it stays out of this repo anyway), and
+wants Shutterflow routed through the gateway via an issue on the Shutterflow
+repo. Options, code evidence and the architecture delta:
+`docs/decisions/send-provider.md`. Pre-existing bug found and left for Wave
+11: route sends never set `send_log.provider_message_id`, so
+`reconcile_send_log` has never refreshed a route send (19/19 prod rows have
+no status). Resend Free stays at its 3-domain cap until Wave 14.
+
+## Wave 11 — Send port <!-- status: active -->
+
+Provider-neutral sending with no behaviour change in prod: every send still
+goes to Resend at the end of this wave. Read `docs/decisions/send-provider.md`
+§Swap or rewrite and §Architecture delta first.
+
+- [ ] `src/providers/send-port.ts`: a `SendProvider` interface —
+      `send({ from, to, replyTo, subject, html, text, idempotencyKey })` →
+      `{ providerMessageId }`, optional `status(providerMessageId)` for
+      polling. One shared `renderTemplate(element)` → `{ html, text }` on
+      `@react-email/render` (already a dependency; verify its API via
+      `/research` or `node_modules` types, not memory).
+- [ ] A Resend `SendProvider` (`src/providers/resend/send.ts`) wrapping the
+      existing client, keeping Resend's `idempotencyKey` on queued sends.
+      `sendMail` (`src/utils/send-mail.ts`), the send job (`src/jobs/send.ts`)
+      and `enqueueTemplateSend` (`src/services/template-send.ts`) all go
+      through the port; `send_log.provider` comes from the chosen provider,
+      never a hardcoded `"resend"`.
+- [ ] Provider choice per route from env (`SEND_PROVIDER_<ROUTE>`-style or
+      one map; pick the simplest, document it), default `resend`, resolved in
+      one place (`src/providers/from-env.ts` or a sibling). The Resend
+      `MailProvider` adapter keeps its history lists and delegates `send`.
+- [ ] Fix: every send path records `provider_message_id`, so
+      `reconcile_send_log` can refresh route sends. The reconcile handler
+      dispatches on `send_log.provider` to that provider's `status()`.
+- [ ] Tests through the public seams with fakes (no `mock.module`, no
+      `spyOn`): route → port → fake provider; reconcile picks up a route
+      send; the frozen route contracts (paths, bodies, 2xx-on-suppress, the
+      8 s gate deadline) unchanged.
+- [ ] README.md + AGENTS.md (file map, env) in the same commit as the code.
+
+**Acceptance:** `make check` green; `/review` clean; after the deploy, a
+`/fpp-daily-analytics` send in prod has `provider_message_id` set and gets a
+`status` from `reconcile_send_log` within two 5-minute passes (read-only
+`ssh vps` + `docker exec` probe). No route changes provider.
+
+**Left behind:**
+
+## Wave 12 — SES adapter and events <!-- status: pending -->
+
+Code only; SES stays switched off (env unset) until Wave 13 provisions it.
+
+- [ ] `/research` first: `@aws-sdk/client-sesv2` current version and
+      `SendEmail` with a configuration set; SNS HTTPS subscription
+      confirmation and message-signature verification (SignatureVersion 2,
+      cert URL host check); the SES event JSON for Delivery, Bounce,
+      Complaint, Reject, DeliveryDelay. Bake the facts into code comments
+      only where they change a decision.
+- [ ] `src/providers/ses/`: a `SendProvider` on SESv2 `SendEmail` (region,
+      configuration-set name, credentials from env; all optional — unset
+      means SES unavailable and the route stays on Resend). No idempotency
+      key exists on SES: the `send_log` guard in the send job is the only
+      duplicate protection, so keep it.
+- [ ] `POST /webhooks/ses` on the public door (D5 amends D1): verify the SNS
+      signature and topic ARN, confirm the subscription, map events onto
+      `send_log.status`/`last_event` by `provider_message_id`; 2xx on
+      anything it cannot match so SNS stops retrying. Rate-limit stays
+      Traefik's. Host gate unaffected (`/webhooks` is not mail surface).
+- [ ] Tests with a fake SES client and signed SNS fixtures (a test key pair,
+      never a real AWS cert).
+- [ ] README.md (endpoint, env, event mapping) + AGENTS.md in the same
+      commit.
+
+**Acceptance:** `make check` green; `/review --deep` clean (public,
+security-adjacent route); prod deploy unchanged in behaviour (SES env unset).
+
+**Left behind:**
+
+## Wave 13 — SES provisioning <!-- status: pending -->
+
+Owner gates first; the agent prepares everything around them.
+
+- [ ] Owner: AWS account (or an existing one), billing, region
+      `eu-central-1`, SES production-access request (transactional). The
+      agent drafts the request text.
+- [ ] Owner OK, then agent: IAM user scoped to `ses:SendEmail` on the
+      configuration set + identities; configuration set with an SNS event
+      destination to the gateway's `/webhooks/ses`; secrets into 1Password
+      `vps/email-gateway` per `/secrets`; `vps/apps/email-gateway/.env.tpl` +
+      `compose.yml` wiring.
+- [ ] Per domain, owner OK each time: SES identity with Easy DKIM (three
+      CNAMEs) and a custom MAIL FROM, applied through `/cloudflare`. Start
+      with the FPP domain and the personal domain the routes send from.
+- [ ] Verify with SES's mailbox simulator and one real test-send through
+      `POST /api/templates/:id/test-send` with SES selected for that path
+      only.
+
+**Acceptance:** identities verified, production access granted, a simulator
+bounce and a real delivery both land in `send_log` via `/webhooks/ses`.
+
+**Left behind:**
+
+## Wave 14 — Cutover per route <!-- status: pending -->
+
+- [ ] `/fpp-daily-analytics` → SES (internal recipient, lowest risk); verify
+      `delivered` in prod for two daily sends.
+- [ ] `/sy-serendipity` → SES; verify the next real request delivered.
+- [ ] `/fpp` → SES; verify both the confirmation and the receiver mail
+      delivered, and the 7 s FPP caller budget still holds.
+- [ ] Resend becomes fallback-only: keep its key and adapter, document how to
+      flip a route back; Shutterflow moves per its own issue, then the
+      Resend team's domains can be removed (owner's call).
+- [ ] `docs/vps-cutover.md` §7: re-check the parked items against SES and
+      unpark them.
+
+**Acceptance:** all three routes on SES with `delivered` statuses in prod;
+Resend is one env change away for each route.
+
+**Left behind:**
