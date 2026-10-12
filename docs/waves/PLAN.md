@@ -1258,21 +1258,18 @@ Shutterflow/sy-serendipity domain is not provisioned (the sender is on
 destination (all six event types), SNS topic `email-gateway-ses` (publish
 limited to that set), IAM user `email-gateway-ses` (send-only, scoped), one
 access key. DNS: the 10 records (3 DKIM CNAME + MX + SPF TXT per domain) were
-added through the Cloudflare API on the VPS, additions only. Identities were
-`PENDING` right after (DNS propagation); production access was submitted with
+added through the Cloudflare API on the VPS, additions only. Both identities verified (DKIM and MAIL FROM `SUCCESS`) within minutes; production access was submitted with
 `put-account-details` (transactional, `https://jkrumm.com`, contact
 `hello@jkrumm.com`, under 200 msgs/day) at 2026-10-12 ~14:57 local — AWS
 answers in about a day.
 
 Open, in this order (the first blocks the rest):
 
-1. **1Password.** The access key sits in `/tmp/ses-key.env` on the MacBook
-   (scp'd, 0600); the approval request `20261012T145525-11924` (`ask-human.sh
-status …`) is unanswered — approving it writes `SES_ACCESS_KEY_ID` /
-   `SES_SECRET_ACCESS_KEY` into `vps/email-gateway` and deletes the file. If
-   it is lost, delete the key (`aws iam delete-access-key`) and re-run with
-   `--create-key`. Still to add to that item: `SES_SNS_TOPIC_ARN` =
-   `arn:aws:sns:eu-central-1:<account>:email-gateway-ses` (the script prints it).
+1. **1Password.** `SES_ACCESS_KEY_ID` / `SES_SECRET_ACCESS_KEY` are stored in
+   `vps/email-gateway` (the key file on the MacBook is deleted). Still pending:
+   `SES_SNS_TOPIC_ARN` (`arn:aws:sns:eu-central-1:<account>:email-gateway-ses`,
+   the script prints it) — approval request `20261012T150024-26896`, unanswered
+   when this wave closed; check `ask-human.sh status` and re-run if it failed.
 2. **Deploy the wiring.** `~/SourceRoot/vps` commit `0784498` (`.env.tpl` +
    `compose.yml`: `SES_*` env, no `SEND_PROVIDERS`, so nothing routes to SES)
    is committed locally and **not pushed** — it is another repo's deploy path.
@@ -1280,8 +1277,7 @@ status …`) is unanswered — approving it writes `SES_ACCESS_KEY_ID` /
 /webhooks/ses` no longer 404s.
 3. **Subscribe** the topic over HTTPS to `https://email-gateway.<domain>/webhooks/ses`
    (raw message delivery off, ideally `SignatureVersion` 2) — only after step 2.
-4. **Verify**: `get-email-identity` shows DKIM `SUCCESS` and MAIL FROM
-   `SUCCESS` for both; production access granted; then the simulator
+4. **Verify**: production access granted; then the simulator
    (`bounce@simulator.amazonses.com`) and one real `POST
 /api/templates/:id/test-send` with `SEND_PROVIDERS=<templateId>=ses`
    for that template only; both must land in `send_log`.
