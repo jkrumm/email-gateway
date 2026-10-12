@@ -1248,43 +1248,40 @@ Owner gates first; the agent prepares everything around them.
 **Acceptance:** identities verified, production access granted, a simulator
 bounce and a real delivery both land in `send_log` via `/webhooks/ses`.
 
-**Left behind:** Status stays `active`: acceptance is not met. Done, in
-account `jk-ses` / `eu-central-1`: `scripts/ses-provision.ts` (+ tests,
-README §Amazon SES → Provisioning, AGENTS file map) ran for two domains, FPP
-(`<fpp-domain>`) and the personal one (`<personal-domain>`) — the
-Shutterflow/sy-serendipity domain is not provisioned (the sender is on
-`<personal-domain>` today). Created: both SES identities (Easy DKIM 2048, MAIL FROM
-`ses.<domain>`), configuration set `email-gateway` with an SNS event
-destination (all six event types), SNS topic `email-gateway-ses` (publish
-limited to that set), IAM user `email-gateway-ses` (send-only, scoped), one
-access key. DNS: the 10 records (3 DKIM CNAME + MX + SPF TXT per domain) were
-added through the Cloudflare API on the VPS, additions only. Both identities verified (DKIM and MAIL FROM `SUCCESS`) within minutes; production access was submitted with
-`put-account-details` (transactional, `https://<personal-domain>`, contact
-the owner's `hello@` address, under 200 msgs/day) at 2026-10-12 ~14:57 local — AWS
-answers in about a day.
+**Left behind:** Status stays `active`: production access is the open item.
 
-Open, in this order (the first blocks the rest):
+Done by the orchestrator after the wave agent stopped (2026-10-12):
 
-1. **1Password.** `SES_ACCESS_KEY_ID` / `SES_SECRET_ACCESS_KEY` are stored in
-   `vps/email-gateway` (the key file on the MacBook is deleted). Still pending:
-   `SES_SNS_TOPIC_ARN` (`arn:aws:sns:eu-central-1:<account>:email-gateway-ses`,
-   the script prints it) — approval request `20261012T150024-26896`, unanswered
-   when this wave closed; check `ask-human.sh status` and re-run if it failed.
-2. **Deploy the wiring.** `~/SourceRoot/vps` commit `0784498` (`.env.tpl` +
-   `compose.yml`: `SES_*` env, no `SEND_PROVIDERS`, so nothing routes to SES)
-   is committed locally and **not pushed** — it is another repo's deploy path.
-   Push, `make email-gateway-env` on the VPS, redeploy; confirm `POST
-/webhooks/ses` no longer 404s.
-3. **Subscribe** the topic over HTTPS to `https://email-gateway.<domain>/webhooks/ses`
-   (raw message delivery off, ideally `SignatureVersion` 2) — only after step 2.
-4. **Verify**: production access granted; then the simulator
-   (`bounce@simulator.amazonses.com`) and one real `POST
-/api/templates/:id/test-send` with `SEND_PROVIDERS=<templateId>=ses`
-   for that template only; both must land in `send_log`.
+- **1Password:** the first SES key was rotated (its key file vanished from the
+  MacBook unaccounted for); the new key went straight from
+  `create-access-key` into a 0600 file on the MacBook and into
+  `vps/email-gateway` (`SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY`,
+  `SES_SNS_TOPIC_ARN`), verified by read-back, file deleted. One active key.
+  `op item edit` reads a JSON template from any non-TTY stdin — run it under
+  `script -q /dev/null op …` from `ask-human.sh`.
+- **Shutterflow domain** provisioned too (`ses-provision.ts` with all three
+  domains; DNS added through Cloudflare); all three identities show DKIM and
+  MAIL FROM `SUCCESS`.
+- **Wiring live:** vps `0784498` pushed, `make email-gateway-env` on the VPS,
+  redeployed; `/webhooks/ses` answers. Topic `SignatureVersion` 2, HTTPS
+  subscription confirmed by the gateway itself, raw delivery off.
+- **Proven against real AWS:** simulator success/bounce/complaint sends
+  arrive at `/webhooks/ses` and parse (logged "not applied": no `send_log`
+  row, expected); the gateway's own `ses` provider sent the rendered
+  `fpp-daily-analytics` template to the simulator from inside the prod
+  container and its delivery event came back.
 
-Until production access is granted SES is in the sandbox (verified recipients
-only), so the real-delivery check needs the owner's address as a verified
-identity or the grant first.
+Open:
+
+1. **Production access was DENIED** (support case in the SES console). The
+   owner replies in the AWS Support Center with the use-case detail; the
+   drafted reply is in the orchestrator's chat, not here.
+2. **Sandbox path meanwhile:** the owner's receiver address (both
+   `RECEIVER_EMAIL` and `SY_SERENDIPITY_RECEIVER_EMAIL`) is an SES email
+   identity pending the owner's click on AWS's verification mail. Once
+   verified, `/fpp-daily-analytics` and `/sy-serendipity` can move to SES in
+   the sandbox; `/fpp`'s sender confirmation and Shutterflow need production
+   access.
 
 ## Wave 14 — Cutover per route <!-- status: pending -->
 
