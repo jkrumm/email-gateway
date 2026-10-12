@@ -1307,33 +1307,33 @@ one-route-at-a-time plan with "MOVE IT ALL AND REMOVE RESEND" (D5 amendment).
   mail and the next charter request.
 - Resend code is still in the tree; Wave 15 removes it.
 
-## Wave 15 — Remove Resend <!-- status: active -->
+## Wave 15 — Remove Resend <!-- status: done -->
 
 The owner: "MOVE IT ALL AND REMOVE RESEND". SES is the only send provider.
 Keep the `SendProvider` port (it is the seam tests use); remove everything
 Resend.
 
-- [ ] Delete `src/providers/resend/`, `src/utils/resend.ts`, the `resend`
+- [x] Delete `src/providers/resend/`, `src/utils/resend.ts`, the `resend`
       dependency, `RESEND_API_KEY`/`RESEND_ADMIN_API_KEY` from `src/env.ts`,
       `.env.tpl`, tests and fakes. `SEND_PROVIDERS` and the selector go too:
       SES is the provider, its four env vars become required (tests use
       dummies in `src/test/setup.ts`).
-- [ ] Sync: drop the Resend `MailProvider` (`src/providers/from-env.ts`,
+- [x] Sync: drop the Resend `MailProvider` (`src/providers/from-env.ts`,
       `defaultMailboxesFor`'s `sent`/`received`, any Resend branch in
       `src/sync/ingest.ts`, `src/jobs/register.ts`). An append-only migration
       deletes the `resend:app` account's rows (`accounts`, `messages`,
       `message_locations`, dependent rows) — the store is disposable (D4).
       The `accounts.provider` CHECK keeps `'resend'`; no table rebuild.
-- [ ] `reconcile_send_log`: SES has no read-back (events arrive by webhook),
+- [x] `reconcile_send_log`: SES has no read-back (events arrive by webhook),
       so remove the job and its timer unless something else still needs it;
       keep `send_log` history rows as they are.
-- [ ] Client (`client/`) and agent API/MCP: remove any Resend-specific
+- [x] Client (`client/`) and agent API/MCP: remove any Resend-specific
       labels, mailboxes or filters; `ProviderId` loses `"resend"` only if
       nothing persisted still needs the type.
-- [ ] Docs in the same commits: README, AGENTS.md (stack line, file map,
+- [x] Docs in the same commits: README, AGENTS.md (stack line, file map,
       invariants), `docs/architecture.md` §Provider port, `docs/vision.md`
       table, `docs/agent-api.md` if it mentions Resend.
-- [ ] After the deploy: remove `RESEND_API_KEY` and `SEND_PROVIDERS` from
+- [x] After the deploy: remove `RESEND_API_KEY` and `SEND_PROVIDERS` from
       `~/SourceRoot/vps/apps/email-gateway/{compose.yml,.env.tpl}`, push,
       `make email-gateway-env ENV=prod` on the VPS, redeploy, health green.
 
@@ -1346,7 +1346,26 @@ prod healthy; a test-send still lands `delivered`.
 
 **Left behind:**
 
-## Wave 16 — SES-native features <!-- status: pending -->
+- Shipped as `5e1c1cc` (gateway, deployed) and vps `f2937c7` (Resend env and
+  `SEND_PROVIDERS` removed, env regenerated, container recreated on the new
+  image). `make check` green (619 tests); `/review` blocking finding fixed.
+- Prod: healthy on `5e1c1cc`; a `sy-serendipity-request` test-send landed
+  `delivered` via `/webhooks/ses`.
+- Migration 5 deletes the resend account's rows, drops
+  `idx_send_log_provider_updated_at`, and fails in-flight Resend `send_log`
+  rows (`last_event='resend_removed'`); `src/jobs/discard-resend.ts` drops their
+  pending jobs and all `reconcile_send_log` jobs at boot (idempotent, can be
+  deleted once prod has booted on it).
+- Also removed the dead `MailProvider.send` surface. Message `direction` is now
+  always `inbound`.
+- **Incident:** `make email-gateway-up` on the VPS recreated the container from
+  the bootstrap `:latest` image (stale `BEA_*` env) and it crash-looped for a few
+  minutes until recreated with `IMAGE_TAG=<sha>`. Never run `<app>-up` for a
+  RollHook app; push and let RollHook roll. Send routes were down for that window.
+- Not done: no stuck-`sent` send_log observability (SES has no read-back);
+  fallow dupes in the `src/db` repos pre-exist.
+
+## Wave 16 — SES-native features <!-- status: active -->
 
 Shape with the owner first; his direction is quoted in D5's amendment:
 analytics over the send log and SES events, a UI for the SES integration,
