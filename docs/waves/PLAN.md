@@ -1010,3 +1010,28 @@ email-gateway/*` vault the VPS deploy does (solo project, no separate
       plan and its own header requires handing back to the owner rather
       than spawning a successor regardless of gate state. No Wave 10
       exists; `rd wave` should not be invoked from here.
+
+## Wave 10 — Send-provider decision <!-- status: active -->
+
+Opened 2026-10-12 by the owner. Resend caps custom sending domains below the
+number the gateway has to send from, and more are coming. This wave decides
+the replacement and plans the migration. It writes no product code. The parked
+cutover (`docs/vps-cutover.md` §7) is out of scope.
+
+- [ ] Inventory every sending domain and caller. The full domain list comes
+      from the owner; tracked files use placeholders only.
+- [ ] Research the options against today's docs with `/research`: a higher
+      Resend tier or several accounts, Postmark, Amazon SES with bounce,
+      complaint and suppression logic in the gateway, a self-hosted MTA (with
+      or without an SES relay), and send-only alternatives with high or no
+      domain caps.
+- [ ] Decide whether this is a swap behind `src/providers/port.ts` or a
+      rewrite, with evidence from the code.
+- [ ] `docs/decisions/send-provider.md`: an options table, a recommendation
+      and the architecture delta. Then stop: the provider and the spend are
+      the owner's call.
+- [ ] After the owner decides: record the decision in `docs/architecture.md`
+      §Decisions in the owner's words, then append the implementation waves.
+      Each wave gets acceptance criteria. Send routes cut over one at a time,
+      and Resend stays the fallback until the new provider is verified in
+      prod.
