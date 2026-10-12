@@ -1048,45 +1048,76 @@ repo. Options, code evidence and the architecture delta:
 `reconcile_send_log` has never refreshed a route send (19/19 prod rows have
 no status). Resend Free stays at its 3-domain cap until Wave 14.
 
-## Wave 11 — Send port <!-- status: active -->
+## Wave 11 — Send port <!-- status: done -->
 
 Provider-neutral sending with no behaviour change in prod: every send still
 goes to Resend at the end of this wave. Read `docs/decisions/send-provider.md`
 §Swap or rewrite and §Architecture delta first.
 
-- [ ] `src/providers/send-port.ts`: a `SendProvider` interface —
+- [x] `src/providers/send-port.ts`: a `SendProvider` interface —
       `send({ from, to, replyTo, subject, html, text, idempotencyKey })` →
       `{ providerMessageId }`, optional `status(providerMessageId)` for
       polling. One shared `renderTemplate(element)` → `{ html, text }` on
       `@react-email/render` (already a dependency; verify its API via
       `/research` or `node_modules` types, not memory).
-- [ ] A Resend `SendProvider` (`src/providers/resend/send.ts`) wrapping the
+- [x] A Resend `SendProvider` (`src/providers/resend/send.ts`) wrapping the
       existing client, keeping Resend's `idempotencyKey` on queued sends.
       `sendMail` (`src/utils/send-mail.ts`), the send job (`src/jobs/send.ts`)
       and `enqueueTemplateSend` (`src/services/template-send.ts`) all go
       through the port; `send_log.provider` comes from the chosen provider,
       never a hardcoded `"resend"`.
-- [ ] Provider choice per route from env (`SEND_PROVIDER_<ROUTE>`-style or
+- [x] Provider choice per route from env (`SEND_PROVIDER_<ROUTE>`-style or
       one map; pick the simplest, document it), default `resend`, resolved in
       one place (`src/providers/from-env.ts` or a sibling). The Resend
       `MailProvider` adapter keeps its history lists and delegates `send`.
-- [ ] Fix: every send path records `provider_message_id`, so
+- [x] Fix: every send path records `provider_message_id`, so
       `reconcile_send_log` can refresh route sends. The reconcile handler
       dispatches on `send_log.provider` to that provider's `status()`.
-- [ ] Tests through the public seams with fakes (no `mock.module`, no
+- [x] Tests through the public seams with fakes (no `mock.module`, no
       `spyOn`): route → port → fake provider; reconcile picks up a route
       send; the frozen route contracts (paths, bodies, 2xx-on-suppress, the
       8 s gate deadline) unchanged.
-- [ ] README.md + AGENTS.md (file map, env) in the same commit as the code.
+- [x] README.md + AGENTS.md (file map, env) in the same commit as the code.
 
 **Acceptance:** `make check` green; `/review` clean; after the deploy, a
 `/fpp-daily-analytics` send in prod has `provider_message_id` set and gets a
 `status` from `reconcile_send_log` within two 5-minute passes (read-only
 `ssh vps` + `docker exec` probe). No route changes provider.
 
-**Left behind:**
+**Left behind:** Shipped as `f473394` (deployed, container healthy).
+`SendProvider` port (`src/providers/send-port.ts`, with `renderTemplate`),
+Resend impl (`src/providers/resend/send.ts`, separate send/read clients),
+selector split in two: pure `send-select.ts` (env.ts imports it) and
+`send-registry.ts` (builds providers; asserts `provider.id` equals its
+registry name, since `send_log.provider` is written from one and read by
+the other). `SEND_PROVIDERS=<templateId>=<provider>,…` (unset → `resend`;
+unknown name or template id fails startup). Queued sends fix their provider
+at enqueue (`send_log.provider`); the send job reads it from the row.
+Route sends now record `provider_message_id` + `status: "sent"`;
+`reconcile_send_log` loops every provider with `status()`. `make check`
+green (567 tests); `/review` ran once: no blockers, applied per-provider
+isolation in reconcile, the id/name assertion and `Object.hasOwn`.
 
-## Wave 12 — SES adapter and events <!-- status: pending -->
+**Open, not done this wave:**
+
+- Acceptance's prod check is not yet observable: no route send has happened
+  since the deploy (last prod `send_log` row 10:25Z, pre-deploy, no id).
+  Re-check after the next `/fpp-daily-analytics` send.
+- `RESEND_ADMIN_API_KEY` is still unwired in prod, so the restricted send
+  key cannot read `emails.get`: route sends will get `provider_message_id`
+  but `reconcile_send_log` will fail to set a `status` until the owner
+  wires it. Needed for the "status within two passes" criterion.
+- Existing 19 prod rows have no id and stay unreconciled (backfill needs a
+  migration; not worth it).
+- For Wave 12: `send_log.id` for route sends is still the provider message
+  id, so two providers could collide on `INSERT OR IGNORE` — generate a
+  provider-independent id before SES carries route sends. Also from review:
+  `SendStatus.status`/`lastEvent` are identical for Resend; the send-job
+  "already sent" guard only matches `status === "sent"`, so a row advanced
+  to `delivered` by reconcile falls through to the provider's idempotency
+  key; render failures in `sendMail` are not logged like send failures.
+
+## Wave 12 — SES adapter and events <!-- status: active -->
 
 Code only; SES stays switched off (env unset) until Wave 13 provisions it.
 
