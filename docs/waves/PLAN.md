@@ -1230,15 +1230,15 @@ How to work this wave:
 
 Owner gates first; the agent prepares everything around them.
 
-- [ ] Owner: AWS account (or an existing one), billing, region
+- [x] Owner: AWS account (or an existing one), billing, region
       `eu-central-1`, SES production-access request (transactional). The
       agent drafts the request text.
-- [ ] Owner OK, then agent: IAM user scoped to `ses:SendEmail` on the
-      configuration set + identities; configuration set with an SNS event
-      destination to the gateway's `/webhooks/ses`; secrets into 1Password
-      `vps/email-gateway` per `/secrets`; `vps/apps/email-gateway/.env.tpl` +
-      `compose.yml` wiring.
-- [ ] Per domain, owner OK each time: SES identity with Easy DKIM (three
+- [~] Owner OK, then agent: IAM user scoped to `ses:SendEmail` on the
+  configuration set + identities; configuration set with an SNS event
+  destination to the gateway's `/webhooks/ses`; secrets into 1Password
+  `vps/email-gateway` per `/secrets`; `vps/apps/email-gateway/.env.tpl` +
+  `compose.yml` wiring.
+- [x] Per domain, owner OK each time: SES identity with Easy DKIM (three
       CNAMEs) and a custom MAIL FROM, applied through `/cloudflare`. Start
       with the FPP domain and the personal domain the routes send from.
 - [ ] Verify with SES's mailbox simulator and one real test-send through
@@ -1248,7 +1248,47 @@ Owner gates first; the agent prepares everything around them.
 **Acceptance:** identities verified, production access granted, a simulator
 bounce and a real delivery both land in `send_log` via `/webhooks/ses`.
 
-**Left behind:**
+**Left behind:** Status stays `active`: acceptance is not met. Done, in
+account `jk-ses` / `eu-central-1`: `scripts/ses-provision.ts` (+ tests,
+README §Amazon SES → Provisioning, AGENTS file map) ran for two domains, FPP
+(`free-planning-poker.com`) and the personal one (`jkrumm.com`) — the
+Shutterflow/sy-serendipity domain is not provisioned (the sender is on
+`jkrumm.com` today). Created: both SES identities (Easy DKIM 2048, MAIL FROM
+`ses.<domain>`), configuration set `email-gateway` with an SNS event
+destination (all six event types), SNS topic `email-gateway-ses` (publish
+limited to that set), IAM user `email-gateway-ses` (send-only, scoped), one
+access key. DNS: the 10 records (3 DKIM CNAME + MX + SPF TXT per domain) were
+added through the Cloudflare API on the VPS, additions only. Identities were
+`PENDING` right after (DNS propagation); production access was submitted with
+`put-account-details` (transactional, `https://jkrumm.com`, contact
+`hello@jkrumm.com`, under 200 msgs/day) at 2026-10-12 ~14:57 local — AWS
+answers in about a day.
+
+Open, in this order (the first blocks the rest):
+
+1. **1Password.** The access key sits in `/tmp/ses-key.env` on the MacBook
+   (scp'd, 0600); the approval request `20261012T145525-11924` (`ask-human.sh
+status …`) is unanswered — approving it writes `SES_ACCESS_KEY_ID` /
+   `SES_SECRET_ACCESS_KEY` into `vps/email-gateway` and deletes the file. If
+   it is lost, delete the key (`aws iam delete-access-key`) and re-run with
+   `--create-key`. Still to add to that item: `SES_SNS_TOPIC_ARN` =
+   `arn:aws:sns:eu-central-1:<account>:email-gateway-ses` (the script prints it).
+2. **Deploy the wiring.** `~/SourceRoot/vps` commit `0784498` (`.env.tpl` +
+   `compose.yml`: `SES_*` env, no `SEND_PROVIDERS`, so nothing routes to SES)
+   is committed locally and **not pushed** — it is another repo's deploy path.
+   Push, `make email-gateway-env` on the VPS, redeploy; confirm `POST
+/webhooks/ses` no longer 404s.
+3. **Subscribe** the topic over HTTPS to `https://email-gateway.<domain>/webhooks/ses`
+   (raw message delivery off, ideally `SignatureVersion` 2) — only after step 2.
+4. **Verify**: `get-email-identity` shows DKIM `SUCCESS` and MAIL FROM
+   `SUCCESS` for both; production access granted; then the simulator
+   (`bounce@simulator.amazonses.com`) and one real `POST
+/api/templates/:id/test-send` with `SEND_PROVIDERS=<templateId>=ses`
+   for that template only; both must land in `send_log`.
+
+Until production access is granted SES is in the sandbox (verified recipients
+only), so the real-delivery check needs the owner's address as a verified
+identity or the grant first.
 
 ## Wave 14 — Cutover per route <!-- status: pending -->
 

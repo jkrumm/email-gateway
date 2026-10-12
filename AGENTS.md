@@ -348,7 +348,7 @@ status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
   singletons, `createApiRoutes`'s own DI style). `src/test/` fakes and setup;
   `scripts/seed-demo.ts` (submissions-only fixtures for the old store),
   `scripts/import-legacy.ts` (one-shot: old store's `submissions` →
-  `mail.sqlite`), `scripts/backup.ts` + `scripts/backup.sh` (Wave 9: VACUUM
+  `mail.sqlite`), `scripts/ses-provision.ts` (Wave 13: idempotent AWS-CLI provisioning of the SES identities, configuration set, SNS topic and send-only IAM user; prints DNS records, never applies them), `scripts/backup.ts` + `scripts/backup.sh` (Wave 9: VACUUM
   INTO snapshot + off-box rsync — runs on the VPS via cron, not from a dev
   checkout; see `docs/vps-cutover.md`)
 - `src/mcp/plugin.ts` (`createMcpRoutes`/`mcpRoutes`, Wave 8): the `/mcp` door

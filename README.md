@@ -138,6 +138,10 @@ Topic requirements: **raw message delivery must stay off** (the signed SNS envel
 
 The status never regresses: `sent` < `delivery_delayed` < `delivered` < `bounced`/`complained`/`rejected`/`failed`. An event applies only if its rank is at least the row's current rank, so a late delay cannot undo `delivered`, while a bounce after `delivered` does apply. SES rows have no `status()` read-back and are not touched by `reconcile_send_log`.
 
+### Provisioning
+
+`bun scripts/ses-provision.ts [--create-key] <domain>…` converges the AWS side through the `aws` CLI (profile `jk-ses`, `eu-central-1`; override with `AWS_PROFILE`/`AWS_REGION`): per domain an SES identity with Easy DKIM 2048 and a custom MAIL FROM on `ses.<domain>`, the configuration set `email-gateway` with an SNS event destination (send, delivery, bounce, complaint, reject, delivery delay), the SNS topic `email-gateway-ses` (publish allowed only for that configuration set), and the IAM user `email-gateway-ses` scoped to `ses:SendEmail`/`SendRawEmail` on exactly those identities and the set. Re-running is safe. It prints the DNS records to add (three DKIM CNAMEs, the MAIL FROM MX and SPF TXT) and never applies them. `--create-key` mints the access key only if the user has none and prints it once. The HTTPS subscription to `/webhooks/ses` is created after the gateway is deployed with `SES_SNS_TOPIC_ARN` set (the confirmation would 404 before that), with raw message delivery off.
+
 ## Storage
 
 Two SQLite databases, both opened with `bun:sqlite`, live side by side in `$DATA_DIR` (D4, `docs/architecture.md` §Decisions — the lean-store cutover never migrated the old file, it built a fresh one and left the old one for the owner to delete):
