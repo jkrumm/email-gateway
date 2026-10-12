@@ -2,6 +2,7 @@ import { X509Certificate } from "node:crypto";
 import { z } from "zod";
 import { normalizePem } from "./utils/pem";
 import { splitMailboxes } from "./utils/mailboxes";
+import { parseSendProviders } from "./providers/send-select";
 
 // Shared by both IMAP accounts' superRefine checks below: every key in
 // `keys` must be set once any one of them is, so a half-configured account
@@ -77,6 +78,19 @@ export const envSchema = z
     // Full-access key for the admin UI's list/get calls; the send path keeps
     // the sending-only RESEND_API_KEY.
     RESEND_ADMIN_API_KEY: z.string().optional(),
+    // Which provider each template sends through: `templateId=provider,...`.
+    // Unset or unlisted templates use resend. Parsed to a template id ->
+    // provider name map; an unknown provider or template id fails startup.
+    SEND_PROVIDERS: z
+      .string()
+      .optional()
+      .transform((raw, context) => {
+        const { map, issues } = parseSendProviders(raw);
+        for (const message of issues) {
+          context.addIssue({ code: "custom", message });
+        }
+        return map;
+      }),
 
     // Directory for the SQLite database file. Defaults to ./data so local dev
     // doesn't need any setup; ops sets it to a mounted volume path in prod.

@@ -1,5 +1,6 @@
 import { sendMail } from "../../utils/send-mail";
 import { toIsoTimestamp } from "../../utils/date";
+import { createResendSendProvider } from "./send";
 import type { ResendSendClient } from "./client";
 import type {
   Capabilities,
@@ -64,6 +65,10 @@ export function createResendProvider({
   account: string;
   resend: ResendSendClient;
 }): MailProvider {
+  const sendProvider = createResendSendProvider({
+    sendClient: resend,
+    readClient: resend,
+  });
   return {
     id: "resend",
     account,
@@ -162,7 +167,7 @@ export function createResendProvider({
         // This provider's own client, not the send-route singleton — a
         // provider built against a different Resend account must send
         // through that account, not silently fall back to the default one.
-        resendClient: resend,
+        provider: sendProvider,
       });
       // sendMail's own resolved `from` (its default, not draft.from ?? account)
       // — so the receipt never claims a sender different from the one used.

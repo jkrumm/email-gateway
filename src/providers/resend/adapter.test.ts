@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ReactElement } from "react";
+import { createElement } from "react";
 import type { ResendSendClient } from "./client";
 import { createResendProvider } from "./adapter";
 
@@ -288,11 +288,17 @@ describe("createResendProvider", () => {
     const receipt = await provider.send({
       to: "guest@example.com",
       subject: "Hi",
-      template: {} as ReactElement,
+      template: createElement("p", null, "Hi"),
     });
 
     expect(receipt.id).toMatch(/^email_sent_/);
     expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0]).toMatchObject({
+      to: "guest@example.com",
+      subject: "Hi",
+      html: expect.stringContaining("Hi"),
+      text: expect.stringContaining("Hi"),
+    });
   });
 
   test("send()'s receipt reports the sender sendMail actually used, not the account or draft.from blindly", async () => {
@@ -306,7 +312,7 @@ describe("createResendProvider", () => {
     const receipt = await provider.send({
       to: "guest@example.com",
       subject: "Hi",
-      template: {} as ReactElement,
+      template: createElement("p", null, "Hi"),
     });
 
     expect(receipt.from).not.toBe("no-reply@example.com");

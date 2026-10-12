@@ -177,6 +177,22 @@ tests never need secrets.
 - `src/routes/sy-serendipity-requests.ts` — `GET /sy-serendipity/requests`, the
   read-only admin feed over `mail-submissions.ts`'s `listBySource`; own key
   `SY_SERENDIPITY_READ_KEY` (unset → 404), never `SECRET_KEY`/`API_KEY`, not host-gated
+- `src/providers/send-port.ts` the `SendProvider` interface (`send` of a
+  pre-rendered `{from,to,replyTo?,subject,html,text,idempotencyKey?}` returning
+  `{providerMessageId}`, optional `status()`; failures throw) plus
+  `renderTemplate` (`@react-email/render` html + plain text, rendered once per
+  send). `src/providers/resend/send.ts` is the Resend implementation
+  (`createResendSendProvider({ sendClient, readClient })`: send key sends, the
+  admin key reads status). Selection: `SEND_PROVIDERS` (`templateId=provider,…`,
+  validated in `src/env.ts`) is parsed and resolved by the pure
+  `src/providers/send-select.ts` (testable; env-free), and
+  `src/providers/send-registry.ts` lazily builds providers by name from the
+  `src/utils/resend.ts` singletons (`sendProviderByName`, `sendProviderFor`,
+  `statusProviders`). `sendMail` takes a `provider` (default: selected by its
+  `source`), and `send_log.provider`/`provider_message_id` record who sent it;
+  the `send` job uses the provider on its send_log row, and
+  `reconcile_send_log` dispatches each provider's rows to its `status()`.
+  `src/test/fake-send-provider.ts` is the test adapter.
 - `src/emails/` React Email templates + `registry.ts` (Wave 7: `TEMPLATE_IDS`
   is the single source of truth for every template id — the send routes and
   the API reference it, never a hand-typed string; `sync-registry.ts`'s

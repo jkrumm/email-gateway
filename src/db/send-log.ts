@@ -18,6 +18,11 @@ export interface InsertSendLogInput {
   templateId?: string | null;
   recipients: string[];
   provider: string;
+  // Set when the row is written after the provider already accepted the
+  // message (the synchronous route sends); the send job records them later
+  // via recordProviderResult instead.
+  providerMessageId?: string | null;
+  status?: string | null;
   requestedBy: string;
 }
 
@@ -99,13 +104,15 @@ export function createSendLogRepo(db: Database) {
   function insertSendLog(input: InsertSendLogInput): void {
     const now = new Date().toISOString();
     db.run(
-      `INSERT OR IGNORE INTO send_log (id, template_id, recipients, provider, requested_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO send_log (id, template_id, recipients, provider, provider_message_id, status, requested_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.id,
         input.templateId ?? null,
         JSON.stringify(input.recipients),
         input.provider,
+        input.providerMessageId ?? null,
+        input.status ?? null,
         input.requestedBy,
         now,
         now,

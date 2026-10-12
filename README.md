@@ -111,6 +111,7 @@ bun run client:dev      # Vite dev server on 5173, proxying /api and the /app se
 
 - `COOKIE_SECRET` — optional signing secret for the session cookie. Defaults to `ADMIN_PASSWORD` when unset or shorter than 12 chars.
 - `MAIL_HOST` — optional; the only hostname allowed to serve `/app` and `/api`.
+- `SEND_PROVIDERS` — optional; which provider each template sends through, `templateId=provider,templateId=provider` (template ids from `src/emails/registry.ts`'s `TEMPLATE_IDS`). Unset or unlisted templates use `resend`, the only provider today. An unknown provider or template id fails startup.
 
 `bun run seed:demo` (refuses to run with `NODE_ENV=production`) seeds `$DATA_DIR`'s old `email-gateway.sqlite` with fake spam-filter submissions for exploring the Submissions page locally. `bun run import-legacy` (`scripts/import-legacy.ts`) is the one-shot legacy import — see §Storage below.
 
@@ -123,7 +124,7 @@ Two SQLite databases, both opened with `bun:sqlite`, live side by side in `$DATA
   - `messages` + `message_locations` — envelope-only per message (`direction`, addresses, subject, thread key, flags snapshot) plus every mailbox it's currently seen in (provider ref, last seen). Bodies are never stored here — only a cache.
   - `classifications` — LLM category/priority/summary/facts **and** the Jev shadow columns (`jev_*`), one row per message, filled in by the `classify`/`jev_message` jobs.
   - `body_cache` — `html`/`text` keyed by message, filled on a live read or a `body_prefetch` job; bounded and evicted LRU by `fetched_at` — the reading view's cache, never the source of truth.
-  - `send_log` — one row per outbound send (template id, recipients, provider id, status/last event, requested by).
+  - `send_log` — one row per outbound send (template id, recipients, provider id, `provider_message_id`, status/last event, requested by). Route sends write `provider_message_id` and status `sent` with the row; template sends write them when the `send` job completes.
   - `submissions` — one row per contact-form submission judged by the spam filter, including the Jev shadow columns.
   - `templates` — registered template id, name, preview props, last test-send.
   - `messages_fts` — FTS5 over subject/addresses/summary only, **not** bodies (body search goes live through the provider instead).
@@ -142,14 +143,14 @@ New env var:
 
 Everything asynchronous — sync, classification, Jev, sends — is a row in `mail.sqlite`'s `jobs` table (`src/db/jobs.ts`, `docs/architecture.md` §Jobs): atomic single-row claim with a token, `complete`/`fail` guarded by that token, backoff 1m → 5m → 15m → 1h → 3h → 6h → 12h → 24h, terminal `failed` after nine attempts, stale claims (35 min) taken over so RollHook's two-container deploy overlap never double-runs a row. `src/jobs/runner.ts` polls every 10s (`src/jobs/register.ts`) and dispatches by `kind`:
 
-| Kind                 | Handler                          | Enqueued by                                                                                                                  |
-| -------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `sync_tick`          | `src/sync/composition.ts`        | A 5-minute schedule, IMAP IDLE (debounced), `POST /admin/sync` and `POST /api/sync`                                          |
-| `classify`           | `src/jobs/classify.ts`           | `sync_tick`, for every newly-ingested message                                                                                |
-| `jev_message`        | `src/jobs/jev.ts`                | `classify`, for inbound messages once Jev is configured                                                                      |
-| `jev_submission`     | `src/jobs/jev.ts`                | `src/spam/gate.ts`, after recording a submission, once Jev is configured                                                     |
-| `send`               | `src/jobs/send.ts`               | A send route, only on provider failure (the first attempt runs inline); `POST /api/templates/:id/test-send`                  |
-| `reconcile_send_log` | `src/jobs/reconcile-send-log.ts` | The same 5-minute schedule as `sync_tick` — re-reads Resend's own status for `send_log` rows still short of a terminal state |
+| Kind                 | Handler                          | Enqueued by                                                                                                                                                                                      |
+| -------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sync_tick`          | `src/sync/composition.ts`        | A 5-minute schedule, IMAP IDLE (debounced), `POST /admin/sync` and `POST /api/sync`                                                                                                              |
+| `classify`           | `src/jobs/classify.ts`           | `sync_tick`, for every newly-ingested message                                                                                                                                                    |
+| `jev_message`        | `src/jobs/jev.ts`                | `classify`, for inbound messages once Jev is configured                                                                                                                                          |
+| `jev_submission`     | `src/jobs/jev.ts`                | `src/spam/gate.ts`, after recording a submission, once Jev is configured                                                                                                                         |
+| `send`               | `src/jobs/send.ts`               | A send route, only on provider failure (the first attempt runs inline); `POST /api/templates/:id/test-send`                                                                                      |
+| `reconcile_send_log` | `src/jobs/reconcile-send-log.ts` | The same 5-minute schedule as `sync_tick` — re-reads each provider's own status (`SendProvider.status()`, dispatched by `send_log.provider`) for `send_log` rows still short of a terminal state |
 
 A `sync_tick` runs one envelope-only ingest pass per configured provider/mailbox through the `MailProvider` port (`src/sync/ingest.ts`): a "head" pass always re-lists the newest page (so new mail at the top is never missed) plus a bounded backfill pass that pages backward once, historically. It never fetches a body — `classify` does that live via `provider.read()`, and only `classify`'s LLM call and Jev populate `classifications`. IMAP watch (`provider.watch()`/IDLE) kicks a tick as soon as the server reports a change, on top of the 5-minute schedule.
 
@@ -162,7 +163,7 @@ curl -H "Authorization: Bearer $API_KEY" https://<host>/api/templates
 curl -H "Authorization: Bearer $API_KEY" -X POST https://<host>/api/templates/fpp-sender/test-send
 ```
 
-A test-send always goes to the owner's own `RECEIVER_EMAIL` — there is no recipient override — as a `send` job, so it goes through the same idempotent, retried path as every other send; `templates.last_test_send_at` records it. `send_log` (one row per outbound send: template id, recipients, provider, status, requested by `route`/`test-send`/future `agent`) is filled in at send time and then kept current by the `reconcile_send_log` job, which re-reads Resend's own `emails.get()` status for any row still short of a terminal state. Resend's `last_event` has 12 values; only `sent`/`queued`/`scheduled`/`delivery_delayed` are rechecked on the next pass (oldest-updated first, capped per run) — `delivered`, `opened`, `clicked`, `bounced`, `complained`, `failed`, `canceled`, and `suppressed` are all treated as terminal.
+A test-send always goes to the owner's own `RECEIVER_EMAIL` — there is no recipient override — as a `send` job, so it goes through the same idempotent, retried path as every other send; `templates.last_test_send_at` records it. `send_log` (one row per outbound send: template id, recipients, provider, status, requested by `route`/`test-send`/future `agent`) is filled in at send time and then kept current by the `reconcile_send_log` job, which re-reads the provider's own status (Resend: `emails.get()`) for any row still short of a terminal state, dispatching on `send_log.provider`. Sending is provider-neutral (`src/providers/send-port.ts`): a template is rendered once to html + text and handed to the `SendProvider` that `SEND_PROVIDERS` selects for it; a template send fixes its provider at enqueue time (stored in `send_log.provider`) and the `send` job uses that row's provider. Resend's `last_event` has 12 values; only `sent`/`queued`/`scheduled`/`delivery_delayed` are rechecked on the next pass (oldest-updated first, capped per run) — `delivered`, `opened`, `clicked`, `bounced`, `complained`, `failed`, `canceled`, and `suppressed` are all treated as terminal.
 
 The client's Templates page (§Client above) is a thin view over this: list, a 375/600 preview, test-send, and the per-template send log.
 

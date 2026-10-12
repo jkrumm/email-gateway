@@ -1,4 +1,5 @@
-import { adminResend as defaultResendClient } from "../utils/resend";
+import type { SendProvider } from "../providers/send-port";
+import { statusProviders } from "../providers/send-registry";
 import { sendLogRepo as defaultSendLog } from "../db/mail-index";
 import type { SendLogRepo } from "../db/send-log";
 import { errorMessage } from "../utils/error";
@@ -13,11 +14,12 @@ const RECONCILE_BATCH_LIMIT = 25;
 // plain non-LLM HTTP call is explicitly carved out (its own "not covered"
 // list), and this one runs inside runner.ts's single serial drain() loop —
 // an unbounded hang here would stall sync_tick/classify/jev/send behind it.
-const RESEND_GET_TIMEOUT_MS = 10_000;
+const STATUS_TIMEOUT_MS = 10_000;
 
 // resend@6.28.1's emails.get(id) takes no options at all — no AbortSignal,
 // no fetch override — so there is no way to cancel the underlying HTTP
-// request once started. This only stops *awaiting* it: a hung call keeps its
+// request once started (and SendProvider.status() has no cancellation
+// either). This only stops *awaiting* it: a hung call keeps its
 // socket open in the background past the timeout. The batch is capped at
 // RECONCILE_BATCH_LIMIT, so the worst case is bounded (at most that many
 // dangling requests added per 5-minute pass, not unbounded growth) rather
@@ -54,17 +56,22 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 // happens whenever RESEND_ADMIN_API_KEY is unset and adminResend falls back
 // to the restricted send-only key, per src/utils/resend.ts).
 export function createReconcileSendLogHandler({
-  resendClient = defaultResendClient,
+  providers = statusProviders(),
   sendLog = defaultSendLog,
-  timeoutMs = RESEND_GET_TIMEOUT_MS,
+  timeoutMs = STATUS_TIMEOUT_MS,
 }: {
-  resendClient?: Pick<typeof defaultResendClient, "emails">;
+  // send_log.provider -> the provider that reads its rows back. Providers
+  // without a status() are skipped.
+  providers?: Record<string, SendProvider>;
   sendLog?: Pick<SendLogRepo, "listReconcilable" | "recordProviderResult">;
   timeoutMs?: number;
 } = {}): JobHandler {
-  return async () => {
+  async function reconcileProvider(
+    providerId: string,
+    status: NonNullable<SendProvider["status"]>,
+  ): Promise<void> {
     const rows = sendLog.listReconcilable({
-      provider: "resend",
+      provider: providerId,
       limit: RECONCILE_BATCH_LIMIT,
     });
 
@@ -73,20 +80,17 @@ export function createReconcileSendLogHandler({
       if (!providerMessageId) continue;
 
       try {
-        const response = await withTimeout(
-          resendClient.emails.get(providerMessageId),
-          timeoutMs,
-        );
-        if (response.error) throw new Error(response.error.message);
+        const result = await withTimeout(status(providerMessageId), timeoutMs);
 
         sendLog.recordProviderResult(row.id, {
-          status: response.data.last_event,
-          lastEvent: response.data.last_event,
+          status: result.status,
+          lastEvent: result.lastEvent,
         });
       } catch (error) {
         console.error("[reconcile_send_log] failed to refresh a send_log row", {
           error: errorMessage(error),
           id: row.id,
+          provider: providerId,
           providerMessageId,
         });
         // Bump updated_at even on failure (a no-op status/lastEvent patch)
@@ -101,6 +105,22 @@ export function createReconcileSendLogHandler({
             { error: errorMessage(touchError), id: row.id },
           );
         }
+      }
+    }
+  }
+
+  return async () => {
+    for (const [id, provider] of Object.entries(providers)) {
+      if (!provider.status) continue;
+      // One provider's failure (e.g. SQLITE_BUSY in listReconcilable) must
+      // not skip the providers after it.
+      try {
+        await reconcileProvider(id, provider.status.bind(provider));
+      } catch (error) {
+        console.error("[reconcile_send_log] provider pass failed", {
+          provider: id,
+          error: errorMessage(error),
+        });
       }
     }
   };

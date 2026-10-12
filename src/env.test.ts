@@ -158,3 +158,40 @@ describe("SY_SERENDIPITY_READ_KEY", () => {
     ).toBe(true);
   });
 });
+
+describe("SEND_PROVIDERS env validation", () => {
+  test("unset parses to no overrides", () => {
+    expect(envSchema.parse(base).SEND_PROVIDERS).toEqual({});
+  });
+
+  test("an empty string in the raw env reads as unset", () => {
+    expect(parseEnv({ ...base, SEND_PROVIDERS: "" }).SEND_PROVIDERS).toEqual(
+      {},
+    );
+  });
+
+  test("a valid mapping parses to a template id -> provider map", () => {
+    expect(
+      envSchema.parse({ ...base, SEND_PROVIDERS: "fpp-sender=resend" })
+        .SEND_PROVIDERS,
+    ).toEqual({ "fpp-sender": "resend" });
+  });
+
+  test("an unknown provider or template id fails startup", () => {
+    const provider = envSchema.safeParse({
+      ...base,
+      SEND_PROVIDERS: "fpp-sender=mailgun",
+    });
+    const template = envSchema.safeParse({
+      ...base,
+      SEND_PROVIDERS: "nope=resend",
+    });
+
+    expect(provider.success).toBe(false);
+    expect(provider.error?.issues[0]?.path).toEqual(["SEND_PROVIDERS"]);
+    expect(template.success).toBe(false);
+    expect(() => parseEnv({ ...base, SEND_PROVIDERS: "nope=resend" })).toThrow(
+      "SEND_PROVIDERS",
+    );
+  });
+});

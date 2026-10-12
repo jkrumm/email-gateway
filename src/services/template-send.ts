@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { JobQueue } from "../db/jobs";
 import type { SendLogRepo } from "../db/send-log";
 import type { SendJobPayload } from "../jobs/send";
+import { sendProviderNameFor } from "../providers/send-registry";
 import { DEFAULT_FROM } from "../utils/send-mail";
 
 // The one send_log-insert + send-job-enqueue sequence every template send
@@ -30,7 +31,7 @@ export function enqueueTemplateSend(
       id: sendLogId,
       templateId: input.templateId,
       recipients: [input.to],
-      provider: "resend",
+      provider: sendProviderNameFor(input.templateId),
       requestedBy: input.requestedBy,
     });
     const jobId = jobs.enqueue({

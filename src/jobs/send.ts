@@ -1,15 +1,14 @@
-import { resend as defaultResendClient } from "../utils/resend";
+import { renderTemplate, type SendProvider } from "../providers/send-port";
+import { sendProviderByName } from "../providers/send-registry";
 import { sendLogRepo as defaultSendLog } from "../db/mail-index";
 import type { SendLogRepo } from "../db/send-log";
 import { findTemplateEntry, renderTemplateElement } from "../emails/registry";
 import type { JobHandler } from "./runner";
 
-// The `send` job kind's queue-plumbing (docs/architecture.md §Jobs: "sends
-// become jobs"). Nothing enqueues this yet — Wave 4 deliberately keeps the
-// contact-form routes' own notification email synchronous (see AGENTS.md and
-// the wave report's Left Behind); this handler exists for Wave 7/8's template
-// test-send and agent `POST /api/sends`, which will insert the send_log row
-// and enqueue this job with its id before this handler ever runs.
+// The `send` job kind (docs/architecture.md §Jobs: "sends become jobs"):
+// template test-send and agent `POST /api/sends` insert the send_log row and
+// enqueue this job with its id; the contact-form routes send inline and
+// enqueue nothing.
 export interface SendJobPayload {
   // The send_log row id, already inserted by the caller before enqueueing.
   id: string;
@@ -25,23 +24,36 @@ export interface SendJobPayload {
 }
 
 export function createSendHandler({
-  resendClient = defaultResendClient,
+  providerByName = sendProviderByName,
   sendLog = defaultSendLog,
 }: {
-  resendClient?: Pick<typeof defaultResendClient, "emails">;
+  providerByName?: (name: string) => SendProvider | null;
   sendLog?: Pick<SendLogRepo, "recordProviderResult" | "getSendLog">;
 } = {}): JobHandler {
   return async (payload) => {
     const input = payload as SendJobPayload;
 
-    // Idempotency guard: resendClient.emails.send runs before
-    // recordProviderResult's UPDATE. If that UPDATE throws (e.g.
-    // SQLITE_BUSY during the two-container deploy overlap), the runner's
-    // at-least-once retry would otherwise call send() again and duplicate
-    // the customer email. A row already recorded as sent means this job is
-    // already done in every way that matters — skip straight to success.
+    // Idempotency guard: provider.send runs before recordProviderResult's
+    // UPDATE. If that UPDATE throws (e.g. SQLITE_BUSY during the
+    // two-container deploy overlap), the runner's at-least-once retry would
+    // otherwise call send() again and duplicate the customer email. A row
+    // already recorded as sent means this job is already done in every way
+    // that matters — skip straight to success.
     const existing = sendLog.getSendLog(input.id);
     if (existing?.status === "sent" && existing.providerMessageId) return;
+
+    // The provider was chosen at enqueue time (enqueueTemplateSend) and
+    // stored on the row, so a SEND_PROVIDERS change never reroutes a job
+    // that is already queued.
+    if (!existing) {
+      throw new Error(`send job ${input.id}: no send_log row`);
+    }
+    const provider = providerByName(existing.provider);
+    if (!provider) {
+      throw new Error(
+        `send job ${input.id}: unknown provider "${existing.provider}"`,
+      );
+    }
 
     const entry = findTemplateEntry(input.templateName);
     if (!entry) {
@@ -50,36 +62,33 @@ export function createSendHandler({
       );
     }
 
-    const element = renderTemplateElement(entry, input.templateProps);
-
-    // Resend's own idempotency key (CreateEmailRequestOptions.idempotencyKey,
-    // node_modules/resend/dist/index.d.mts) is the second line of defense: if
-    // this handler genuinely runs twice for the same send_log row (a process
-    // crash mid-handler, not just the recordProviderResult write below
-    // throwing), Resend refuses the duplicate itself instead of sending it.
-    const email = await resendClient.emails.send(
-      {
-        from: input.from,
-        to: input.to,
-        replyTo: input.replyTo,
-        subject: input.subject,
-        react: element,
-      },
-      { idempotencyKey: input.id },
+    const { html, text } = await renderTemplate(
+      renderTemplateElement(entry, input.templateProps),
     );
 
-    if (email.error) {
-      throw new Error(`${email.error.name} - ${email.error.message}`);
-    }
+    // The provider's own idempotency key is the second line of defense: if
+    // this handler genuinely runs twice for the same send_log row (a process
+    // crash mid-handler, not just the recordProviderResult write below
+    // throwing), the provider refuses the duplicate itself instead of
+    // sending it.
+    const { providerMessageId } = await provider.send({
+      from: input.from,
+      to: input.to,
+      replyTo: input.replyTo,
+      subject: input.subject,
+      html,
+      text,
+      idempotencyKey: input.id,
+    });
 
     // A write failure here must never propagate: the email already sent, so
     // the runner's at-least-once retry on a thrown error would call send()
     // again and duplicate it (mirrors recordSendLog's pattern in
-    // src/utils/send-mail.ts). Resend's idempotencyKey above is what actually
+    // src/utils/send-mail.ts). The idempotencyKey above is what actually
     // stops that retry from sending twice.
     try {
       sendLog.recordProviderResult(input.id, {
-        providerMessageId: email.data.id,
+        providerMessageId,
         status: "sent",
       });
     } catch (error) {
