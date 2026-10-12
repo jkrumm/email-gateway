@@ -1103,10 +1103,10 @@ isolation in reconcile, the id/name assertion and `Object.hasOwn`.
 - Acceptance's prod check is not yet observable: no route send has happened
   since the deploy (last prod `send_log` row 10:25Z, pre-deploy, no id).
   Re-check after the next `/fpp-daily-analytics` send.
-- `RESEND_ADMIN_API_KEY` is still unwired in prod, so the restricted send
-  key cannot read `emails.get`: route sends will get `provider_message_id`
-  but `reconcile_send_log` will fail to set a `status` until the owner
-  wires it. Needed for the "status within two passes" criterion.
+- Corrected by the orchestrator: the prod `RESEND_API_KEY` is not
+  restricted — `GET /emails/{id}` with it returns 200 and `last_event`
+  (probed 2026-10-12), and `adminResend` falls back to it, so
+  `reconcile_send_log` needs no `RESEND_ADMIN_API_KEY` to set a status.
 - Existing 19 prod rows have no id and stay unreconciled (backfill needs a
   migration; not worth it).
 - For Wave 12: `send_log.id` for route sends is still the provider message
@@ -1127,6 +1127,12 @@ Code only; SES stays switched off (env unset) until Wave 13 provisions it.
       cert URL host check); the SES event JSON for Delivery, Bounce,
       Complaint, Reject, DeliveryDelay. Bake the facts into code comments
       only where they change a decision.
+- [ ] Before SES carries anything: route sends get a provider-independent
+      `send_log.id` (not the provider message id — two providers could
+      collide on `INSERT OR IGNORE`), and the send job's "already sent" guard
+      skips on any recorded `provider_message_id`, not only
+      `status === "sent"` — a row reconciled to `delivered` must never be
+      re-sent, and SES has no idempotency key to catch it.
 - [ ] `src/providers/ses/`: a `SendProvider` on SESv2 `SendEmail` (region,
       configuration-set name, credentials from env; all optional — unset
       means SES unavailable and the route stays on Resend). No idempotency
