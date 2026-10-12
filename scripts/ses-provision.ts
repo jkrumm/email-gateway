@@ -52,7 +52,10 @@ export function dnsRecords(domain: string, dkimTokens: string[]): DnsRecord[] {
   ];
 }
 
-export function sendPolicy(account: string, domains: string[]): object {
+// identity/* rather than the listed domains: in the sandbox SES also
+// authorizes against the *recipient's* verified identity, and every
+// identity in this account is ours, so the wildcard costs no isolation.
+export function sendPolicy(account: string): object {
   const arn = (kind: string, id: string) =>
     `arn:aws:ses:${REGION}:${account}:${kind}/${id}`;
   return {
@@ -61,10 +64,7 @@ export function sendPolicy(account: string, domains: string[]): object {
       {
         Effect: "Allow",
         Action: ["ses:SendEmail", "ses:SendRawEmail"],
-        Resource: [
-          ...domains.map((d) => arn("identity", d)),
-          arn("configuration-set", CONFIG_SET),
-        ],
+        Resource: [arn("identity", "*"), arn("configuration-set", CONFIG_SET)],
       },
     ],
   };
@@ -229,7 +229,7 @@ async function ensureIamUser(
     "--policy-name",
     "ses-send",
     "--policy-document",
-    JSON.stringify(sendPolicy(account, domains)),
+    JSON.stringify(sendPolicy(account)),
   ]);
   const keys = await awsOk([
     "iam",

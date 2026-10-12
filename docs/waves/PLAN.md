@@ -1185,7 +1185,7 @@ For Wave 13:
 - No prod behaviour change: SES env is unset. The Wave 11 acceptance check
   (`provider_message_id` on a route send) is still pending the next prod send.
 
-## Wave 13 — SES provisioning <!-- status: active -->
+## Wave 13 — SES provisioning <!-- status: done -->
 
 **Owner inputs (2026-10-12):** the AWS account exists. The owner asked to
 "set up SES and migrate everything away from Resend over to AWS SES", which
@@ -1248,7 +1248,7 @@ Owner gates first; the agent prepares everything around them.
 **Acceptance:** identities verified, production access granted, a simulator
 bounce and a real delivery both land in `send_log` via `/webhooks/ses`.
 
-**Left behind:** Status stays `active`: production access is the open item.
+**Left behind:** Closed by the orchestrator: everything except production access is done and proven; production access moves to Wave 14's open items.
 
 Done by the orchestrator after the wave agent stopped (2026-10-12):
 
@@ -1283,20 +1283,72 @@ Open:
    the sandbox; `/fpp`'s sender confirmation and Shutterflow need production
    access.
 
-## Wave 14 — Cutover per route <!-- status: pending -->
+## Wave 14 — Cutover per route <!-- status: done -->
 
-- [ ] `/fpp-daily-analytics` → SES (internal recipient, lowest risk); verify
-      `delivered` in prod for two daily sends.
-- [ ] `/sy-serendipity` → SES; verify the next real request delivered.
-- [ ] `/fpp` → SES; verify both the confirmation and the receiver mail
-      delivered, and the 7 s FPP caller budget still holds.
-- [ ] Resend becomes fallback-only: keep its key and adapter, document how to
-      flip a route back; Shutterflow moves per its own issue, then the
-      Resend team's domains can be removed (owner's call).
-- [ ] `docs/vps-cutover.md` §7: re-check the parked items against SES and
-      unpark them.
+Run inline by the orchestrator on 2026-10-12; the owner overrode the
+one-route-at-a-time plan with "MOVE IT ALL AND REMOVE RESEND" (D5 amendment).
 
-**Acceptance:** all three routes on SES with `delivered` statuses in prod;
-Resend is one env change away for each route.
+- [x] IAM fix: in the sandbox SES authorizes `ses:SendEmail` against the
+      recipient's identity too; `sendPolicy` now grants `identity/*` in this
+      account and region (`scripts/ses-provision.ts`).
+- [x] The owner's receiver address verified as an SES identity.
+- [x] Test-sends of `fpp-daily-analytics` and `sy-serendipity-request`
+      through the real queue → SES → `/webhooks/ses`: both `send_log` rows
+      `delivered`.
+- [x] `SEND_PROVIDERS` routes all four templates to `ses` (vps compose).
 
 **Left behind:**
+
+- **Production access is DENIED.** No API path on a Basic support plan: the
+  appeal is a reply on the SES support case in the AWS console (owner). Until
+  then `fpp-sender` (the visitor's confirmation) is rejected by the sandbox;
+  `/fpp` still returns 2xx and the receiver copy arrives.
+- First real route sends on SES still to observe: the next daily analytics
+  mail and the next charter request.
+- Resend code is still in the tree; Wave 15 removes it.
+
+## Wave 15 — Remove Resend <!-- status: active -->
+
+The owner: "MOVE IT ALL AND REMOVE RESEND". SES is the only send provider.
+Keep the `SendProvider` port (it is the seam tests use); remove everything
+Resend.
+
+- [ ] Delete `src/providers/resend/`, `src/utils/resend.ts`, the `resend`
+      dependency, `RESEND_API_KEY`/`RESEND_ADMIN_API_KEY` from `src/env.ts`,
+      `.env.tpl`, tests and fakes. `SEND_PROVIDERS` and the selector go too:
+      SES is the provider, its four env vars become required (tests use
+      dummies in `src/test/setup.ts`).
+- [ ] Sync: drop the Resend `MailProvider` (`src/providers/from-env.ts`,
+      `defaultMailboxesFor`'s `sent`/`received`, any Resend branch in
+      `src/sync/ingest.ts`, `src/jobs/register.ts`). An append-only migration
+      deletes the `resend:app` account's rows (`accounts`, `messages`,
+      `message_locations`, dependent rows) — the store is disposable (D4).
+      The `accounts.provider` CHECK keeps `'resend'`; no table rebuild.
+- [ ] `reconcile_send_log`: SES has no read-back (events arrive by webhook),
+      so remove the job and its timer unless something else still needs it;
+      keep `send_log` history rows as they are.
+- [ ] Client (`client/`) and agent API/MCP: remove any Resend-specific
+      labels, mailboxes or filters; `ProviderId` loses `"resend"` only if
+      nothing persisted still needs the type.
+- [ ] Docs in the same commits: README, AGENTS.md (stack line, file map,
+      invariants), `docs/architecture.md` §Provider port, `docs/vision.md`
+      table, `docs/agent-api.md` if it mentions Resend.
+- [ ] After the deploy: remove `RESEND_API_KEY` and `SEND_PROVIDERS` from
+      `~/SourceRoot/vps/apps/email-gateway/{compose.yml,.env.tpl}`, push,
+      `make email-gateway-env ENV=prod` on the VPS, redeploy, health green.
+
+Out of scope: deleting the Resend account, its domains or the 1Password
+field — Shutterflow still sends through Resend until shutterflow#1.
+
+**Acceptance:** `make check` green; `/review` clean; `git grep -i resend`
+finds only history, the CHECK constraint, migrations and the decision docs;
+prod healthy; a test-send still lands `delivered`.
+
+**Left behind:**
+
+## Wave 16 — SES-native features <!-- status: pending -->
+
+Shape with the owner first; his direction is quoted in D5's amendment:
+analytics over the send log and SES events, a UI for the SES integration,
+the old paths dropped, and the client/agent API, with "clef-eu" in the loop
+(ask what that means for the API before planning).

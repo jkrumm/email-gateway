@@ -15,10 +15,10 @@ describe("ses-provision", () => {
     );
   });
 
-  test("sendPolicy scopes to the given identities and the configuration set", () => {
-    const p = sendPolicy("123", ["example.com"]) as any;
+  test("sendPolicy scopes to this account's identities and the configuration set", () => {
+    const p = sendPolicy("123") as any;
     expect(p.Statement[0].Resource).toEqual([
-      "arn:aws:ses:eu-central-1:123:identity/example.com",
+      "arn:aws:ses:eu-central-1:123:identity/*",
       "arn:aws:ses:eu-central-1:123:configuration-set/email-gateway",
     ]);
   });

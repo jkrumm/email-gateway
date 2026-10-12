@@ -487,6 +487,24 @@ its side is a Shutterflow issue the owner triages. The AWS account, SES
 production access and every per-domain DNS change (DKIM CNAMEs, MAIL FROM)
 stay owner gates.
 
+**Amended 2026-10-12, same day**, after SES was proven end to end in prod:
+
+> MOVE IT ALL AND REMOVE RESEND
+
+Every template sends through SES now, and Resend is removed from the gateway
+instead of staying as the fallback. Until SES grants production access, the
+sandbox rejects mail to unverified recipients, so the FPP contact form's
+confirmation to the visitor is not delivered (the route still returns 2xx;
+the receiver copy to the owner arrives). Shutterflow keeps its own Resend key
+until shutterflow#1 lands, so the Resend account itself stays until then.
+
+The owner's direction for after the migration, verbatim:
+
+> Awesome we will also end up with a perfect integration towards and back and
+> forth with email gateway and great analytics and features as well as very
+> useful ui for integration with SES and dropped all old stuff and over a
+> super useful API to clients going through clef-eu
+
 ## Constraints the design honours
 
 - **Live callers.** `POST /fpp` (FPP web, 7 s abort), `POST /fpp-daily-analytics`
