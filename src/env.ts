@@ -2,7 +2,6 @@ import { X509Certificate } from "node:crypto";
 import { z } from "zod";
 import { normalizePem } from "./utils/pem";
 import { splitMailboxes } from "./utils/mailboxes";
-import { parseSendProviders, sesConfigured } from "./providers/send-select";
 
 // Shared by both IMAP accounts' superRefine checks below: every key in
 // `keys` must be set once any one of them is, so a half-configured account
@@ -43,7 +42,6 @@ export const envSchema = z
   .object({
     SECRET_KEY: z.string().min(10, "SECRET_KEY is required!"),
     RECEIVER_EMAIL: z.email("RECEIVER_EMAIL is required!"),
-    RESEND_API_KEY: z.string().min(1, "RESEND_API_KEY is required!"),
     SY_SERENDIPITY_RECEIVER_EMAIL: z.email(
       "SY_SERENDIPITY_RECEIVER_EMAIL is required!",
     ),
@@ -75,34 +73,19 @@ export const envSchema = z
     // unset -> reachable on any Host. Dev and prod leave it unset until Wave 9.
     // An empty string must be a validation error, not a silent gate bypass.
     MAIL_HOST: z.string().min(1).optional(),
-    // Full-access key for the admin UI's list/get calls; the send path keeps
-    // the sending-only RESEND_API_KEY.
-    RESEND_ADMIN_API_KEY: z.string().optional(),
-    // Which provider each template sends through: `templateId=provider,...`.
-    // Unset or unlisted templates use resend. Parsed to a template id ->
-    // provider name map; an unknown provider or template id fails startup.
-    SEND_PROVIDERS: z
+    // Amazon SES, the only send provider (src/providers/ses). Region, both
+    // keys and the configuration set are required. Credentials are passed to
+    // the client explicitly — no ambient AWS credential chain.
+    // SES_SNS_TOPIC_ARN turns on the public POST /webhooks/ses event door
+    // (needs SES_REGION to pin the SNS host); unset -> that path 404s.
+    SES_REGION: z.string().min(1, "SES_REGION is required!"),
+    SES_ACCESS_KEY_ID: z.string().min(1, "SES_ACCESS_KEY_ID is required!"),
+    SES_SECRET_ACCESS_KEY: z
       .string()
-      .optional()
-      .transform((raw, context) => {
-        const { map, issues } = parseSendProviders(raw);
-        for (const message of issues) {
-          context.addIssue({ code: "custom", message });
-        }
-        return map;
-      }),
-
-    // Amazon SES as a second send provider (src/providers/ses). All four of
-    // region, both keys and the configuration set must be set for SES to be
-    // configured; SEND_PROVIDERS routing a template to `ses` without that
-    // fails startup. Credentials are passed to the client explicitly — no
-    // ambient AWS credential chain. SES_SNS_TOPIC_ARN turns on the public
-    // POST /webhooks/ses event door (needs SES_REGION to pin the SNS host);
-    // unset -> that path 404s.
-    SES_REGION: z.string().optional(),
-    SES_ACCESS_KEY_ID: z.string().optional(),
-    SES_SECRET_ACCESS_KEY: z.string().optional(),
-    SES_CONFIGURATION_SET: z.string().optional(),
+      .min(1, "SES_SECRET_ACCESS_KEY is required!"),
+    SES_CONFIGURATION_SET: z
+      .string()
+      .min(1, "SES_CONFIGURATION_SET is required!"),
     SES_SNS_TOPIC_ARN: z.string().optional(),
 
     // Directory for the SQLite database file. Defaults to ./data so local dev
@@ -139,28 +122,11 @@ export const envSchema = z
     GMAIL_IMAP_MAILBOXES: z.string().default("INBOX"),
   })
   .superRefine((value, context) => {
-    if (
-      Object.values(value.SEND_PROVIDERS).includes("ses") &&
-      !sesConfigured(value)
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["SEND_PROVIDERS"],
-        message:
-          "SEND_PROVIDERS routes a template to ses, which needs SES_REGION, SES_ACCESS_KEY_ID, SES_SECRET_ACCESS_KEY and SES_CONFIGURATION_SET",
-      });
-    }
     if (value.SES_SNS_TOPIC_ARN) {
-      requireTogether(
-        context,
-        value,
-        ["SES_REGION"],
-        "SES_SNS_TOPIC_ARN is set",
-      );
       // arn:aws:sns:<region>:<account>:<topic> — the webhook pins the SNS
       // host to SES_REGION, so a topic in another region could never verify.
       const topicRegion = value.SES_SNS_TOPIC_ARN.split(":")[3];
-      if (value.SES_REGION && topicRegion !== value.SES_REGION) {
+      if (topicRegion !== value.SES_REGION) {
         context.addIssue({
           code: "custom",
           path: ["SES_SNS_TOPIC_ARN"],

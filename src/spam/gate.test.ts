@@ -165,7 +165,7 @@ describe("gateSubmission", () => {
       classifyResult({ verdict: "legit", confidence: 0.9, reason: "genuine" }),
     );
     const { deliver } = deliverSpy(async () => {
-      throw new Error("resend down");
+      throw new Error("delivery down");
     });
     const submissions = testSubmissionsRepo();
 
@@ -177,7 +177,7 @@ describe("gateSubmission", () => {
         classify,
         record: submissions.insertSubmission,
       }),
-    ).rejects.toThrow("resend down");
+    ).rejects.toThrow("delivery down");
 
     const [record] = submissions.listSubmissions().data;
     expect(record?.delivered).toBe(false);

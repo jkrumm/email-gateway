@@ -1,11 +1,9 @@
-import type { ReactElement } from "react";
-
 // The one interface every mailbox sits behind (docs/architecture.md
 // §Provider port). A new mailbox is a new adapter, not a new code path.
 // Capabilities are declared per adapter instance from what the server
 // actually advertises, never assumed from the provider id.
 
-export type ProviderId = "proton" | "gmail" | "resend";
+export type ProviderId = "proton" | "gmail";
 
 export interface Capabilities {
   list: boolean;
@@ -13,7 +11,6 @@ export interface Capabilities {
   search: boolean;
   flag: boolean;
   move: boolean;
-  send: boolean;
   idle: boolean;
 }
 
@@ -21,17 +18,14 @@ export interface Capabilities {
 // pair (IMAP UIDs are only unique within one mailbox+UIDVALIDITY) plus the
 // account it came from — `provider` alone doesn't distinguish two Gmail
 // accounts (Wave 8), so a ref must never be accepted by a *different*
-// account's adapter instance even when the provider kind matches. A Resend
-// ref names a Resend email id plus which list it came from.
-export type MessageRef =
-  | {
-      provider: "proton" | "gmail";
-      account: string;
-      mailbox: string;
-      uidValidity: string;
-      uid: number;
-    }
-  | { provider: "resend"; id: string; mailbox: string };
+// account's adapter instance even when the provider kind matches.
+export interface MessageRef {
+  provider: ProviderId;
+  account: string;
+  mailbox: string;
+  uidValidity: string;
+  uid: number;
+}
 
 export interface Mailbox {
   path: string;
@@ -80,22 +74,6 @@ export interface FlagChange {
   set?: string[];
 }
 
-export interface OutboundDraft {
-  from?: string;
-  to: string;
-  replyTo?: string;
-  subject: string;
-  template: ReactElement;
-  // Our own template/route id, stored on the outbound row.
-  source?: string;
-}
-
-export interface SentReceipt {
-  id: string;
-  to: string;
-  from: string;
-}
-
 // Opaque pagination token; a provider's own list() is the only thing that
 // interprets it.
 export type Cursor = string | undefined;
@@ -120,7 +98,7 @@ export interface ListOptions {
 
 export interface MailProvider {
   readonly id: ProviderId;
-  // hello@…, me@gmail.com, the Resend sending domain.
+  // hello@…, me@gmail.com.
   readonly account: string;
   capabilities(): Promise<Capabilities>;
   listMailboxes(): Promise<Mailbox[]>;
@@ -135,7 +113,6 @@ export interface MailProvider {
   search(query: SearchQuery): Promise<MessageRef[]>;
   setFlags(ref: MessageRef, flags: FlagChange): Promise<void>;
   move(ref: MessageRef, toMailbox: string): Promise<MessageRef>;
-  send(draft: OutboundDraft): Promise<SentReceipt>;
   // IDLE / push. Optional: not every adapter can watch.
   watch?(mailbox: string, onChange: () => void): Promise<Unsubscribe>;
 }

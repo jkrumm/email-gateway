@@ -73,7 +73,6 @@ function fakeProvider(
       search: false,
       flag: false,
       move: false,
-      send: false,
       idle: false,
     }),
     listMailboxes: async () => [],
@@ -82,9 +81,6 @@ function fakeProvider(
     search: async () => [],
     setFlags: async () => {},
     move: async (ref) => ref,
-    send: async () => {
-      throw new Error("not implemented in fake");
-    },
   };
 }
 

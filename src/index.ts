@@ -6,7 +6,7 @@ import { startJobSystem } from "./jobs/register";
 app.listen(env.PORT);
 // Must never take startJobSystem() down with it — a boot-time DB hiccup here
 // (e.g. SQLITE_BUSY during the two-container deploy overlap) would otherwise
-// leave sync/classify/send/reconcile all dark behind a health check that
+// leave sync/classify/send all dark behind a health check that
 // only pings the process, not the job system.
 try {
   syncTemplateRegistry();

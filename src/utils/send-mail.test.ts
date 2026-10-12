@@ -35,7 +35,7 @@ describe("recordSendLog", () => {
       recordSendLog(throwingRepo(), {
         id: "email_1",
         recipients: ["guest@example.com"],
-        provider: "resend",
+        provider: "ses",
         requestedBy: "route",
       }),
     ).not.toThrow();

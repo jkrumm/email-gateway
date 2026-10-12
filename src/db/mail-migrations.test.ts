@@ -1,0 +1,153 @@
+import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { runMailMigrations } from "./mail-migrations";
+
+describe("mail migration 5", () => {
+  function count(db: Database, table: string): number {
+    return db
+      .query<{ count: number }, []>(`SELECT COUNT(*) AS count FROM ${table}`)
+      .get()!.count;
+  }
+
+  function seedAccount(
+    db: Database,
+    provider: string,
+    address: string,
+    threadKey: string | null,
+  ): void {
+    const now = "2026-09-28T08:00:00.000Z";
+    const account = `${provider}:${address}`;
+    const key = `msg-${provider}`;
+    db.run(
+      `INSERT INTO accounts (id, provider, address, created_at) VALUES (?, ?, ?, ?)`,
+      [account, provider, address, now],
+    );
+    db.run(
+      `INSERT INTO messages (key, account, direction, to_addresses, date, thread_key, created_at, updated_at)
+       VALUES (?, ?, 'inbound', '[]', ?, ?, ?, ?)`,
+      [key, account, now, `thread-${provider}`, now, now],
+    );
+    db.run(
+      `INSERT INTO message_locations (key, mailbox, provider_ref, last_seen_at) VALUES (?, 'INBOX', '{}', ?)`,
+      [key, now],
+    );
+    db.run(`INSERT INTO classifications (key, updated_at) VALUES (?, ?)`, [
+      key,
+      now,
+    ]);
+    db.run(`INSERT INTO body_cache (key, fetched_at) VALUES (?, ?)`, [
+      key,
+      now,
+    ]);
+    db.run(
+      `INSERT INTO messages_fts (subject, addresses, summary, message_key) VALUES ('s', 'a', 'x', ?)`,
+      [key],
+    );
+    if (threadKey) {
+      db.run(
+        `INSERT INTO thread_summaries (thread_key, summary, message_count, updated_at) VALUES (?, 'sum', 1, ?)`,
+        [threadKey, now],
+      );
+    }
+    db.run(
+      `INSERT INTO thread_summaries (thread_key, summary, message_count, updated_at) VALUES (?, 'sum', 1, ?)`,
+      [key, now],
+    );
+  }
+
+  function seedSendLog(
+    db: Database,
+    id: string,
+    provider: string,
+    status: string | null,
+    providerMessageId: string | null = null,
+  ): void {
+    db.run(
+      `INSERT INTO send_log (id, recipients, provider, provider_message_id, status, requested_by, created_at, updated_at)
+       VALUES (?, '[]', ?, ?, ?, 'route', '2026-09-28T08:00:00.000Z', '2026-09-28T08:00:00.000Z')`,
+      [id, provider, providerMessageId, status],
+    );
+  }
+
+  function sendLogStatuses(db: Database): Record<string, string | null> {
+    return Object.fromEntries(
+      db
+        .query<{ id: string; status: string | null }, []>(
+          "SELECT id, status FROM send_log",
+        )
+        .all()
+        .map((row) => [row.id, row.status]),
+    );
+  }
+
+  test("deletes the resend account's data and keeps other accounts", () => {
+    const db = new Database(":memory:");
+    db.run("PRAGMA foreign_keys = ON");
+    runMailMigrations(db, { targetVersion: 4 });
+    seedAccount(db, "resend", "app", null);
+    seedAccount(db, "proton", "hello@example.com", "thread-proton");
+    seedSendLog(db, "s1", "resend", "delivered", "re_1");
+
+    runMailMigrations(db);
+
+    expect(
+      db.query<{ id: string }, []>("SELECT id FROM accounts").all(),
+    ).toEqual([{ id: "proton:hello@example.com" }]);
+    expect(
+      db.query<{ key: string }, []>("SELECT key FROM messages").all(),
+    ).toEqual([{ key: "msg-proton" }]);
+    for (const table of [
+      "message_locations",
+      "classifications",
+      "body_cache",
+      "messages_fts",
+    ]) {
+      expect(count(db, table)).toBe(1);
+    }
+    expect(
+      db
+        .query<{ thread_key: string }, []>(
+          "SELECT thread_key FROM thread_summaries ORDER BY thread_key",
+        )
+        .all(),
+    ).toEqual([{ thread_key: "msg-proton" }, { thread_key: "thread-proton" }]);
+    expect(count(db, "send_log")).toBe(1);
+  });
+
+  test("fails in-flight resend sends, leaves finished and non-resend rows alone", () => {
+    const db = new Database(":memory:");
+    runMailMigrations(db, { targetVersion: 4 });
+    seedSendLog(db, "queued", "resend", null);
+    seedSendLog(db, "claimed", "resend", "sending");
+    seedSendLog(db, "sent", "resend", "sent", "re_1");
+    seedSendLog(db, "bounced", "resend", "bounced", "re_2");
+    seedSendLog(db, "ses-queued", "ses", null);
+
+    runMailMigrations(db);
+
+    expect(sendLogStatuses(db)).toEqual({
+      queued: "failed",
+      claimed: "failed",
+      sent: "sent",
+      bounced: "bounced",
+      "ses-queued": null,
+    });
+  });
+
+  test("drops the reconcile index", () => {
+    const db = new Database(":memory:");
+    runMailMigrations(db, { targetVersion: 4 });
+    const indexNames = () =>
+      db
+        .query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE type = 'index'",
+        )
+        .all()
+        .map((row) => row.name);
+    expect(indexNames()).toContain("idx_send_log_provider_updated_at");
+
+    runMailMigrations(db);
+
+    expect(indexNames()).not.toContain("idx_send_log_provider_updated_at");
+  });
+});

@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-export type AccountProvider = "proton" | "gmail" | "resend";
+export type AccountProvider = "proton" | "gmail";
 
 export interface Account {
   id: string;
@@ -52,8 +52,8 @@ function toAccount(row: AccountRow): Account {
   };
 }
 
-// One row per mail account (Proton hello@, a Gmail address, the Resend
-// send-only "account"); docs/architecture.md §Lean store `accounts` table.
+// One row per mail account (Proton hello@, a Gmail address);
+// docs/architecture.md §Lean store `accounts` table.
 export function createAccountsRepo(db: Database) {
   // id is the account's stable identity (e.g. "proton:hello@example.com");
   // provider/address are set once on first sight and never change afterwards.

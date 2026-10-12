@@ -44,7 +44,6 @@ function stubProvider(
       search: false,
       flag: false,
       move: false,
-      send: id === "resend",
       idle: false,
     }),
     listMailboxes: async () => [],
@@ -59,24 +58,29 @@ function stubProvider(
     search: async () => [],
     setFlags: async () => {},
     move: async (ref) => ref,
-    send: async () => {
-      throw new Error("not implemented in fake");
-    },
+  };
+}
+
+function protonRef(mailbox: string, uid: number): Envelope["ref"] {
+  return {
+    provider: "proton",
+    account: "hello@example.com",
+    mailbox,
+    uidValidity: "1",
+    uid,
   };
 }
 
 describe("runSyncTick", () => {
-  test("ingests both of Resend's mailboxes and a failing one doesn't block the other", async () => {
+  test("ingests every mailbox and a failing one doesn't block the other", async () => {
     const { accounts, messages } = repos();
-    const provider = stubProvider("resend", "app", {
-      sent: async () => ({
-        items: [
-          envelope({ ref: { provider: "resend", id: "s1", mailbox: "sent" } }),
-        ],
+    const provider = stubProvider("proton", "hello@example.com", {
+      INBOX: async () => ({
+        items: [envelope({ ref: protonRef("INBOX", 1) })],
         cursor: undefined,
       }),
-      received: async () => {
-        throw new Error("resend down");
+      Spam: async () => {
+        throw new Error("bridge down");
       },
     });
 
@@ -84,33 +88,23 @@ describe("runSyncTick", () => {
       accounts,
       messages,
       providers: [provider],
+      mailboxesFor: () => ["Spam", "INBOX"],
     });
 
     expect(result.new).toBe(1);
-    expect(result.errors).toEqual(["received: resend down"]);
+    expect(result.errors).toEqual(["Spam: bridge down"]);
   });
 
   test("one provider's failure never blocks another provider in the same tick", async () => {
     const { accounts, messages } = repos();
-    const resend = stubProvider("resend", "app", {
-      sent: async () => {
-        throw new Error("resend outage");
+    const gmail = stubProvider("gmail", "me@gmail.com", {
+      INBOX: async () => {
+        throw new Error("gmail outage");
       },
-      received: async () => ({ items: [], cursor: undefined }),
     });
     const proton = stubProvider("proton", "hello@example.com", {
       INBOX: async () => ({
-        items: [
-          envelope({
-            ref: {
-              provider: "proton",
-              account: "hello@example.com",
-              mailbox: "INBOX",
-              uidValidity: "1",
-              uid: 1,
-            },
-          }),
-        ],
+        items: [envelope({ ref: protonRef("INBOX", 1) })],
         cursor: undefined,
       }),
     });
@@ -118,34 +112,20 @@ describe("runSyncTick", () => {
     const result = await runSyncTick({
       accounts,
       messages,
-      providers: [resend, proton],
-      mailboxesFor: (provider) =>
-        provider.id === "resend" ? ["sent", "received"] : ["INBOX"],
+      providers: [gmail, proton],
+      mailboxesFor: () => ["INBOX"],
     });
 
-    expect(result.errors).toEqual(["sent: resend outage"]);
-    expect(result.new).toBeGreaterThanOrEqual(0);
+    expect(result.errors).toEqual(["INBOX: gmail outage"]);
+    expect(result.new).toBe(1);
   });
 
   test("a mailboxesFor throw for one provider doesn't block a later provider in the same tick", async () => {
     const { accounts, messages } = repos();
-    const resend = stubProvider("resend", "app", {
-      sent: async () => ({ items: [], cursor: undefined }),
-      received: async () => ({ items: [], cursor: undefined }),
-    });
+    const gmail = stubProvider("gmail", "me@gmail.com", {});
     const proton = stubProvider("proton", "hello@example.com", {
       INBOX: async () => ({
-        items: [
-          envelope({
-            ref: {
-              provider: "proton",
-              account: "hello@example.com",
-              mailbox: "INBOX",
-              uidValidity: "1",
-              uid: 1,
-            },
-          }),
-        ],
+        items: [envelope({ ref: protonRef("INBOX", 1) })],
         cursor: undefined,
       }),
     });
@@ -153,29 +133,28 @@ describe("runSyncTick", () => {
     const result = await runSyncTick({
       accounts,
       messages,
-      providers: [resend, proton],
+      providers: [gmail, proton],
       mailboxesFor: (provider) => {
-        if (provider.id === "resend") {
+        if (provider.id === "gmail") {
           throw new Error("mailboxesFor exploded");
         }
         return ["INBOX"];
       },
     });
 
-    expect(result.errors).toEqual(["resend:app: mailboxesFor exploded"]);
+    expect(result.errors).toEqual([
+      "gmail:me@gmail.com: mailboxesFor exploded",
+    ]);
     expect(result.new).toBe(1);
   });
 
   test("enqueues classify for every newly ingested key", async () => {
     const { accounts, messages } = repos();
-    const provider = stubProvider("resend", "app", {
-      sent: async () => ({
-        items: [
-          envelope({ ref: { provider: "resend", id: "s1", mailbox: "sent" } }),
-        ],
+    const provider = stubProvider("proton", "hello@example.com", {
+      INBOX: async () => ({
+        items: [envelope({ ref: protonRef("INBOX", 1) })],
         cursor: undefined,
       }),
-      received: async () => ({ items: [], cursor: undefined }),
     });
     const enqueued: string[] = [];
 
@@ -183,6 +162,7 @@ describe("runSyncTick", () => {
       accounts,
       messages,
       providers: [provider],
+      mailboxesFor: () => ["INBOX"],
       enqueueClassify: (key) => enqueued.push(key),
     });
 
@@ -192,13 +172,9 @@ describe("runSyncTick", () => {
   test("defaultMailboxesFor gives each provider its own configured mailbox list", () => {
     const proton = stubProvider("proton", "hello@example.com", {});
     const gmail = stubProvider("gmail", "me@gmail.com", {});
-    const resend = stubProvider("resend", "app", {});
     const protonConfig = imapConfig(["INBOX", "Spam"]);
     const gmailConfig = imapConfig(["INBOX", "[Gmail]/All Mail"]);
 
-    expect(
-      defaultMailboxesFor(resend, { proton: protonConfig, gmail: gmailConfig }),
-    ).toEqual(["sent", "received"]);
     expect(
       defaultMailboxesFor(proton, { proton: protonConfig, gmail: gmailConfig }),
     ).toEqual(["INBOX", "Spam"]);
@@ -208,6 +184,14 @@ describe("runSyncTick", () => {
     // An unconfigured account has no mailboxes to ingest.
     expect(defaultMailboxesFor(proton, {})).toEqual([]);
     expect(defaultMailboxesFor(gmail, {})).toEqual([]);
+    // An unknown provider id fails closed rather than borrowing Gmail's list.
+    const unknown = { ...gmail, id: "other" } as unknown as MailProvider;
+    expect(
+      defaultMailboxesFor(unknown, {
+        proton: protonConfig,
+        gmail: gmailConfig,
+      }),
+    ).toEqual([]);
   });
 
   test("ingests Proton and Gmail into their own accounts, each from its own mailboxes", async () => {

@@ -3,7 +3,7 @@ import { JOB_STALE_CLAIM_MS } from "./jobs";
 
 // Status of a row whose send a worker has claimed (claimSend) but not yet
 // recorded. Never a provider-reported status; ranks 0 like "sent".
-export const SENDING_STATUS = "sending";
+const SENDING_STATUS = "sending";
 
 // How long a 'sending' claim is honoured before another worker may take it
 // over as a crashed worker's. Its own knob, tied to the job-claim window only
@@ -51,11 +51,6 @@ export interface ListSendLogFilters {
   templateId?: string;
   limit?: number;
   cursor?: string;
-}
-
-export interface ListReconcilableInput {
-  provider: string;
-  limit: number;
 }
 
 export interface ListSendLogResult {
@@ -276,31 +271,6 @@ export function createSendLogRepo(db: Database) {
     return { data, nextCursor };
   }
 
-  // Rows a reconciliation pass still has to refresh: a known provider message
-  // id whose status has not yet reached a terminal value. Terminal statuses
-  // are never rechecked again, so a delivered/bounced/… row leaves this list
-  // for good. Oldest-updated first, so successive runs make forward progress
-  // instead of repeatedly reading the same head of the queue. A 'sending' row
-  // is deliberately excluded: it has no provider message id yet, and once it
-  // does, the send result replaces the status.
-  function listReconcilable({
-    provider,
-    limit,
-  }: ListReconcilableInput): SendLogEntry[] {
-    const capped = Math.min(Math.max(limit, 1), MAX_LIST_LIMIT);
-    return db
-      .query<SendLogRow, [string, number]>(
-        `SELECT * FROM send_log
-         WHERE provider = ?
-           AND provider_message_id IS NOT NULL
-           AND (status IS NULL OR status IN ('sent', 'queued', 'scheduled', 'delivery_delayed'))
-         ORDER BY updated_at ASC
-         LIMIT ?`,
-      )
-      .all(provider, capped)
-      .map(toSendLogEntry);
-  }
-
   return {
     insertSendLog,
     recordProviderResult,
@@ -309,7 +279,6 @@ export function createSendLogRepo(db: Database) {
     releaseSend,
     listSendLog,
     getSendLog,
-    listReconcilable,
   };
 }
 

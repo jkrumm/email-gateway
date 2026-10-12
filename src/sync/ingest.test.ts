@@ -71,7 +71,6 @@ function fakeProvider({
         search: false,
         flag: false,
         move: false,
-        send: false,
         idle: false,
       };
     },
@@ -95,9 +94,6 @@ function fakeProvider({
     async setFlags() {},
     async move(ref) {
       return ref;
-    },
-    async send() {
-      throw new Error("not implemented in fake");
     },
   };
 }
@@ -250,31 +246,29 @@ describe("ingestMailbox", () => {
     expect(enqueued).toHaveLength(1);
   });
 
-  test("infers outbound for Resend's sent mailbox and inbound otherwise", async () => {
+  test("ingests every message as inbound", async () => {
     const { accounts, messages } = repos();
-    const resendRef = (id: string) => ({
-      provider: "resend" as const,
-      id,
-      mailbox: "sent",
-    });
     const provider = fakeProvider({
-      id: "resend",
-      account: "resend-domain",
-      pages: {
-        sent: [[envelope({ ref: resendRef("r1") })]],
-        received: [
-          [envelope({ ref: { ...resendRef("r2"), mailbox: "received" } })],
-        ],
-      },
+      pages: { INBOX: [[envelope({ ref: imapRef(1) })]] },
+    });
+
+    await ingestMailbox({ provider, mailbox: "INBOX", accounts, messages });
+
+    expect(messages.listMessages().rows.map((row) => row.direction)).toEqual([
+      "inbound",
+    ]);
+  });
+
+  test("a mailbox named sent is still ingested as inbound", async () => {
+    const { accounts, messages } = repos();
+    const provider = fakeProvider({
+      pages: { sent: [[envelope({ ref: imapRef(1) })]] },
     });
 
     await ingestMailbox({ provider, mailbox: "sent", accounts, messages });
-    await ingestMailbox({ provider, mailbox: "received", accounts, messages });
 
-    const all = messages.listMessages();
-    expect(all.rows.map((row) => row.direction).sort()).toEqual([
+    expect(messages.listMessages().rows.map((row) => row.direction)).toEqual([
       "inbound",
-      "outbound",
     ]);
   });
 
@@ -538,7 +532,6 @@ describe("ingestMailbox", () => {
           search: false,
           flag: false,
           move: false,
-          send: false,
           idle: false,
         };
       },
@@ -569,9 +562,6 @@ describe("ingestMailbox", () => {
       async setFlags() {},
       async move(ref) {
         return ref;
-      },
-      async send() {
-        throw new Error("not implemented in fake");
       },
     };
 

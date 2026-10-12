@@ -238,7 +238,6 @@ function capabilitiesFromClient(client: ImapClient): Capabilities {
     // throw. Only advertise the capability when a caller can actually get a
     // usable ref back.
     move: client.capabilities.has("MOVE") && client.capabilities.has("UIDPLUS"),
-    send: false,
     idle: client.capabilities.has("IDLE"),
   };
 }

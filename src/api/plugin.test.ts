@@ -44,7 +44,6 @@ function fakeProvider(overrides: Partial<MailProvider> = {}): MailProvider {
       search: false,
       flag: true,
       move: true,
-      send: false,
       idle: false,
     }),
     listMailboxes: async () => [],
@@ -65,9 +64,6 @@ function fakeProvider(overrides: Partial<MailProvider> = {}): MailProvider {
     search: async () => [],
     setFlags: async () => {},
     move: async (ref) => ref,
-    send: async () => {
-      throw new Error("not implemented in fake");
-    },
     ...overrides,
   };
 }
@@ -164,7 +160,6 @@ describe("GET /api/accounts", () => {
   test("lists every configured account, not just ones that have synced", async () => {
     const { app } = testApp(API_KEY, {
       configuredProviders: () => [
-        fakeProvider({ id: "resend", account: "app" }),
         fakeProvider({ id: "proton", account: "hello@example.com" }),
         fakeProvider({ id: "gmail", account: "me@gmail.com" }),
       ],
@@ -176,7 +171,6 @@ describe("GET /api/accounts", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual([
-      { id: "resend:app", provider: "resend", address: "app" },
       {
         id: "proton:hello@example.com",
         provider: "proton",
@@ -496,7 +490,6 @@ describe("POST /api/messages/:key/flags", () => {
             search: false,
             flag: false,
             move: false,
-            send: false,
             idle: false,
           }),
         }),
@@ -991,7 +984,7 @@ describe("POST /api/sends", () => {
     expect(sendLog.getSendLog(body.sendLogId as string)).toMatchObject({
       templateId: TEMPLATE_IDS.fppSender,
       recipients: ["jane@example.com"],
-      provider: "resend",
+      provider: "ses",
       requestedBy: "agent",
     });
     expect(jobs.getJob(body.jobId as string)).toMatchObject({
@@ -1194,7 +1187,7 @@ describe("POST /api/templates/:id/test-send", () => {
     expect(sendLog.getSendLog(body.sendLogId as string)).toMatchObject({
       templateId: TEMPLATE_IDS.fppSender,
       recipients: ["receiver@example.com"],
-      provider: "resend",
+      provider: "ses",
       requestedBy: "test-send",
       status: null,
     });
@@ -1215,14 +1208,14 @@ describe("GET /api/send-log", () => {
       id: "log-welcome",
       templateId: "welcome",
       recipients: ["jane@example.com"],
-      provider: "resend",
+      provider: "ses",
       requestedBy: "route",
     });
     sendLog.insertSendLog({
       id: "log-digest",
       templateId: "digest",
       recipients: ["jane@example.com"],
-      provider: "resend",
+      provider: "ses",
       requestedBy: "route",
     });
 

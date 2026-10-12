@@ -67,7 +67,6 @@ match, so the public router reaching the same service/port is safe):
 environment:
   # ...existing vars unchanged...
   MAIL_HOST: mail.${DOMAIN}
-  RESEND_ADMIN_API_KEY: ${EMAIL_GATEWAY_RESEND_ADMIN_API_KEY}
   IMAP_TLS_CERT: ${EMAIL_GATEWAY_IMAP_TLS_CERT}
   GMAIL_IMAP_USER: ${EMAIL_GATEWAY_GMAIL_IMAP_USER}
   GMAIL_IMAP_APP_PASSWORD: ${EMAIL_GATEWAY_GMAIL_IMAP_APP_PASSWORD}
@@ -105,9 +104,6 @@ convention:
 EMAIL_GATEWAY_GMAIL_IMAP_USER=op://vps/email-gateway/GMAIL_IMAP_USER
 EMAIL_GATEWAY_GMAIL_IMAP_APP_PASSWORD=op://vps/email-gateway/GMAIL_IMAP_APP_PASSWORD
 EMAIL_GATEWAY_GMAIL_IMAP_MAILBOXES=op://vps/email-gateway/GMAIL_IMAP_MAILBOXES
-
-# Full-access Resend key for send-log reconciliation (reconcile_send_log job).
-EMAIL_GATEWAY_RESEND_ADMIN_API_KEY=op://vps/email-gateway/RESEND_ADMIN_API_KEY
 
 # Pinned Bridge server certificate (PEM, literal "\n" — see src/utils/pem.ts),
 # replacing IMAP_TLS_INSECURE once verified.
@@ -208,14 +204,14 @@ domains the gateway has to send from, and the provider choice (Postmark,
 Amazon SES with more logic in the gateway, or a self-hosted MTA) may reshape
 the send side before the mail surface goes live. Pick this list back up after
 that migration lands, and re-check every item against the new provider first.
+(Update: the migration landed — SES is the only send provider since Wave 15, and
+the Resend-specific wiring is gone from this list.)
 
 Owner-only inputs still missing:
 
 - Gmail app password → 1Password `vps/email-gateway` as `GMAIL_IMAP_USER`,
   `GMAIL_IMAP_APP_PASSWORD`, `GMAIL_IMAP_MAILBOXES`.
 - Proton folder names for `IMAP_MAILBOXES` (only INBOX and Spam sync today).
-- `RESEND_ADMIN_API_KEY` — moot if Resend is replaced; the
-  `reconcile_send_log` job then needs the new provider's status API instead.
 - `IMAP_TLS_CERT`: store the Bridge PEM, then drop `IMAP_TLS_INSECURE`.
 - Confirm deleting `email-gateway.sqlite` (§6 item 5).
 

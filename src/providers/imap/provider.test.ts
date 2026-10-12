@@ -30,7 +30,6 @@ function createFakePort({
     search: true,
     flag: true,
     move: true,
-    send: false,
     idle: false,
   },
   envelopes = [] as ImapEnvelopeInfo[],
@@ -156,7 +155,6 @@ describe("createImapProvider", () => {
             search: true,
             flag: true,
             move: true,
-            send: false,
             idle: true,
           },
         }).port,
@@ -435,23 +433,29 @@ describe("createImapProvider", () => {
     );
   });
 
-  test("a resend-shaped ref is rejected before any mailbox is opened", async () => {
+  test("a ref for another provider kind is rejected before any mailbox is opened", async () => {
     const { port, closes } = createFakePort();
     const provider = createImapProvider(config, {
       id: "proton",
       account: "hello@example.com",
       port,
     });
-    const resendRef = { provider: "resend" as const, id: "x", mailbox: "sent" };
+    const gmailRef = {
+      provider: "gmail" as const,
+      account: "hello@example.com",
+      mailbox: "INBOX",
+      uidValidity: "1",
+      uid: 1,
+    };
 
-    await expect(provider.read(resendRef)).rejects.toThrow(
-      'ref for provider "resend"',
+    await expect(provider.read(gmailRef)).rejects.toThrow(
+      'ref for provider "gmail"',
     );
-    await expect(provider.setFlags(resendRef, {})).rejects.toThrow(
-      'ref for provider "resend"',
+    await expect(provider.setFlags(gmailRef, {})).rejects.toThrow(
+      'ref for provider "gmail"',
     );
-    await expect(provider.move(resendRef, "Archive")).rejects.toThrow(
-      'ref for provider "resend"',
+    await expect(provider.move(gmailRef, "Archive")).rejects.toThrow(
+      'ref for provider "gmail"',
     );
     // No mailbox/session was ever touched for the rejected calls.
     expect(closes.session).toBe(0);
@@ -591,23 +595,6 @@ describe("createImapProvider", () => {
     await expect(provider.move(freshRef(), "Archive")).rejects.toThrow(
       "failed",
     );
-  });
-
-  test("send() is unsupported on the IMAP adapter", async () => {
-    const { port } = createFakePort();
-    const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
-      port,
-    });
-
-    await expect(
-      provider.send({
-        to: "a@example.com",
-        subject: "x",
-        template: null as never,
-      }),
-    ).rejects.toThrow("does not support send");
   });
 });
 

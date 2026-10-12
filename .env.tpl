@@ -6,11 +6,14 @@
 #
 # Only the model keys come from 1Password. Everything prod-only is a local
 # placeholder, so the mini's secrets cache never holds a key that can send real
-# mail or open the live /app. The Resend key is a dummy: local sends fail and
-# land on the job queue's retry ladder instead of reaching anyone.
+# mail or open the live /app. The SES credentials are dummies: local sends fail
+# and land on the job queue's retry ladder instead of reaching anyone.
 
 SECRET_KEY=local-dev-secret-key
-RESEND_API_KEY=re_local_dev_dummy
+SES_REGION=eu-central-1
+SES_ACCESS_KEY_ID=local-dev-dummy
+SES_SECRET_ACCESS_KEY=local-dev-dummy
+SES_CONFIGURATION_SET=local-dev-dummy
 RECEIVER_EMAIL=dev@example.com
 SY_SERENDIPITY_RECEIVER_EMAIL=dev-charter@example.com
 
@@ -44,10 +47,6 @@ API_KEY=local-dev-api-key
 # GET /sy-serendipity/requests bearer key (read-only SY Serendipity admin feed);
 # 404 when unset, min 32 chars. Prod: op://vps/email-gateway/SY_SERENDIPITY_READ_KEY.
 SY_SERENDIPITY_READ_KEY=local-dev-sy-serendipity-read-key-0123
-
-# Full-access Resend key for send-log reconciliation (src/jobs/reconcile-send-log.ts).
-# Unset in prod today (README §Jev shadow mode / AGENTS.md) — uncomment once it's in 1Password.
-# RESEND_ADMIN_API_KEY=op://vps/email-gateway/RESEND_ADMIN_API_KEY
 
 # IMAP ingest (Proton Mail Bridge on the homelab) is deliberately left UNSET
 # here: the tailnet ACL grants only VPS -> homelab tcp:1143 (verified

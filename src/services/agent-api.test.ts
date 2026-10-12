@@ -60,7 +60,6 @@ function fakeProvider(overrides: Partial<MailProvider> = {}): MailProvider {
       search: false,
       flag: true,
       move: true,
-      send: false,
       idle: false,
     }),
     listMailboxes: async () => [],
@@ -81,9 +80,6 @@ function fakeProvider(overrides: Partial<MailProvider> = {}): MailProvider {
     search: async () => [],
     setFlags: async () => {},
     move: async (ref) => ref,
-    send: async () => {
-      throw new Error("not implemented in fake");
-    },
     ...overrides,
   };
 }
@@ -578,7 +574,7 @@ describe("sendTemplate", () => {
     expect(sendLog.getSendLog(outcome.sendLogId)).toMatchObject({
       templateId: TEMPLATE_IDS.fppSender,
       recipients: ["jane@example.com"],
-      provider: "resend",
+      provider: "ses",
       requestedBy: "agent",
     });
     expect(jobs.getJob(outcome.jobId)).toMatchObject({

@@ -1,8 +1,8 @@
 # email-gateway — Agent Instructions
 
 Bun + Elysia service on the VPS: the one door to the owner's mail. Today it sends
-app mail through Resend (`/fpp`, `/fpp-daily-analytics`, `/sy-serendipity`),
-syncs Resend history and two IMAP accounts — Proton `hello@` through Bridge on
+app mail through Amazon SES (`/fpp`, `/fpp-daily-analytics`, `/sy-serendipity`;
+Resend is gone) and syncs two IMAP accounts — Proton `hello@` through Bridge on
 the homelab (tailnet, STARTTLS) and Gmail through its IMAP endpoint (implicit
 TLS, app password) — into SQLite, classifies with an LLM plus Jev in shadow
 mode, and serves a React client at `/app` plus a bearer JSON API at `/api/*`.
@@ -20,8 +20,8 @@ file is what a dispatched agent needs before touching code.
 ## Stack
 
 Bun 1.4 · Elysia 1.4 (`@elysiajs/bearer`) · `bun:sqlite` (WAL, migrations by
-`PRAGMA user_version`, append-only) · imapflow 2 + postal-mime · resend 6 +
-react-email 6 · `@aws-sdk/client-sesv2` (SES, off unless configured) · AI SDK 7 (`@ai-sdk/openai-compatible` for the LLM; the shadow
+`PRAGMA user_version`, append-only) · imapflow 2 + postal-mime ·
+react-email 6 · `@aws-sdk/client-sesv2` (SES, the only send provider) · AI SDK 7 (`@ai-sdk/openai-compatible` for the LLM; the shadow
 lane "Jev" runs Cloudflare's Clef as `clef-eu` on IU's Unified Endpoint through
 `src/llm/ue-decision-model.ts`, OpenRouter's Decisions API via
 `@openrouter/ai-sdk-provider` as the `DECISION_PROVIDER=openrouter`
@@ -103,17 +103,18 @@ uidValidity:uid)`, never attacker-influenced, so `ON CONFLICT DO UPDATE`ing
   before any network fetch, then `SigningCertURL`/`SubscribeURL` held to
   exactly `https://sns.<SES_REGION>.amazonaws.com` (SSRF), then the signature.
   Never log the payload (recipient PII); raw SNS message delivery must stay
-  off. **SES is off while its env is unset** (`SES_REGION`/`_ACCESS_KEY_ID`/
-  `_SECRET_ACCESS_KEY`/`_CONFIGURATION_SET`; `SES_SNS_TOPIC_ARN` gates the
-  webhook, unset → 404); routing a template to `ses` without that config fails
-  startup. SES has no idempotency key: the `send` job skips a row that has a
+  off. **SES is the only send provider**: `SES_REGION`/`_ACCESS_KEY_ID`/
+  `_SECRET_ACCESS_KEY`/`_CONFIGURATION_SET` are required (missing → startup
+  fails); `SES_SNS_TOPIC_ARN` is optional and gates the webhook (unset → 404).
+  This door is also the only source of `send_log` status after a send. SES has no idempotency key: the `send` job skips a row that has a
   provider message id and takes an atomic `send_log` claim (`claimSend`: status
   `sending`, stale after `SEND_CLAIM_STALE_MS`, released by its holder if the
   provider throws). The claim stops two live workers from both sending; it does
   not cover an ambiguous outcome (SES accepted but the response or the DB write
   was lost), which can re-send once the claim goes stale — accepted gap.
 - **Migrations are append-only**; `accounts.provider` has a CHECK constraint, so a
-  new provider is a migration.
+  new provider is a migration (it still allows `resend`; migration 5 deleted the
+  Resend account's rows in Wave 15).
 - **No timeouts on agent-style work** (`rules/agent-limits.md`): the LLM calls
   carry a 30-min hang guard, not a budget.
 - **The mail surface is host-gated and bearer-first.** `/app` and `/api` sit
@@ -149,7 +150,7 @@ manual dry-run before trusting it unattended. Neither is installed on the
 VPS: the cron entry needs a tailnet ACL
 grant (`tag:vps → tag:homelab tcp:22`) this repo cannot add on its own. See
 `docs/vps-cutover.md` for the exact grant and cron entry. Not wired in prod
-today: `RESEND_ADMIN_API_KEY`, `IMAP_TLS_CERT` (runs `IMAP_TLS_INSECURE=true`),
+today: `IMAP_TLS_CERT` (runs `IMAP_TLS_INSECURE=true`),
 `IMAP_MAILBOXES`, `GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` (awaiting the app
 password) — `docs/vps-cutover.md` has the ready-to-apply `.env.tpl`/
 `compose.yml` changes for all of these plus the tailnet-only `MAIL_HOST` door.
@@ -173,10 +174,10 @@ password) — `docs/vps-cutover.md` has the ready-to-apply `.env.tpl`/
 
 `.env.tpl` + `secrets-run` feeds `bun run dev` / `make dev`, matching the
 siblings. Only the model keys (`op://common/anthropic`, `op://common/openrouter`)
-come from 1Password; the prod-only values (send secret, Resend key, receiver
+come from 1Password; the prod-only values (send secret, receiver
 addresses, `/app` password, API key) are local placeholders, so the mini's
 secrets cache never holds a key that sends real mail or opens the live `/app`.
-Local sends fail on the dummy Resend key by design. Proton IMAP ingest is deliberately unreachable from here: the
+Local sends never reach SES: the `SES_*` vars are dummy placeholders (they are required, so startup needs them), by design. Proton IMAP ingest is deliberately unreachable from here: the
 tailnet ACL grants only VPS → homelab `tcp:1143`, not the mini — verify
 IMAP-touching changes against the live production container instead (Wave
 4/5's `ssh vps` + `docker exec` probe pattern in `docs/waves/PLAN.md`).
@@ -194,24 +195,19 @@ tests never need secrets.
   `SY_SERENDIPITY_READ_KEY` (unset → 404), never `SECRET_KEY`/`API_KEY`, not host-gated
 - `src/providers/send-port.ts` the `SendProvider` interface (`send` of a
   pre-rendered `{from,to,replyTo?,subject,html,text,idempotencyKey?}` returning
-  `{providerMessageId}`, optional `status()`; failures throw) plus
+  `{providerMessageId}`; failures throw) plus
   `renderTemplate` (`@react-email/render` html + plain text, rendered once per
-  send). `src/providers/resend/send.ts` is the Resend implementation
-  (`createResendSendProvider({ sendClient, readClient })`: send key sends, the
-  admin key reads status). Selection: `SEND_PROVIDERS` (`templateId=provider,…`,
-  validated in `src/env.ts`) is parsed and resolved by the pure
-  `src/providers/send-select.ts` (testable; env-free), and
-  `src/providers/send-registry.ts` lazily builds providers by name from the
-  `src/utils/resend.ts` singletons (`sendProviderByName`, `sendProviderFor`,
-  `statusProviders`). `sendMail` takes a `provider` (default: selected by its
-  `source`), and `send_log.provider`/`provider_message_id` record who sent it;
-  the `send` job uses the provider on its send_log row, and
-  `reconcile_send_log` dispatches each provider's rows to its `status()`.
+  send). SES is the only provider: `src/providers/send-registry.ts` is a lazy
+  singleton (`sendProvider()`; `sendProviderByName(name)` returns null for any
+  name but `ses`, e.g. an old `send_log` row), built from the four required
+  `SES_*` env vars. `sendMail` records `send_log.provider`/
+  `provider_message_id`; the `send` job uses the provider on its send_log row.
+  A row's status after sending comes only from SES events via
+  `POST /webhooks/ses` — no polling or reconcile job.
   `src/test/fake-send-provider.ts` is the test adapter.
 - `src/providers/ses/` (Wave 12): `send.ts` the SES `SendProvider`
   (`createSesSendProvider({ client, configurationSetName })`, `SendEmailCommand`,
-  no `status()`; the registry builds it lazily from the `SES_*` env and throws
-  if unconfigured), `events.ts` the pure SES event → `{providerMessageId,
+  no `status()`; the registry builds it lazily from the required `SES_*` env), `events.ts` the pure SES event → `{providerMessageId,
 status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
   SNS signature verifier (`createSnsVerifier({ region, fetchCert })`,
   `trustedSnsUrl`, v1/v2). `src/routes/ses-webhook.ts`
@@ -223,7 +219,7 @@ status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
   is the single source of truth for every template id — the send routes and
   the API reference it, never a hand-typed string; `sync-registry.ts`'s
   `syncTemplateRegistry()` pushes the registry into the `templates` table on
-  every boot); `src/layouts/`; `src/utils/send-mail.ts` (Resend send + a
+  every boot); `src/layouts/`; `src/utils/send-mail.ts` (SES send + a
   `send_log` row via `src/db/mail-index.ts`'s `sendLogRepo` — no longer
   touches the old `emails` table). The registry's preview page was retired
   with the SSR admin; the client's Templates page (Wave 7) replaces it, now
@@ -252,14 +248,11 @@ status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
   §Jobs), live against `mail.sqlite` via `src/jobs/queue.ts`'s `jobQueue`
   singleton. `src/jobs/register.ts` is the boot composition root
   (`startJobSystem`): registers `sync_tick`/`classify`/`jev_message`/
-  `jev_submission`/`send`/`reconcile_send_log` (Wave 7), reaps this host's
+  `jev_submission`/`send`, reaps this host's
   stale claims once, polls `runner.drain()`, and wires IMAP `watch()`/IDLE to
-  kick a debounced `sync_tick`; `reconcile_send_log` rides the same 5-minute
-  timer as `sync_tick` (`enqueueReconcileSendLog`, `src/jobs/queue.ts`).
-  `src/jobs/classify.ts`, `src/jobs/jev.ts`, `src/jobs/send.ts`,
-  `src/jobs/reconcile-send-log.ts` (Wave 7: re-reads Resend's own status for
-  `send_log` rows short of a terminal state, via `sendLogRepo.listReconcilable`)
-  are the handler factories; `runner.ts`'s `runOnce` now classifies a caught
+  kick a debounced `sync_tick`.
+  `src/jobs/classify.ts`, `src/jobs/jev.ts`, `src/jobs/send.ts`
+  are the handler factories (Wave 15 removed `reconcile_send_log`); `runner.ts`'s `runOnce` now classifies a caught
   error via `isRateLimitError` and calls `fail({ rateLimited: true })` so a
   429 parks on `jobs.rate_limits`'s own escalating ladder (1m → 5m → 15m →
   capped 1h, never terminal, resets on success/other failure) instead of
@@ -274,7 +267,7 @@ status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
   provider to its own env (`IMAP_MAILBOXES` for Proton, `GMAIL_IMAP_MAILBOXES`
   for Gmail) — one account's list is never applied to the other.
   `src/providers/from-env.ts` builds the configured `MailProvider`s once per
-  process (Resend always; Proton when `IMAP_HOST` is set; Gmail when
+  process (Proton when `IMAP_HOST` is set; Gmail when
   `GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD` are) and resolves one back from
   a stored account id.
 - `src/db/mail-index.ts` (Wave 4): the `mail.sqlite` repo singletons
@@ -291,7 +284,7 @@ status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
     are the domain repos over that schema (same `createXRepo(db)`/`XRepo` shape
     as the repos below).
 - `src/providers/port.ts` the `MailProvider` interface (capabilities, list,
-  read, search, setFlags, move, send, watch) every mailbox sits behind;
+  read, search, setFlags, move, watch) every mailbox sits behind;
   `src/providers/imap/adapter.ts` grows the old IMAP port with Bridge/Gmail
   capability detection, `listMailboxes`, flags/move (`SELECT`, gated on
   MOVE+UIDPLUS together), `search`; Gmail's `X-GM-EXT-1` adds `X-GM-THRID` to
@@ -309,8 +302,8 @@ status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
   have already applied it) instead of opening a session per call;
   `watch()`/IDLE runs on its own dedicated long-lived connection
   (`adapter.ts`'s `createIdleClient`, no `disableAutoIdle`) with
-  reconnect/backoff, kept entirely separate from the pool. `src/providers/resend/`
-  wraps `send-mail.ts`/`utils/resend.ts` as a send+list-only provider
+  reconnect/backoff, kept entirely separate from the pool.
+  `ProviderId` is `proton | gmail`.
 - `src/db/` (the old `email-gateway.sqlite` store, kept only for
   `scripts/import-legacy.ts`) `client.ts` (lazy singleton, pragmas),
   `migrations.ts`, `submissions.ts` + `jev-queue.ts` (the queue module

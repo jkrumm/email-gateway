@@ -25,14 +25,13 @@ function fakeClient(response: { MessageId?: string }) {
 }
 
 describe("createSesSendProvider", () => {
-  test("is the ses provider and has no status read-back", () => {
+  test("is the ses provider", () => {
     const provider = createSesSendProvider({
       client: fakeClient({ MessageId: "x" }).client,
       configurationSetName: "events",
     });
 
     expect(provider.id).toBe("ses");
-    expect(provider.status).toBeUndefined();
   });
 
   test("send() builds a simple SendEmailCommand and returns the MessageId", async () => {

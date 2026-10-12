@@ -27,9 +27,8 @@ import {
   type ImapSession,
 } from "./adapter";
 
-// The two IMAP-backed provider ids; Resend has its own adapter. Derived from
-// port.ts's ProviderId so a new provider id can't drift out of sync here.
-export type ImapProviderId = Exclude<ProviderId, "resend">;
+// Both provider ids are IMAP-backed.
+export type ImapProviderId = ProviderId;
 
 const LIST_PAGE_LIMIT = 500;
 
@@ -242,18 +241,16 @@ function createSessionPool(port: ImapPort, idleCloseMs: number) {
 
 type SessionPool = ReturnType<typeof createSessionPool>;
 
-type ImapRef = Extract<MessageRef, { provider: "proton" | "gmail" }>;
-
 // Every IMAP entry point takes this first, with no I/O yet: a ref for the
-// wrong provider kind (proton ref against a gmail MailProvider, or a resend
-// ref against either) OR a *different account of the same kind* (two Gmail
-// accounts, Wave 8) is detectable for free — `provider` alone doesn't name
-// which account issued the ref.
+// wrong provider kind (a proton ref against a gmail MailProvider) OR a
+// *different account of the same kind* (two Gmail accounts, Wave 8) is
+// detectable for free — `provider` alone doesn't name which account issued the
+// ref.
 function assertOwnProvider(
   id: ImapProviderId,
   account: string,
   ref: MessageRef,
-): asserts ref is ImapRef {
+): void {
   if (ref.provider !== id) {
     throw new Error(
       `adapter for "${id}" received a ref for provider "${ref.provider}"`,
@@ -270,7 +267,7 @@ function assertOwnProvider(
 // A persisted ref names a mailbox+UIDVALIDITY+uid triple. If the mailbox was
 // recreated (UIDVALIDITY bump) since the ref was handed out, that uid can now
 // name an unrelated message — never silently act on it.
-function assertFreshRef(ref: ImapRef, currentUidValidity: string): void {
+function assertFreshRef(ref: MessageRef, currentUidValidity: string): void {
   if (ref.uidValidity !== currentUidValidity) {
     throw new Error(
       `stale ref: ${ref.mailbox} uid ${ref.uid} was issued for UIDVALIDITY ` +
@@ -920,9 +917,6 @@ export function createImapProvider(
     search: (query) => imapSearch(pool, id, account, query),
     setFlags: (ref, flags) => imapSetFlags(pool, id, account, ref, flags),
     move: (ref, toMailbox) => imapMove(pool, id, account, ref, toMailbox),
-    async send() {
-      throw unsupported(id, "send");
-    },
     watch: (mailboxPath, onChange) =>
       imapWatch(config, mailboxPath, onChange, {
         createIdleClient,

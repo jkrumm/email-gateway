@@ -6,10 +6,6 @@ import { APICallError } from "ai";
 // message, or a different provider surfacing a 429 its own way.
 const RATE_LIMIT_MESSAGE_PATTERNS = [
   "rate_limit_exceeded",
-  // Resend's own error carries `name: "rate_limit"` (src/jobs/send.ts
-  // rethrows it as "rate_limit - <message>") — shorter than the gateway's
-  // "rate_limit_exceeded", so it needs its own entry rather than relying on
-  // the longer pattern to match it.
   "rate_limit",
   "rate limit",
   "high demand",

@@ -7,8 +7,8 @@ going back to the owner. `README.md` documents what runs today.
 
 ## Principles
 
-1. **Providers stay the source of truth.** Proton (through Bridge), Gmail and
-   Resend own the mail. The gateway reads through them live and persists only
+1. **Providers stay the source of truth.** Proton (through Bridge) and Gmail
+   own the mail; Amazon SES owns what the gateway sends. The gateway reads through them live and persists only
    what they cannot give back: classifications, the send log, submissions,
    templates, job state. Wiping the store loses nothing a re-read cannot
    rebuild.
@@ -23,8 +23,8 @@ going back to the owner. `README.md` documents what runs today.
 ## Today, in one paragraph
 
 Bun + Elysia on the VPS, public through Cloudflare Tunnel + Traefik, 256 MB.
-Three bearer-guarded send routes render React Email templates through Resend.
-A 5-minute scheduler pulls Resend history and the Proton `hello@` inbox (Bridge
+Three bearer-guarded send routes render React Email templates through Amazon SES
+(Resend until Wave 15). A 5-minute scheduler pulls the Proton `hello@` inbox (Bridge
 on the homelab, tailnet IMAP, read-only, `BODY.PEEK`) into one `emails` table
 with **full html/text bodies** and an FTS5 index over them. An LLM enriches
 every row; Jev judges inbound rows and contact-form submissions in shadow mode
@@ -46,33 +46,34 @@ through a durable queue (`src/db/jev-queue.ts`). A zero-JS SSR admin at `/admin`
         │                              │                     │              │
         └────────── MailProvider port ─┴──────── jobs ───────┴──────────────┘
                  │              │              │
-           Proton/Bridge     Gmail          Resend            SQLite (derived data only)
+           Proton/Bridge     Gmail          SES (send only)   SQLite (derived data only)
 ```
 
 ## Provider port
 
 One interface, in `src/providers/port.ts`. Capabilities are declared, not
-assumed: the Proton adapter reports what Bridge advertises at connect time, the
-Resend adapter reports send-only.
+assumed: the Proton adapter reports what Bridge advertises at connect time.
+Sending is a separate port (`SendProvider`, `src/providers/send-port.ts`) with
+one implementation, SES (`src/providers/ses/send.ts`); there is no send-only
+`MailProvider` any more.
 
 ```ts
 interface MailProvider {
-  readonly id: ProviderId; // "proton" | "gmail" | "resend"
-  readonly account: string; // hello@…, me@gmail.com, resend domain
-  capabilities(): Promise<Capabilities>; // { list, read, search, flag, move, send, idle }
+  readonly id: ProviderId; // "proton" | "gmail"
+  readonly account: string; // hello@…, me@gmail.com
+  capabilities(): Promise<Capabilities>; // { list, read, search, flag, move, idle }
   listMailboxes(): Promise<Mailbox[]>;
   list(mailbox: string, cursor: Cursor): Promise<Page<Envelope>>; // newest first, bounded
   read(ref: MessageRef): Promise<Message>; // headers + parsed body + attachment meta
   search(query: SearchQuery): Promise<MessageRef[]>; // provider-side, may lag
   setFlags(ref: MessageRef, flags: FlagChange): Promise<void>;
   move(ref: MessageRef, toMailbox: string): Promise<MessageRef>;
-  send(draft: OutboundDraft): Promise<SentReceipt>;
   watch?(mailbox: string, onChange: () => void): Promise<Unsubscribe>; // IDLE / push
 }
 ```
 
 - `MessageRef` is provider-specific and opaque to callers: `{mailbox, uidValidity, uid}` for
-  IMAP, `{id}` for Gmail and Resend.
+  IMAP, `{id}` for Gmail.
 - **Identity across mailboxes.** IMAP UIDs are per mailbox; a Proton archive
   is a move to a new UID. The stable key stays what `src/sync/imap-sync.ts`
   derives today: sha256 of the RFC Message-ID (fallback: size + internal date +
@@ -89,10 +90,12 @@ interface MailProvider {
   `X-GM-LABELS`, CONDSTORE and MOVE advertised post-auth — so the adapter
   detects capabilities per account rather than assuming Bridge's set. Labels
   are folders (`[Gmail]/…`), so a move is a label change.
-- **Resend adapter** is send + history only; it backs the send log and the
-  template test-send.
+- **Send provider.** SES is the only one (Wave 15 removed the Resend adapter
+  and its history sync). It has no read-back: `send_log` status comes only from
+  SES events posted to `POST /webhooks/ses`, and there is no `status()` or
+  `reconcile_send_log` job. `send-registry.ts` is a lazy SES singleton.
 - The read-only guarantee the README promises today becomes a **capability
-  gate**: the client and the API expose flag/move/send actions only when the
+  gate**: the client and the API expose flag/move actions only when the
   adapter and the decision in §Decisions allow them. Tests keep the fake
   adapters (`src/test/*`); nothing mocks modules.
 
@@ -107,7 +110,7 @@ keyed by the stable message key. What each table is allowed to hold:
 | `message_locations` | key → provider ref (mailbox, uidvalidity, uid / gmail id), last seen at                                                  | yes                        |
 | `classifications`   | key → category, priority, action_required, summary, suggested_action, language, facts, model, plus the Jev columns       | no (derived, costs tokens) |
 | `body_cache`        | key → html, text, fetched_at; bounded by row count and age, evicted LRU; the reading view's cache, never the truth       | yes                        |
-| `send_log`          | one row per outbound send: template id, recipients, provider, provider message id, status/last event, requested by       | no (Resend keeps bodies)   |
+| `send_log`          | one row per outbound send: template id, recipients, provider, provider message id, status/last event, requested by       | no                         |
 | `submissions`       | unchanged: raw form JSON, LLM and Jev verdicts                                                                           | no                         |
 | `templates`         | registered template id, name, preview props, last test-send                                                              | partly (code is the truth) |
 | `jobs`              | see §Jobs                                                                                                                | n/a                        |
@@ -208,9 +211,9 @@ later wave doesn't rediscover them by surprise.
   `send_log` (Wave 7).** `src/jobs/send.ts`'s handler only calls
   `sendLog.recordProviderResult()` on success; a job the runner eventually
   marks terminally `failed` leaves the row's `status` at whatever it was
-  (`null` for a fresh row) forever — `listReconcilable` also can't pick it up,
-  since it requires `provider_message_id IS NOT NULL`, which a send that
-  never reached Resend never gets. The Templates page's send log then shows a
+  (`null` for a fresh row) forever — and no SES event can ever
+  update it, since a send that never reached SES has no `provider_message_id`
+  to match on. The Templates page's send log then shows a
   permanently-failed send as an indistinguishable "queued" badge. Real fix
   needs the job runner to expose a terminal-failure hook a handler can use to
   write domain-specific state, not something specific to `send_log`.
@@ -223,16 +226,11 @@ later wave doesn't rediscover them by surprise.
   Real fix: prune rows whose id isn't in the current registry as part of the
   same boot-time sync (a delete-then-upsert in one transaction), or have the
   list endpoint read the registry directly instead of the DB.
-- **`reconcile_send_log`'s per-call timeout can't cancel the underlying
-  request (Wave 7).** `resend@6.28.1`'s `emails.get(id)` takes no options at
-  all — no `AbortSignal`, no fetch override — so `src/jobs/reconcile-send-log.ts`'s
-  timeout only stops _awaiting_ a hung call; the socket stays open in the
-  background past it. Bounded, not unbounded — `RECONCILE_BATCH_LIMIT` (25)
-  caps how many can accumulate per 5-minute pass — but a sustained total
-  outage to Resend's API would still leak sockets over many hours. Real fix:
-  bypass the SDK with a raw, abortable `fetch()` against Resend's REST API for
-  this one read, which is more surface than this job's read path has
-  warranted so far.
+- **`reconcile_send_log` is gone (Wave 15).** The Wave 7 gotcha about its
+  uncancellable Resend `emails.get` call went with the job, the Resend SDK and
+  `listReconcilable`. SES has no read-back, so a `send_log` row now moves past
+  `sent` only when an SES event reaches `POST /webhooks/ses`; a lost event
+  leaves the row at `sent`.
 - **`POST /api/templates/:id/test-send`'s last write is outside its
   transaction (Wave 7/8).** `insertSendLog` and `jobs.enqueue` now share one
   transaction (`src/services/template-send.ts`, the helper the agent
@@ -252,7 +250,7 @@ later wave doesn't rediscover them by surprise.
   before the summary claims to cover the whole conversation.
 - **`POST /api/sends` can send as the owner to any recipient, with no throttle
   (Wave 8).** Any bearer-key holder — and, once episode 2 wires the MCP tools,
-  an LLM-driven agent — can send through the owner's Resend identity to an
+  an LLM-driven agent — can send through the owner's SES identity to an
   arbitrary address with no rate limit and no recipient allowlist; a leaked
   bearer key today only grants mailbox read, this upgrades that to
   send-as-owner with no throttle. Real fix: a rate limit, a domain/recipient
@@ -512,9 +510,9 @@ The owner's direction for after the migration, verbatim:
   schemas, `SECRET_KEY` bearer and the 2xx-on-suppress behaviour are frozen.
 - **Env names** are wired in `vps/apps/email-gateway/compose.yml` and
   `.env.tpl`; `DATA_DIR=/data`, file name `email-gateway.sqlite`, `/health`.
-- **Data that exists nowhere else**: `submissions`, the Resend send log rows
-  (`provider='resend'`, `source`, `last_event`), classifications and Jev
-  decisions. Migrations stay append-only (`user_version` 6 today).
+- **Data that exists nowhere else**: `submissions`, the pre-SES send log rows
+  (`provider='resend'`, `source`, `last_event`; kept as history), classifications and Jev
+  decisions. Migrations stay append-only (`user_version` 5 today).
 - **IMAP**: STARTTLS, cert pinning (`IMAP_TLS_CERT`), `BODY.PEEK` for reads;
   the 256 MB container drives the 5 MB / 10 MB / 50-message / 500-per-run
   bounds.

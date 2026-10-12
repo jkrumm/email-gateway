@@ -20,8 +20,8 @@ export function createSesSendProvider({
     // is recorded) is the only protection against a duplicate send.
     // A failed send throws from the SDK.
     async send({ from, to, replyTo, subject, html, text }) {
-      // Loaded on first send: the SDK costs ~19 MB RSS at boot, and SES is
-      // off in prod until Wave 14 (256 MB container).
+      // Loaded on first send: the SDK costs ~19 MB RSS at boot, which
+      // matters in the 256 MB container.
       const { SendEmailCommand } = await import("@aws-sdk/client-sesv2");
       const response = await client.send(
         new SendEmailCommand({

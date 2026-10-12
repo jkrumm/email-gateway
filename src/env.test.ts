@@ -5,7 +5,10 @@ import { CERT_A } from "./test/certs";
 const base = {
   SECRET_KEY: "0123456789",
   RECEIVER_EMAIL: "me@example.com",
-  RESEND_API_KEY: "re_key",
+  SES_REGION: "eu-central-1",
+  SES_ACCESS_KEY_ID: "id",
+  SES_SECRET_ACCESS_KEY: "secret",
+  SES_CONFIGURATION_SET: "events",
   SY_SERENDIPITY_RECEIVER_EMAIL: "sy@example.com",
 };
 
@@ -159,101 +162,31 @@ describe("SY_SERENDIPITY_READ_KEY", () => {
   });
 });
 
-describe("SEND_PROVIDERS env validation", () => {
-  test("unset parses to no overrides", () => {
-    expect(envSchema.parse(base).SEND_PROVIDERS).toEqual({});
-  });
-
-  test("an empty string in the raw env reads as unset", () => {
-    expect(parseEnv({ ...base, SEND_PROVIDERS: "" }).SEND_PROVIDERS).toEqual(
-      {},
-    );
-  });
-
-  test("a valid mapping parses to a template id -> provider map", () => {
-    expect(
-      envSchema.parse({ ...base, SEND_PROVIDERS: "fpp-sender=resend" })
-        .SEND_PROVIDERS,
-    ).toEqual({ "fpp-sender": "resend" });
-  });
-
-  test("an unknown provider or template id fails startup", () => {
-    const provider = envSchema.safeParse({
-      ...base,
-      SEND_PROVIDERS: "fpp-sender=mailgun",
-    });
-    const template = envSchema.safeParse({
-      ...base,
-      SEND_PROVIDERS: "nope=resend",
-    });
-
-    expect(provider.success).toBe(false);
-    expect(provider.error?.issues[0]?.path).toEqual(["SEND_PROVIDERS"]);
-    expect(template.success).toBe(false);
-    expect(() => parseEnv({ ...base, SEND_PROVIDERS: "nope=resend" })).toThrow(
-      "SEND_PROVIDERS",
-    );
-  });
-});
-
 describe("SES env validation", () => {
-  const ses = {
-    SES_REGION: "eu-central-1",
-    SES_ACCESS_KEY_ID: "id",
-    SES_SECRET_ACCESS_KEY: "secret",
-    SES_CONFIGURATION_SET: "events",
-  };
+  test("region, both keys and the configuration set are required", () => {
+    for (const key of [
+      "SES_REGION",
+      "SES_ACCESS_KEY_ID",
+      "SES_SECRET_ACCESS_KEY",
+      "SES_CONFIGURATION_SET",
+    ] as const) {
+      const result = envSchema.safeParse({ ...base, [key]: undefined });
 
-  test("everything unset: SES is off and nothing is required", () => {
-    const parsed = envSchema.parse(base);
-
-    expect(parsed.SES_REGION).toBeUndefined();
-    expect(parsed.SES_SNS_TOPIC_ARN).toBeUndefined();
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toEqual([key]);
+    }
+    expect(() => parseEnv({ ...base, SES_REGION: "" })).toThrow("SES_REGION");
   });
 
-  test("routing a template to ses with SES configured parses", () => {
-    expect(
-      envSchema.parse({ ...base, ...ses, SEND_PROVIDERS: "fpp-sender=ses" })
-        .SEND_PROVIDERS,
-    ).toEqual({ "fpp-sender": "ses" });
+  test("the topic ARN is optional", () => {
+    expect(envSchema.parse(base).SES_SNS_TOPIC_ARN).toBeUndefined();
   });
 
-  test("routing a template to ses without SES config fails startup", () => {
-    const result = envSchema.safeParse({
-      ...base,
-      SEND_PROVIDERS: "fpp-sender=ses",
-    });
-    const partial = envSchema.safeParse({
-      ...base,
-      ...ses,
-      SES_CONFIGURATION_SET: undefined,
-      SEND_PROVIDERS: "fpp-sender=ses",
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.error?.issues[0]?.path).toEqual(["SEND_PROVIDERS"]);
-    expect(partial.success).toBe(false);
-    expect(() =>
-      parseEnv({ ...base, SEND_PROVIDERS: "fpp-sender=ses" }),
-    ).toThrow("SEND_PROVIDERS");
-  });
-
-  test("SES config without routing is fine", () => {
-    expect(envSchema.safeParse({ ...base, ...ses }).success).toBe(true);
-  });
-
-  test("a topic ARN needs the region to pin the SNS host", () => {
-    const arn = "arn:aws:sns:eu-central-1:111122223333:ses-events";
-
-    const result = envSchema.safeParse({ ...base, SES_SNS_TOPIC_ARN: arn });
-
-    expect(result.success).toBe(false);
-    expect(result.error?.issues[0]?.path).toEqual(["SES_REGION"]);
+  test("a topic ARN in SES_REGION parses", () => {
     expect(
       envSchema.safeParse({
         ...base,
-        SES_REGION: "eu-central-1",
-        SES_SNS_TOPIC_ARN: arn,
+        SES_SNS_TOPIC_ARN: "arn:aws:sns:eu-central-1:111122223333:ses-events",
       }).success,
     ).toBe(true);
   });
@@ -261,7 +194,6 @@ describe("SES env validation", () => {
   test("a topic ARN in another region than SES_REGION fails startup", () => {
     const result = envSchema.safeParse({
       ...base,
-      SES_REGION: "eu-central-1",
       SES_SNS_TOPIC_ARN: "arn:aws:sns:us-east-1:111122223333:ses-events",
     });
 

@@ -1,27 +1,18 @@
 import { gmailImapConfigFromEnv, imapConfigFromEnv } from "./imap/config";
 import { createImapProvider } from "./imap/provider";
-import { createResendProvider } from "./resend/adapter";
-import { adminResend } from "../utils/resend";
 import type { MailProvider } from "./port";
-
-// The Resend adapter's "account" is a stable identity string, not an address
-// Resend itself exposes (there is no per-domain API — one key is one tenant
-// for this app) — "app" names it for the accounts table and message keys.
-const RESEND_ACCOUNT = "app";
 
 let cachedProviders: MailProvider[] | null = null;
 
-// Builds (once per process) every MailProvider the env configures — Resend
-// always, IMAP (Proton, via Bridge; Gmail, via app password) only when the
-// matching env vars are set. Shared by the sync tick and every job handler
+// Builds (once per process) every MailProvider the env configures — IMAP
+// (Proton, via Bridge; Gmail, via app password) only when the matching env
+// vars are set. Shared by the sync tick and every job handler
 // that re-fetches a message body, so a provider (and the IMAP session pool it
 // owns) is constructed once, not once per job.
 export function configuredProviders(): MailProvider[] {
   if (cachedProviders) return cachedProviders;
 
-  const providers: MailProvider[] = [
-    createResendProvider({ account: RESEND_ACCOUNT, resend: adminResend }),
-  ];
+  const providers: MailProvider[] = [];
 
   const imapConfig = imapConfigFromEnv();
   if (imapConfig) {
@@ -56,9 +47,4 @@ export function providerForAccountId(accountId: string): MailProvider | null {
       (provider) => `${provider.id}:${provider.account}` === accountId,
     ) ?? null
   );
-}
-
-// Test-only: forces the next configuredProviders() call to rebuild.
-export function resetConfiguredProvidersForTest(): void {
-  cachedProviders = null;
 }

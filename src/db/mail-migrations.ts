@@ -7,7 +7,7 @@ import { type Migration, applyMigrations } from "./migration-runner";
 // new entries with the next integer version — never edit a migration that has
 // already shipped. The `jobs` table is deliberately not created here: it is
 // owned by src/db/jobs.ts's `ensureJobsSchema` (see mail-client.ts).
-export const MAIL_MIGRATIONS: Migration[] = [
+const MAIL_MIGRATIONS: Migration[] = [
   {
     version: 1,
     up: `
@@ -171,6 +171,56 @@ export const MAIL_MIGRATIONS: Migration[] = [
     version: 4,
     up: `
       ALTER TABLE thread_summaries ADD COLUMN latest_key TEXT;
+    `,
+  },
+  {
+    // Resend is no longer a provider: drop its account's data, dependents
+    // first. Explicit deletes rather than ON DELETE CASCADE, since foreign
+    // keys cannot be toggled inside the migration transaction. Resend never
+    // set a threadKey, so its thread_summaries rows are keyed by message key.
+    // send_log history rows stay, except in-flight Resend sends (no provider
+    // message id, never delivered to Resend): those become 'failed' so they
+    // are visible. Their pending send/reconcile_send_log jobs are discarded at
+    // boot (src/jobs/discard-resend.ts) — the jobs table is not guaranteed to
+    // exist yet when migrations run. The reconcile index has no reader left.
+    version: 5,
+    up: `
+      DELETE FROM thread_summaries
+        WHERE thread_key IN (
+          SELECT key FROM messages
+            WHERE account IN (SELECT id FROM accounts WHERE provider = 'resend')
+        );
+      DELETE FROM messages_fts
+        WHERE message_key IN (
+          SELECT key FROM messages
+            WHERE account IN (SELECT id FROM accounts WHERE provider = 'resend')
+        );
+      DELETE FROM classifications
+        WHERE key IN (
+          SELECT key FROM messages
+            WHERE account IN (SELECT id FROM accounts WHERE provider = 'resend')
+        );
+      DELETE FROM body_cache
+        WHERE key IN (
+          SELECT key FROM messages
+            WHERE account IN (SELECT id FROM accounts WHERE provider = 'resend')
+        );
+      DELETE FROM message_locations
+        WHERE key IN (
+          SELECT key FROM messages
+            WHERE account IN (SELECT id FROM accounts WHERE provider = 'resend')
+        );
+      DELETE FROM messages
+        WHERE account IN (SELECT id FROM accounts WHERE provider = 'resend');
+      DELETE FROM accounts WHERE provider = 'resend';
+      UPDATE send_log
+        SET status = 'failed',
+            last_event = 'resend_removed',
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE provider = 'resend'
+          AND provider_message_id IS NULL
+          AND (status IS NULL OR status = 'sending');
+      DROP INDEX IF EXISTS idx_send_log_provider_updated_at;
     `,
   },
 ];

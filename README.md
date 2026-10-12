@@ -1,6 +1,6 @@
 # email-gateway
 
-The single door to all of my email: Proton Mail (Bridge), Gmail (IMAP) and Resend behind one API and UI. Direction: [docs/vision.md](docs/vision.md).
+The single door to all of my email: Proton Mail (Bridge) and Gmail (IMAP) behind one API and UI, with Amazon SES sending the apps' mail. Direction: [docs/vision.md](docs/vision.md).
 
 ## Local Development
 
@@ -112,15 +112,14 @@ bun run client:dev      # Vite dev server on 5173, proxying /api and the /app se
 
 - `COOKIE_SECRET` — optional signing secret for the session cookie. Defaults to `ADMIN_PASSWORD` when unset or shorter than 12 chars.
 - `MAIL_HOST` — optional; the only hostname allowed to serve `/app` and `/api`.
-- `SEND_PROVIDERS` — optional; which provider each template sends through, `templateId=provider,templateId=provider` (template ids from `src/emails/registry.ts`'s `TEMPLATE_IDS`). Unset or unlisted templates use `resend`; `ses` is the other (§Amazon SES). An unknown provider or template id fails startup.
-- `SES_REGION`, `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY`, `SES_CONFIGURATION_SET` — optional; Amazon SES as the `ses` send provider (credentials are passed to the client explicitly, never from the ambient AWS chain). SES counts as configured only when all four are set; routing a template to `ses` in `SEND_PROVIDERS` without them fails startup.
-- `SES_SNS_TOPIC_ARN` — optional; the one SNS topic `POST /webhooks/ses` accepts (needs `SES_REGION`). Unset → the webhook path 404s.
+- `SES_REGION`, `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY`, `SES_CONFIGURATION_SET` — **required**; Amazon SES is the only send provider (§Amazon SES). Credentials are passed to the client explicitly, never from the ambient AWS chain. Missing any of the four fails startup.
+- `SES_SNS_TOPIC_ARN` — optional; the one SNS topic `POST /webhooks/ses` accepts (must be in `SES_REGION`). Unset → the webhook path 404s.
 
 `bun run seed:demo` (refuses to run with `NODE_ENV=production`) seeds `$DATA_DIR`'s old `email-gateway.sqlite` with fake spam-filter submissions for exploring the Submissions page locally. `bun run import-legacy` (`scripts/import-legacy.ts`) is the one-shot legacy import — see §Storage below.
 
 ## Amazon SES
 
-`ses` is a second `SendProvider` (`src/providers/ses/send.ts`), **off by default**: with the `SES_*` env unset nothing changes and every template sends through Resend. Route a template to it with `SEND_PROVIDERS=<templateId>=ses`. SES has no idempotency key, so `send_log` is the only duplicate-send protection: the `send` job skips a row that already has a provider message id and otherwise claims the row atomically (`status` `sending`; a fresh claim held by another worker makes the job retry later, a claim older than `SEND_CLAIM_STALE_MS` is taken over, a failed send releases it). The claim stops two live workers from both sending; it does not cover an ambiguous outcome (SES accepted the message but the response or the DB write was lost), which can re-send after `SEND_CLAIM_STALE_MS` — an accepted gap.
+`ses` is the only `SendProvider` (`src/providers/ses/send.ts`); `src/providers/send-registry.ts` holds a lazy singleton (`sendProvider()`; `sendProviderByName()` returns null for any name but `ses`), built from the four required `SES_*` vars. SES has no idempotency key, so `send_log` is the only duplicate-send protection: the `send` job skips a row that already has a provider message id and otherwise claims the row atomically (`status` `sending`; a fresh claim held by another worker makes the job retry later, a claim older than `SEND_CLAIM_STALE_MS` is taken over, a failed send releases it). The claim stops two live workers from both sending; it does not cover an ambiguous outcome (SES accepted the message but the response or the DB write was lost), which can re-send after `SEND_CLAIM_STALE_MS` — an accepted gap.
 
 SES reports delivery by SNS: the configuration set (`SES_CONFIGURATION_SET`) has an event destination that publishes to an SNS topic, and that topic has an HTTPS subscription to `POST /webhooks/ses`. The route reads the `text/plain` body (256 KB cap, else 413), checks `TopicArn` equals `SES_SNS_TOPIC_ARN` (else 403) **before any network call**, then verifies the SNS signature (`src/providers/ses/sns-verify.ts`, signature versions 1 and 2): the signing certificate is fetched only from exactly `https://sns.<SES_REGION>.amazonaws.com/…pem` (5 s timeout, cached) and anything else is 403. A `SubscriptionConfirmation` is confirmed by a GET of its `SubscribeURL`, held to the same host check. A `Notification` is mapped to the `send_log` row with provider `ses` and that `provider_message_id`; an unmatched, stale or ignored event is logged (event type and ids only, never the payload) and answered 200 so SNS stops retrying. Rate limiting is Traefik's.
 
@@ -147,7 +146,7 @@ The status never regresses: `sent` < `delivery_delayed` < `delivered` < `bounced
 Two SQLite databases, both opened with `bun:sqlite`, live side by side in `$DATA_DIR` (D4, `docs/architecture.md` §Decisions — the lean-store cutover never migrated the old file, it built a fresh one and left the old one for the owner to delete):
 
 - `${DATA_DIR}/mail.sqlite` — the live store (`src/db/mail-client.ts`, migrations in `src/db/mail-migrations.ts`, tracked via its own `PRAGMA user_version`, independent of the counter below). Tables (full shapes: `docs/architecture.md` §Lean store):
-  - `accounts` — one row per configured provider account: address, per-mailbox sync cursors (JSON), last success/error/warning.
+  - `accounts` — one row per configured provider account: address, per-mailbox sync cursors (JSON), last success/error/warning. Providers are `proton` and `gmail`; the `provider` CHECK still allows `resend`, and migration 5 deleted the old Resend account's rows (messages and dependents; `send_log` history stays).
   - `messages` + `message_locations` — envelope-only per message (`direction`, addresses, subject, thread key, flags snapshot) plus every mailbox it's currently seen in (provider ref, last seen). Bodies are never stored here — only a cache.
   - `classifications` — LLM category/priority/summary/facts **and** the Jev shadow columns (`jev_*`), one row per message, filled in by the `classify`/`jev_message` jobs.
   - `body_cache` — `html`/`text` keyed by message, filled on a live read or a `body_prefetch` job; bounded and evicted LRU by `fetched_at` — the reading view's cache, never the source of truth.
@@ -164,20 +163,20 @@ New env var:
 
 ### One-shot legacy import
 
-`bun run import-legacy` (`scripts/import-legacy.ts`) copies every row of the old store's `submissions` table into the new one, preserving the original `id` and `received_at` exactly (D4: `submissions` is the one table that can't be rebuilt from the providers — the Resend send log rebuilds from Resend history on first sync instead). It reads the old file through `src/db/submissions.ts`'s repo, paginating every page; writes with `INSERT OR IGNORE` on `id`, so running it again is a safe no-op for rows already imported; and never modifies or deletes the old file. Not run automatically — invoke it once, explicitly, during the cutover: `bun run scripts/import-legacy.ts [oldPath] [newPath]` (defaults to `$DATA_DIR/email-gateway.sqlite` and `$DATA_DIR/mail.sqlite`).
+`bun run import-legacy` (`scripts/import-legacy.ts`) copies every row of the old store's `submissions` table into the new one, preserving the original `id` and `received_at` exactly (D4: `submissions` is the one table that can't be rebuilt from the providers). It reads the old file through `src/db/submissions.ts`'s repo, paginating every page; writes with `INSERT OR IGNORE` on `id`, so running it again is a safe no-op for rows already imported; and never modifies or deletes the old file. Not run automatically — invoke it once, explicitly, during the cutover: `bun run scripts/import-legacy.ts [oldPath] [newPath]` (defaults to `$DATA_DIR/email-gateway.sqlite` and `$DATA_DIR/mail.sqlite`).
 
 ## Jobs
 
 Everything asynchronous — sync, classification, Jev, sends — is a row in `mail.sqlite`'s `jobs` table (`src/db/jobs.ts`, `docs/architecture.md` §Jobs): atomic single-row claim with a token, `complete`/`fail` guarded by that token, backoff 1m → 5m → 15m → 1h → 3h → 6h → 12h → 24h, terminal `failed` after nine attempts, stale claims (35 min) taken over so RollHook's two-container deploy overlap never double-runs a row. `src/jobs/runner.ts` polls every 10s (`src/jobs/register.ts`) and dispatches by `kind`:
 
-| Kind                 | Handler                          | Enqueued by                                                                                                                                                                                      |
-| -------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `sync_tick`          | `src/sync/composition.ts`        | A 5-minute schedule, IMAP IDLE (debounced), `POST /admin/sync` and `POST /api/sync`                                                                                                              |
-| `classify`           | `src/jobs/classify.ts`           | `sync_tick`, for every newly-ingested message                                                                                                                                                    |
-| `jev_message`        | `src/jobs/jev.ts`                | `classify`, for inbound messages once Jev is configured                                                                                                                                          |
-| `jev_submission`     | `src/jobs/jev.ts`                | `src/spam/gate.ts`, after recording a submission, once Jev is configured                                                                                                                         |
-| `send`               | `src/jobs/send.ts`               | A send route, only on provider failure (the first attempt runs inline); `POST /api/templates/:id/test-send`                                                                                      |
-| `reconcile_send_log` | `src/jobs/reconcile-send-log.ts` | The same 5-minute schedule as `sync_tick` — re-reads each provider's own status (`SendProvider.status()`, dispatched by `send_log.provider`) for `send_log` rows still short of a terminal state |
+<!-- prettier-ignore -->
+| Kind | Handler | Enqueued by |
+|-|-|-|
+| `sync_tick` | `src/sync/composition.ts` | A 5-minute schedule, IMAP IDLE (debounced), `POST /admin/sync` and `POST /api/sync` |
+| `classify` | `src/jobs/classify.ts` | `sync_tick`, for every newly-ingested message |
+| `jev_message` | `src/jobs/jev.ts` | `classify`, for inbound messages once Jev is configured |
+| `jev_submission` | `src/jobs/jev.ts` | `src/spam/gate.ts`, after recording a submission, once Jev is configured |
+| `send` | `src/jobs/send.ts` | A send route, only on provider failure (the first attempt runs inline); `POST /api/templates/:id/test-send` |
 
 A `sync_tick` runs one envelope-only ingest pass per configured provider/mailbox through the `MailProvider` port (`src/sync/ingest.ts`): a "head" pass always re-lists the newest page (so new mail at the top is never missed) plus a bounded backfill pass that pages backward once, historically. It never fetches a body — `classify` does that live via `provider.read()`, and only `classify`'s LLM call and Jev populate `classifications`. IMAP watch (`provider.watch()`/IDLE) kicks a tick as soon as the server reports a change, on top of the 5-minute schedule.
 
@@ -190,7 +189,7 @@ curl -H "Authorization: Bearer $API_KEY" https://<host>/api/templates
 curl -H "Authorization: Bearer $API_KEY" -X POST https://<host>/api/templates/fpp-sender/test-send
 ```
 
-A test-send always goes to the owner's own `RECEIVER_EMAIL` — there is no recipient override — as a `send` job, so it goes through the same idempotent, retried path as every other send; `templates.last_test_send_at` records it. `send_log` (one row per outbound send: template id, recipients, provider, status, requested by `route`/`test-send`/future `agent`) is filled in at send time and then kept current by the `reconcile_send_log` job, which re-reads the provider's own status (Resend: `emails.get()`; SES has no read-back, its events arrive by webhook) for any row still short of a terminal state, dispatching on `send_log.provider`. Sending is provider-neutral (`src/providers/send-port.ts`): a template is rendered once to html + text and handed to the `SendProvider` that `SEND_PROVIDERS` selects for it; a template send fixes its provider at enqueue time (stored in `send_log.provider`) and the `send` job uses that row's provider. Resend's `last_event` has 12 values; only `sent`/`queued`/`scheduled`/`delivery_delayed` are rechecked on the next pass (oldest-updated first, capped per run) — `delivered`, `opened`, `clicked`, `bounced`, `complained`, `failed`, `canceled`, and `suppressed` are all treated as terminal.
+A test-send always goes to the owner's own `RECEIVER_EMAIL` — there is no recipient override — as a `send` job, so it goes through the same idempotent, retried path as every other send; `templates.last_test_send_at` records it. `send_log` (one row per outbound send: template id, recipients, provider, status, requested by `route`/`test-send`/future `agent`) is filled in at send time; its status afterwards comes only from SES events delivered to `POST /webhooks/ses` (§Amazon SES) — there is no polling or reconcile job, so a row stays `sent` until an event arrives. Sending is provider-neutral (`src/providers/send-port.ts`): a template is rendered once to html + text and handed to the SES `SendProvider`; a template send fixes its provider at enqueue time (stored in `send_log.provider`) and the `send` job uses that row's provider.
 
 The client's Templates page (§Client above) is a thin view over this: list, a 375/600 preview, test-send, and the per-template send log.
 

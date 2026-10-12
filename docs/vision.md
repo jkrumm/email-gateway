@@ -1,7 +1,7 @@
 # Vision
 
 **email-gateway is the one door to all of my email.** Every mailbox I own
-(Proton Mail, Gmail) and every mail my apps send (Resend) sits behind one API
+(Proton Mail, Gmail) and every mail my apps send (Amazon SES) sits behind one API
 and one UI. It classifies what arrives, shows me what matters, and hands the
 same data to Hermes and any other agent or app.
 
@@ -10,14 +10,15 @@ Renamed from `bun-email-api` on 2026-09-27 to match `research-gateway` and
 
 ## Where it stands
 
-| Area     | Today                                                                                                                                                          |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Send     | Resend with React Email templates, one route per caller: `/fpp`, `/fpp-daily-analytics`, `/sy-serendipity`                                                     |
-| Receive  | Read-only IMAP sync of Proton (`hello@`) through Proton Mail Bridge on the homelab over the tailnet. Resend inbound/outbound history comes from the Resend API |
-| Classify | LLM spam gate on contact forms, LLM enrichment of inbound mail, Jev in shadow mode as a durable retried queue                                                  |
-| Store    | SQLite (`bun:sqlite`) in a VPS volume                                                                                                                          |
-| UI       | Zero-JS SSR admin at `/admin` (Basic auth) using basalt-ui tokens                                                                                              |
-| API      | `/api/*` behind a bearer token: emails, stats, submissions, sync                                                                                               |
+<!-- prettier-ignore -->
+| Area | Today |
+|-|-|
+| Send | Amazon SES with React Email templates, one route per caller: `/fpp`, `/fpp-daily-analytics`, `/sy-serendipity` |
+| Receive | Read-only IMAP sync of Proton (`hello@`) through Proton Mail Bridge on the homelab over the tailnet |
+| Classify | LLM spam gate on contact forms, LLM enrichment of inbound mail, Jev in shadow mode as a durable retried queue |
+| Store | SQLite (`bun:sqlite`) in a VPS volume |
+| UI | Zero-JS SSR admin at `/admin` (Basic auth) using basalt-ui tokens |
+| API | `/api/*` behind a bearer token: emails, stats, submissions, sync |
 
 ## Target
 
@@ -27,9 +28,10 @@ don't have: classifications, the send log, templates and job state. There is
 no full mirror. If the gateway's store is wiped, nothing is lost that a
 re-read cannot rebuild.
 
-- **Providers as ports.** Proton (Bridge IMAP/SMTP), Gmail and Resend each
+- **Providers as ports.** Proton (Bridge IMAP/SMTP) and Gmail each
   sit behind one provider interface covering list, read, search, flag and
-  send. A new mailbox means a new adapter, not a new code path.
+  move; sending is its own port with Amazon SES as the one implementation.
+  A new mailbox means a new adapter, not a new code path.
 - **A lean store.** Rows are keyed by provider message ID and hold only
   derived data: category, spam probability, importance, summary, and the
   model that decided it. Bodies stay with the provider, with at most a short

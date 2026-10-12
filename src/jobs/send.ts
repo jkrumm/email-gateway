@@ -42,15 +42,15 @@ export function createSendHandler({
     // otherwise call send() again and duplicate the customer email. A row
     // already recorded as sent means this job is already done in every way
     // that matters — skip straight to success. Any recorded provider message
-    // id counts, not only status "sent": reconcile may have advanced the row
-    // to "delivered", and a provider without an idempotency key (SES) would
-    // send the mail a second time.
+    // id counts, not only status "sent": the SES event webhook may have
+    // advanced the row to "delivered", and a provider without an idempotency
+    // key (SES) would send the mail a second time.
     const existing = sendLog.getSendLog(input.id);
     if (existing?.providerMessageId) return;
 
     // The provider was chosen at enqueue time (enqueueTemplateSend) and
-    // stored on the row, so a SEND_PROVIDERS change never reroutes a job
-    // that is already queued.
+    // stored on the row, so a row written under another provider name is
+    // never rerouted to this one.
     if (!existing) {
       throw new Error(`send job ${input.id}: no send_log row`);
     }

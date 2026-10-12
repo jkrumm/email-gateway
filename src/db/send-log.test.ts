@@ -11,13 +11,13 @@ function setupWithDb() {
   return { db, sendLog: createSendLogRepo(db) };
 }
 
-// Seeds one reconcilable-candidate row through the repo's public API: a
+// Seeds one row through the repo's public API: a
 // provider message id (or none) and a status.
 function seed(
   sendLog: ReturnType<typeof createSendLogRepo>,
   id: string,
   {
-    provider = "resend",
+    provider = "ses",
     providerMessageId = `msg-${id}` as string | null,
     status = null as string | null,
   }: {
@@ -44,7 +44,7 @@ describe("send log repo", () => {
       id: "send-1",
       templateId: "welcome",
       recipients: ["jane@example.com"],
-      provider: "resend",
+      provider: "ses",
       requestedBy: "route",
     });
 
@@ -54,7 +54,7 @@ describe("send log repo", () => {
       id: "send-1",
       templateId: "welcome",
       recipients: ["jane@example.com"],
-      provider: "resend",
+      provider: "ses",
       providerMessageId: null,
       status: null,
       requestedBy: "route",
@@ -67,7 +67,7 @@ describe("send log repo", () => {
       id: "send-1",
       templateId: "welcome",
       recipients: ["jane@example.com"],
-      provider: "resend" as const,
+      provider: "ses" as const,
       requestedBy: "route" as const,
     };
 
@@ -82,17 +82,17 @@ describe("send log repo", () => {
     sendLog.insertSendLog({
       id: "send-1",
       recipients: ["jane@example.com"],
-      provider: "resend",
+      provider: "ses",
       requestedBy: "route",
     });
 
     sendLog.recordProviderResult("send-1", {
-      providerMessageId: "resend-abc",
+      providerMessageId: "ses-abc",
       status: "sent",
     });
     let entry = sendLog.listSendLog().data[0];
     expect(entry).toMatchObject({
-      providerMessageId: "resend-abc",
+      providerMessageId: "ses-abc",
       status: "sent",
       lastEvent: null,
     });
@@ -101,7 +101,7 @@ describe("send log repo", () => {
     entry = sendLog.listSendLog().data[0];
     // Fields not passed this time stay as they were.
     expect(entry).toMatchObject({
-      providerMessageId: "resend-abc",
+      providerMessageId: "ses-abc",
       status: "sent",
       lastEvent: "delivered",
     });
@@ -114,7 +114,7 @@ describe("send log repo", () => {
         id: `send-${i}`,
         templateId: i === 0 ? "welcome" : "digest",
         recipients: ["jane@example.com"],
-        provider: "resend",
+        provider: "ses",
         requestedBy: "route",
       });
     }
@@ -140,85 +140,19 @@ describe("send log repo", () => {
     sendLog.insertSendLog({
       id: "send-1",
       recipients: ["jane@example.com"],
-      provider: "resend",
+      provider: "ses",
       requestedBy: "route",
     });
     sendLog.recordProviderResult("send-1", {
-      providerMessageId: "resend-abc",
+      providerMessageId: "ses-abc",
       status: "sent",
     });
 
     expect(sendLog.getSendLog("send-1")).toMatchObject({
       id: "send-1",
       status: "sent",
-      providerMessageId: "resend-abc",
+      providerMessageId: "ses-abc",
     });
-  });
-});
-
-describe("send log listReconcilable", () => {
-  test("returns only rows for the provider with an id and a non-terminal status", () => {
-    const sendLog = setup();
-    const keep = ["null", "sent", "queued", "scheduled", "delivery_delayed"];
-    for (const status of keep) {
-      seed(sendLog, `keep-${status}`, {
-        status: status === "null" ? null : status,
-      });
-    }
-    for (const status of [
-      "delivered",
-      "opened",
-      "clicked",
-      "bounced",
-      "complained",
-      "failed",
-      "canceled",
-      "suppressed",
-    ]) {
-      seed(sendLog, `drop-${status}`, { status });
-    }
-    // No provider message id yet, and a different provider's rows: both are
-    // out of scope for a Resend reconciliation pass.
-    seed(sendLog, "drop-no-id", { providerMessageId: null });
-    seed(sendLog, "drop-other-provider", {
-      provider: "postmark",
-      status: "sent",
-    });
-
-    const ids = sendLog
-      .listReconcilable({ provider: "resend", limit: 100 })
-      .map((row) => row.id)
-      .sort();
-
-    expect(ids).toEqual(keep.map((status) => `keep-${status}`).sort());
-  });
-
-  test("orders by updated_at ascending and caps at limit", () => {
-    const { db, sendLog } = setupWithDb();
-    seed(sendLog, "second");
-    seed(sendLog, "first");
-    seed(sendLog, "third");
-    db.run(
-      "UPDATE send_log SET updated_at = '2026-09-28T09:00:00.000Z' WHERE id = 'first'",
-    );
-    db.run(
-      "UPDATE send_log SET updated_at = '2026-09-28T10:00:00.000Z' WHERE id = 'second'",
-    );
-    db.run(
-      "UPDATE send_log SET updated_at = '2026-09-28T11:00:00.000Z' WHERE id = 'third'",
-    );
-
-    expect(
-      sendLog
-        .listReconcilable({ provider: "resend", limit: 100 })
-        .map((r) => r.id),
-    ).toEqual(["first", "second", "third"]);
-
-    expect(
-      sendLog
-        .listReconcilable({ provider: "resend", limit: 2 })
-        .map((r) => r.id),
-    ).toEqual(["first", "second"]);
   });
 });
 
@@ -261,9 +195,9 @@ describe("recordEventByProviderMessageId", () => {
     const sendLog = setupSes();
     const event = { status: "delivered", lastEvent: "delivered" };
 
-    expect(sendLog.recordEventByProviderMessageId("resend", "m1", event)).toBe(
-      0,
-    );
+    expect(
+      sendLog.recordEventByProviderMessageId("other-provider", "m1", event),
+    ).toBe(0);
     expect(sendLog.recordEventByProviderMessageId("ses", "other", event)).toBe(
       0,
     );
@@ -391,17 +325,14 @@ describe("claimSend / releaseSend", () => {
     expect(sendLog.getSendLog("row")!.status).toBe("sending");
   });
 
-  test("a sending row is not reconcilable and ranks as sent for events", () => {
+  test("a sending row ranks as sent for events", () => {
     const { sendLog } = setupClaim();
     sendLog.claimSend("row", EPOCH);
 
     sendLog.recordProviderResult("row", { providerMessageId: "m9" });
     expect(sendLog.getSendLog("row")!.status).toBe("sending");
-    expect(sendLog.listReconcilable({ provider: "resend", limit: 10 })).toEqual(
-      [],
-    );
     expect(
-      sendLog.recordEventByProviderMessageId("resend", "m9", {
+      sendLog.recordEventByProviderMessageId("ses", "m9", {
         status: "delivery_delayed",
         lastEvent: "delivery_delayed",
       }),

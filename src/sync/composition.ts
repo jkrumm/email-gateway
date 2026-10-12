@@ -15,11 +15,9 @@ import type { MailProvider } from "../providers/port";
 import type { JobHandler } from "../jobs/runner";
 
 // The mailboxes each configured provider ingests, keyed by provider — one
-// account's mailbox list must never be applied to the other. Resend has no
-// folders — its "sent"/"received" history lists stand in
-// (src/providers/resend/adapter.ts); Proton ingests whatever IMAP_MAILBOXES
-// names (env.ts default "INBOX,Spam"), Gmail whatever GMAIL_IMAP_MAILBOXES
-// names. Exported as an injectable default (rather than called directly) so
+// account's mailbox list must never be applied to the other. Proton ingests
+// whatever IMAP_MAILBOXES names (env.ts default "INBOX,Spam"), Gmail whatever
+// GMAIL_IMAP_MAILBOXES names. Exported as an injectable default (rather than called directly) so
 // tests can supply a fixed mailbox list per provider without depending on
 // real IMAP env.
 export function defaultMailboxesFor(
@@ -29,7 +27,6 @@ export function defaultMailboxesFor(
     gmail: gmailImapConfigFromEnv(),
   },
 ): string[] {
-  if (provider.id === "resend") return ["sent", "received"];
   if (provider.id === "proton") return configs.proton?.mailboxes ?? [];
   if (provider.id === "gmail") return configs.gmail?.mailboxes ?? [];
   return [];

@@ -18,17 +18,9 @@ export interface SendMessage {
   idempotencyKey?: string;
 }
 
-export interface SendStatus {
-  status: string;
-  lastEvent: string;
-}
-
 export interface SendProvider {
   id: string;
   send(message: SendMessage): Promise<{ providerMessageId: string }>;
-  // Delivery state for a previously sent message. Optional: a provider
-  // without a status read-back is skipped by the send_log reconcile job.
-  status?(providerMessageId: string): Promise<SendStatus>;
 }
 
 // Rendered once per send, so a provider never has to know about React.

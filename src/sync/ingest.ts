@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AccountsRepo } from "../db/accounts";
-import type { MessageDirection, MessagesRepo } from "../db/messages";
+import type { MessagesRepo } from "../db/messages";
 import type { Envelope, MailProvider } from "../providers/port";
 import { errorMessage } from "../utils/error";
 
@@ -31,21 +31,10 @@ const DEFAULT_MAX_PAGES_PER_RUN = 20;
 //     detecting new mail.
 const backfillKey = (mailbox: string) => `${mailbox}#backfill`;
 
-// Everything except Resend's own "sent" mailbox is treated as inbound.
-// Proton/Gmail Sent folders aren't in IMAP_MAILBOXES today (env.ts's default
-// is "INBOX,Spam"), so this simple rule is correct for what's actually
-// configured; a later wave adding a Sent mailbox to that list would need to
-// name it here too.
-function directionFor(mailbox: string): MessageDirection {
-  return mailbox === "sent" ? "outbound" : "inbound";
-}
-
-// A stable per-account message key. Resend's own id is already a real,
-// account-scoped identity (one row per Resend email), so it becomes the key
-// directly. IMAP's list() is envelope-only: it carries no Message-ID (that
-// only exists in the full RFC822 source postal-mime parses on read(), see
-// src/providers/imap/adapter.ts's parseImapSource) — so the fallback keys on
-// mailbox+uidValidity+uid. This cannot unify the same physical message across
+// A stable per-account message key. IMAP's list() is envelope-only: it
+// carries no Message-ID (that only exists in the full RFC822 source
+// postal-mime parses on read(), see src/providers/imap/adapter.ts's
+// parseImapSource) — so the key is derived from mailbox+uidValidity+uid. This cannot unify the same physical message across
 // two mailboxes (e.g. an archive move mints a new row instead of a new
 // location on the existing one) the way src/sync/imap-sync.ts's Message-ID-
 // based stableId could. That is an accepted gap of envelope-only sync for
@@ -53,10 +42,7 @@ function directionFor(mailbox: string): MessageDirection {
 // therefore its real Message-ID) has been fetched at classify time.
 function messageKey(accountId: string, envelope: Envelope): string {
   const ref = envelope.ref;
-  const identity =
-    ref.provider === "resend"
-      ? `resend:${ref.id}`
-      : `${ref.provider}:${ref.mailbox}:${ref.uidValidity}:${ref.uid}`;
+  const identity = `${ref.provider}:${ref.mailbox}:${ref.uidValidity}:${ref.uid}`;
   return createHash("sha256").update(`${accountId}:${identity}`).digest("hex");
 }
 
@@ -72,7 +58,7 @@ export interface IngestMailboxResult {
 }
 
 // Envelope-only ingest of one mailbox through the provider port, replacing
-// src/sync/resend-sync.ts + src/sync/imap-sync.ts's byte-batching algorithm
+// src/sync/imap-sync.ts's byte-batching algorithm
 // (docs/architecture.md §Provider port, §Jobs). Never fetches a body — that
 // happens live, on read(), from the classify job. Runs the head pass and,
 // unless backfill has already finished, the backfill pass described above.
@@ -125,7 +111,8 @@ export async function ingestMailbox({
         {
           key,
           account: accountId,
-          direction: directionFor(mailbox),
+          // Every configured mailbox is inbound, whatever its name (Sent included).
+          direction: "inbound",
           fromAddress: envelope.from || null,
           toAddresses: envelope.to,
           cc: envelope.cc ?? null,
@@ -151,8 +138,8 @@ export async function ingestMailbox({
 
       messages.upsertLocation(key, {
         mailbox,
-        uidValidity: ref.provider === "resend" ? null : ref.uidValidity,
-        uid: ref.provider === "resend" ? null : ref.uid,
+        uidValidity: ref.uidValidity,
+        uid: ref.uid,
         providerRef: ref,
         lastSeenAt: nowIso,
       });

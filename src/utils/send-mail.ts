@@ -5,7 +5,7 @@ import {
   type SendLogRepo,
 } from "../db/mail-index";
 import { renderTemplate, type SendProvider } from "../providers/send-port";
-import { sendProviderFor } from "../providers/send-registry";
+import { sendProvider } from "../providers/send-registry";
 
 export const DEFAULT_FROM =
   "Free-Planning-Poker.com <no-reply@free-planning-poker.com>";
@@ -29,7 +29,7 @@ export function recordSendLog(
 }
 
 /**
- * Sends one rendered template through the selected provider and records a
+ * Sends one rendered template through the send provider and records a
  * send_log row. The returned `id` is the PROVIDER's message id (what the
  * caller can look up at the provider), not the send_log row id, which is a
  * separate random UUID.
@@ -41,7 +41,7 @@ export async function sendMail({
   subject,
   template,
   source,
-  provider = sendProviderFor(source),
+  provider = sendProvider(),
   sendLog = sendLogRepo,
 }: {
   from?: string;
@@ -50,11 +50,9 @@ export async function sendMail({
   subject: string;
   template: ReactElement;
   // Our template/route id, e.g. "fpp-sender" — stored on the send_log row so
-  // the admin API can filter sent mail by what generated it, and the key
-  // SEND_PROVIDERS picks the provider by.
+  // the admin API can filter sent mail by what generated it.
   source?: string;
-  // Injectable for tests, or a provider-scoped send provider; defaults to the
-  // one SEND_PROVIDERS selects for `source`.
+  // Injectable for tests; defaults to the SES provider.
   provider?: SendProvider;
   sendLog?: Pick<SendLogRepo, "insertSendLog">;
 }): Promise<{ id: string; from: string }> {

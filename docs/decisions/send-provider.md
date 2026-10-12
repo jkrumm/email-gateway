@@ -1,7 +1,7 @@
 # Send-provider decision
 
 Wave 10, 2026-10-12. **Status: decided 2026-10-12 — Amazon SES `eu-central-1` (D5 in
-[architecture](../architecture.md)), not the recommended Resend Pro.** Every provider fact below comes from `/research` runs on
+[architecture](../architecture.md)), not the recommended Resend Pro.** Resend was removed from the gateway in Wave 15. Every provider fact below comes from `/research` runs on
 2026-10-12 against the vendors' own docs (sources at the end); prod numbers
 come from read-only `ssh vps` + `docker exec` probes the same day. Domain
 names are placeholders because this repo is public.

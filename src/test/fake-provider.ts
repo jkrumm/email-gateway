@@ -35,16 +35,14 @@ export interface FakeMailProvider extends MailProvider {
   readonly listCalls: { mailbox: string; cursor: string | undefined }[];
 }
 
-function defaultCapabilities(id: MailProvider["id"]): Capabilities {
-  const isResend = id === "resend";
+function defaultCapabilities(): Capabilities {
   return {
     list: true,
     read: true,
     search: true,
-    flag: !isResend,
-    move: !isResend,
-    send: isResend,
-    idle: !isResend,
+    flag: true,
+    move: true,
+    idle: true,
   };
 }
 
@@ -56,7 +54,7 @@ export function createFakeMailProvider({
   pages = {},
   bodies = {},
 }: FakeMailProviderOptions): FakeMailProvider {
-  const caps = { ...defaultCapabilities(id), ...capabilities };
+  const caps = { ...defaultCapabilities(), ...capabilities };
   const listCalls: { mailbox: string; cursor: string | undefined }[] = [];
 
   return {
@@ -77,7 +75,6 @@ export function createFakeMailProvider({
       return { items, cursor: hasMore ? String(index + 1) : undefined };
     },
     async read(ref: MessageRef): Promise<Message> {
-      if (ref.provider === "resend") throw new Error("fake: no resend body");
       const body = bodies[ref.mailbox]?.[ref.uid];
       if (!body) throw new Error(`fake: no body for ${ref.mailbox}:${ref.uid}`);
       return body;
@@ -88,9 +85,6 @@ export function createFakeMailProvider({
     async setFlags() {},
     async move(ref) {
       return ref;
-    },
-    async send() {
-      throw new Error("fake: send not implemented");
     },
   };
 }

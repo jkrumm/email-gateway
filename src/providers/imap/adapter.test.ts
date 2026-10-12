@@ -391,7 +391,6 @@ describe("createImapflowPort", () => {
       search: true,
       flag: true,
       move: false,
-      send: false,
       idle: false,
     });
 
