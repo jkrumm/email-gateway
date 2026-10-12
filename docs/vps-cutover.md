@@ -199,3 +199,29 @@ GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD`) and a sync has run
 6. Merge the Hermes repoint PR
    ([jkrumm/hermes-agent#3](https://github.com/jkrumm/hermes-agent/pull/3))
    once `https://mail.${DOMAIN}/mcp` is reachable and bearer-tested.
+
+## 7. Parked (2026-10-12)
+
+None of §1–§6 is applied yet. The owner parked the cutover behind a send-
+provider migration: Resend's custom-domain cap no longer fits the number of
+domains the gateway has to send from, and the provider choice (Postmark,
+Amazon SES with more logic in the gateway, or a self-hosted MTA) may reshape
+the send side before the mail surface goes live. Pick this list back up after
+that migration lands, and re-check every item against the new provider first.
+
+Owner-only inputs still missing:
+
+- Gmail app password → 1Password `vps/email-gateway` as `GMAIL_IMAP_USER`,
+  `GMAIL_IMAP_APP_PASSWORD`, `GMAIL_IMAP_MAILBOXES`.
+- Proton folder names for `IMAP_MAILBOXES` (only INBOX and Spam sync today).
+- `RESEND_ADMIN_API_KEY` — moot if Resend is replaced; the
+  `reconcile_send_log` job then needs the new provider's status API instead.
+- `IMAP_TLS_CERT`: store the Bridge PEM, then drop `IMAP_TLS_INSECURE`.
+- Confirm deleting `email-gateway.sqlite` (§6 item 5).
+
+Agent-applicable once the owner says go: §1 ACL grant, §2 DNS record, §3/§4
+compose + `.env.tpl`, §5 backup cron after a manual dry run, then §6 items 4
+and 6 (argo#20, hermes-agent#3).
+
+Already live, unaffected by the migration: the decision lane on IU `clef-eu`
+(README §Jev shadow mode) and Argo usage reporting (`src/usage/argo.ts`).
