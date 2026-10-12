@@ -1019,15 +1019,17 @@ the replacement and plans the migration. It writes no product code. The parked
 cutover (`docs/vps-cutover.md` §7) is out of scope.
 
 - [ ] Inventory every sending domain and caller. The full domain list comes
-      from the owner; tracked files use placeholders only.
-- [ ] Research the options against today's docs with `/research`: a higher
+      from the owner; tracked files use placeholders only. Done from prod
+      2026-10-12: three verified Resend domains (the Free-plan cap),
+      Shutterflow shares the team; the owner's full list is still open.
+- [x] Research the options against today's docs with `/research`: a higher
       Resend tier or several accounts, Postmark, Amazon SES with bounce,
       complaint and suppression logic in the gateway, a self-hosted MTA (with
       or without an SES relay), and send-only alternatives with high or no
       domain caps.
-- [ ] Decide whether this is a swap behind `src/providers/port.ts` or a
+- [x] Decide whether this is a swap behind `src/providers/port.ts` or a
       rewrite, with evidence from the code.
-- [ ] `docs/decisions/send-provider.md`: an options table, a recommendation
+- [x] `docs/decisions/send-provider.md`: an options table, a recommendation
       and the architecture delta. Then stop: the provider and the spend are
       the owner's call.
 - [ ] After the owner decides: record the decision in `docs/architecture.md`
