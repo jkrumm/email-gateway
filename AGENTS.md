@@ -21,7 +21,7 @@ file is what a dispatched agent needs before touching code.
 
 Bun 1.4 · Elysia 1.4 (`@elysiajs/bearer`) · `bun:sqlite` (WAL, migrations by
 `PRAGMA user_version`, append-only) · imapflow 2 + postal-mime · resend 6 +
-react-email 6 · AI SDK 7 (`@ai-sdk/openai-compatible` for the LLM; the shadow
+react-email 6 · `@aws-sdk/client-sesv2` (SES, off unless configured) · AI SDK 7 (`@ai-sdk/openai-compatible` for the LLM; the shadow
 lane "Jev" runs Cloudflare's Clef as `clef-eu` on IU's Unified Endpoint through
 `src/llm/ue-decision-model.ts`, OpenRouter's Decisions API via
 `@openrouter/ai-sdk-provider` as the `DECISION_PROVIDER=openrouter`
@@ -97,6 +97,17 @@ uidValidity:uid)`, never attacker-influenced, so `ON CONFLICT DO UPDATE`ing
   `src/sync/ingest.ts`'s `DEFAULT_MAX_PAGES_PER_RUN` (20 pages of up to 500
   envelopes each) on the backfill pass; the head pass is always exactly one
   page.
+- **`POST /webhooks/ses` is on the public door and signature-verified.** It sits
+  outside the `MAIL_HOST` guard (SNS cannot reach the gated surface); the SNS
+  message signature is its only auth. Order is fixed: `TopicArn` pin (403)
+  before any network fetch, then `SigningCertURL`/`SubscribeURL` held to
+  exactly `https://sns.<SES_REGION>.amazonaws.com` (SSRF), then the signature.
+  Never log the payload (recipient PII); raw SNS message delivery must stay
+  off. **SES is off while its env is unset** (`SES_REGION`/`_ACCESS_KEY_ID`/
+  `_SECRET_ACCESS_KEY`/`_CONFIGURATION_SET`; `SES_SNS_TOPIC_ARN` gates the
+  webhook, unset → 404); routing a template to `ses` without that config fails
+  startup. SES has no idempotency key — the `send` job's "skip when a
+  provider message id is recorded" guard is the only duplicate-send defence.
 - **Migrations are append-only**; `accounts.provider` has a CHECK constraint, so a
   new provider is a migration.
 - **No timeouts on agent-style work** (`rules/agent-limits.md`): the LLM calls
@@ -193,6 +204,17 @@ tests never need secrets.
   the `send` job uses the provider on its send_log row, and
   `reconcile_send_log` dispatches each provider's rows to its `status()`.
   `src/test/fake-send-provider.ts` is the test adapter.
+- `src/providers/ses/` (Wave 12): `send.ts` the SES `SendProvider`
+  (`createSesSendProvider({ client, configurationSetName })`, `SendEmailCommand`,
+  no `status()`; the registry builds it lazily from the `SES_*` env and throws
+  if unconfigured), `events.ts` the pure SES event → `{providerMessageId,
+status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
+  SNS signature verifier (`createSnsVerifier({ region, fetchCert })`,
+  `trustedSnsUrl`, v1/v2). `src/routes/ses-webhook.ts`
+  (`createSesWebhookRoutes`) is the `POST /webhooks/ses` door and calls
+  `sendLogRepo.recordEventByProviderMessageId` (status never regresses:
+  sent < delivery_delayed < delivered < bounced/complained/rejected/failed);
+  `src/test/sns-fixture.ts` signs fake SNS messages with a generated key.
 - `src/emails/` React Email templates + `registry.ts` (Wave 7: `TEMPLATE_IDS`
   is the single source of truth for every template id — the send routes and
   the API reference it, never a hand-typed string; `sync-registry.ts`'s

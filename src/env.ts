@@ -2,7 +2,7 @@ import { X509Certificate } from "node:crypto";
 import { z } from "zod";
 import { normalizePem } from "./utils/pem";
 import { splitMailboxes } from "./utils/mailboxes";
-import { parseSendProviders } from "./providers/send-select";
+import { parseSendProviders, sesConfigured } from "./providers/send-select";
 
 // Shared by both IMAP accounts' superRefine checks below: every key in
 // `keys` must be set once any one of them is, so a half-configured account
@@ -92,6 +92,19 @@ export const envSchema = z
         return map;
       }),
 
+    // Amazon SES as a second send provider (src/providers/ses). All four of
+    // region, both keys and the configuration set must be set for SES to be
+    // configured; SEND_PROVIDERS routing a template to `ses` without that
+    // fails startup. Credentials are passed to the client explicitly — no
+    // ambient AWS credential chain. SES_SNS_TOPIC_ARN turns on the public
+    // POST /webhooks/ses event door (needs SES_REGION to pin the SNS host);
+    // unset -> that path 404s.
+    SES_REGION: z.string().optional(),
+    SES_ACCESS_KEY_ID: z.string().optional(),
+    SES_SECRET_ACCESS_KEY: z.string().optional(),
+    SES_CONFIGURATION_SET: z.string().optional(),
+    SES_SNS_TOPIC_ARN: z.string().optional(),
+
     // Directory for the SQLite database file. Defaults to ./data so local dev
     // doesn't need any setup; ops sets it to a mounted volume path in prod.
     DATA_DIR: z.string().default("./data"),
@@ -126,6 +139,26 @@ export const envSchema = z
     GMAIL_IMAP_MAILBOXES: z.string().default("INBOX"),
   })
   .superRefine((value, context) => {
+    if (
+      Object.values(value.SEND_PROVIDERS).includes("ses") &&
+      !sesConfigured(value)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["SEND_PROVIDERS"],
+        message:
+          "SEND_PROVIDERS routes a template to ses, which needs SES_REGION, SES_ACCESS_KEY_ID, SES_SECRET_ACCESS_KEY and SES_CONFIGURATION_SET",
+      });
+    }
+    if (value.SES_SNS_TOPIC_ARN) {
+      requireTogether(
+        context,
+        value,
+        ["SES_REGION"],
+        "SES_SNS_TOPIC_ARN is set",
+      );
+    }
+
     if (value.IMAP_HOST) {
       requireTogether(
         context,

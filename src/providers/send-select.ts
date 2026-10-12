@@ -4,10 +4,26 @@
 // registry that builds the real clients lives in send-registry.ts.
 import { TEMPLATE_IDS } from "../emails/registry";
 
-export const SEND_PROVIDER_NAMES = ["resend"] as const;
+export const SEND_PROVIDER_NAMES = ["resend", "ses"] as const;
 export type SendProviderName = (typeof SEND_PROVIDER_NAMES)[number];
 
 const DEFAULT_SEND_PROVIDER: SendProviderName = "resend";
+
+// The env keys SES needs to send. Only when all four are set is SES
+// "configured": SEND_PROVIDERS may route to it and the registry may build it.
+// SES_SNS_TOPIC_ARN is separate — it only gates the event webhook.
+export const SES_SEND_ENV_KEYS = [
+  "SES_REGION",
+  "SES_ACCESS_KEY_ID",
+  "SES_SECRET_ACCESS_KEY",
+  "SES_CONFIGURATION_SET",
+] as const;
+
+export function sesConfigured(
+  value: Partial<Record<(typeof SES_SEND_ENV_KEYS)[number], string>>,
+): boolean {
+  return SES_SEND_ENV_KEYS.every((key) => Boolean(value[key]));
+}
 
 // template id -> provider name, only for the templates SEND_PROVIDERS lists.
 export type SendProviderMap = Readonly<Record<string, SendProviderName>>;

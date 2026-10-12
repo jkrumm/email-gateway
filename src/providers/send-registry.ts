@@ -1,10 +1,13 @@
+import type { SESv2Client } from "@aws-sdk/client-sesv2";
 import { env } from "../env";
 import { adminResend, resend } from "../utils/resend";
 import { createResendSendProvider } from "./resend/send";
+import { createSesSendProvider } from "./ses/send";
 import type { SendProvider } from "./send-port";
 import {
   resolveSendProviderName,
   SEND_PROVIDER_NAMES,
+  sesConfigured,
   type SendProviderName,
 } from "./send-select";
 
@@ -14,6 +17,45 @@ import {
 const builders: Record<SendProviderName, () => SendProvider> = {
   resend: () =>
     createResendSendProvider({ sendClient: resend, readClient: adminResend }),
+  ses: () => {
+    const {
+      SES_REGION,
+      SES_ACCESS_KEY_ID,
+      SES_SECRET_ACCESS_KEY,
+      SES_CONFIGURATION_SET,
+    } = env;
+    if (
+      !SES_REGION ||
+      !SES_ACCESS_KEY_ID ||
+      !SES_SECRET_ACCESS_KEY ||
+      !SES_CONFIGURATION_SET
+    ) {
+      throw new Error(
+        "SES is not configured: set SES_REGION, SES_ACCESS_KEY_ID, SES_SECRET_ACCESS_KEY and SES_CONFIGURATION_SET",
+      );
+    }
+    let client: SESv2Client | undefined;
+    return createSesSendProvider({
+      // Built on first send so the SDK is not loaded at boot. Explicit
+      // credentials only — no ambient AWS credential chain.
+      client: {
+        send: async (command: Parameters<SESv2Client["send"]>[0]) => {
+          if (!client) {
+            const { SESv2Client } = await import("@aws-sdk/client-sesv2");
+            client = new SESv2Client({
+              region: SES_REGION,
+              credentials: {
+                accessKeyId: SES_ACCESS_KEY_ID,
+                secretAccessKey: SES_SECRET_ACCESS_KEY,
+              },
+            });
+          }
+          return client.send(command);
+        },
+      } as Pick<SESv2Client, "send">,
+      configurationSetName: SES_CONFIGURATION_SET,
+    });
+  },
 };
 
 const built = new Map<string, SendProvider>();
@@ -54,6 +96,9 @@ export function sendProviderFor(templateId: string | undefined): SendProvider {
 export function statusProviders(): Record<string, SendProvider> {
   const providers: Record<string, SendProvider> = {};
   for (const name of SEND_PROVIDER_NAMES) {
+    // An unconfigured SES (the default) cannot be built; it has no status()
+    // anyway, so reconcile has nothing to ask it.
+    if (name === "ses" && !sesConfigured(env)) continue;
     const provider = sendProviderByName(name);
     if (provider?.status) providers[provider.id] = provider;
   }

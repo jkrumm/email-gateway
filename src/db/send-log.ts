@@ -32,6 +32,11 @@ export interface RecordProviderResultInput {
   lastEvent?: string | null;
 }
 
+export interface RecordEventInput {
+  status: string;
+  lastEvent: string;
+}
+
 export interface ListSendLogFilters {
   templateId?: string;
   limit?: number;
@@ -50,6 +55,17 @@ export interface ListSendLogResult {
 
 const DEFAULT_LIST_LIMIT = 25;
 const MAX_LIST_LIMIT = 100;
+
+// How far along a delivery a status is, for provider events that can arrive
+// out of order: sent/null/anything unranked (0) < delivery_delayed (1) <
+// delivered (2) < a terminal failure (3). Referenced twice in the UPDATE
+// below, so it lives here once.
+const STATUS_RANK_SQL = (column: string) => `CASE ${column}
+  WHEN 'delivery_delayed' THEN 1
+  WHEN 'delivered' THEN 2
+  WHEN 'bounced' THEN 3 WHEN 'complained' THEN 3
+  WHEN 'rejected' THEN 3 WHEN 'failed' THEN 3
+  ELSE 0 END`;
 
 interface SendLogRow {
   id: string;
@@ -141,6 +157,31 @@ export function createSendLogRepo(db: Database) {
     );
   }
 
+  // A provider event (the SES webhook) for the row it belongs to. The status
+  // never regresses: the event applies only when its rank is >= the row's
+  // current one, so a late "delivery_delayed" cannot undo "delivered", while
+  // an equal-rank event may overwrite (bounce detail after a bounce).
+  // Returns rows changed: 0 means no such row or a stale event.
+  function recordEventByProviderMessageId(
+    provider: string,
+    providerMessageId: string,
+    event: RecordEventInput,
+  ): number {
+    return db.run(
+      `UPDATE send_log SET status = ?, last_event = ?, updated_at = ?
+       WHERE provider = ? AND provider_message_id = ?
+         AND ${STATUS_RANK_SQL("?")} >= ${STATUS_RANK_SQL("status")}`,
+      [
+        event.status,
+        event.lastEvent,
+        new Date().toISOString(),
+        provider,
+        providerMessageId,
+        event.status,
+      ],
+    ).changes;
+  }
+
   // Point lookup by id — used by src/jobs/send.ts's idempotency guard so a
   // retried send job (e.g. after this row's own UPDATE failed with
   // SQLITE_BUSY, per the two-container deploy overlap) can detect an
@@ -220,6 +261,7 @@ export function createSendLogRepo(db: Database) {
   return {
     insertSendLog,
     recordProviderResult,
+    recordEventByProviderMessageId,
     listSendLog,
     getSendLog,
     listReconcilable,

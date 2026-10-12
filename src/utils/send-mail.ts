@@ -86,7 +86,9 @@ export async function sendMail({
   });
 
   recordSendLog(sendLog, {
-    id: providerMessageId,
+    // Provider-independent: two providers' message ids could collide on
+    // INSERT OR IGNORE, and the id must not change with the provider.
+    id: crypto.randomUUID(),
     templateId: source ?? null,
     recipients: [to],
     provider: provider.id,

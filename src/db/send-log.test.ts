@@ -221,3 +221,101 @@ describe("send log listReconcilable", () => {
     ).toEqual(["first", "second"]);
   });
 });
+
+describe("recordEventByProviderMessageId", () => {
+  function setupSes(status: string | null = "sent") {
+    const sendLog = setup();
+    seed(sendLog, "row", { provider: "ses", providerMessageId: "m1", status });
+    return sendLog;
+  }
+
+  test("updates status and last_event for the matching provider + message id", () => {
+    const sendLog = setupSes();
+
+    const changed = sendLog.recordEventByProviderMessageId("ses", "m1", {
+      status: "delivered",
+      lastEvent: "delivered",
+    });
+
+    expect(changed).toBe(1);
+    expect(sendLog.getSendLog("row")).toMatchObject({
+      status: "delivered",
+      lastEvent: "delivered",
+    });
+  });
+
+  test("bumps updated_at", () => {
+    const { db, sendLog } = setupWithDb();
+    seed(sendLog, "row", { provider: "ses", providerMessageId: "m1" });
+    db.run("UPDATE send_log SET updated_at = '2020-01-01T00:00:00.000Z'");
+
+    sendLog.recordEventByProviderMessageId("ses", "m1", {
+      status: "delivered",
+      lastEvent: "delivered",
+    });
+
+    expect(sendLog.getSendLog("row")!.updatedAt > "2020-01-01").toBe(true);
+  });
+
+  test("matches on provider as well as message id; no match changes 0 rows", () => {
+    const sendLog = setupSes();
+    const event = { status: "delivered", lastEvent: "delivered" };
+
+    expect(sendLog.recordEventByProviderMessageId("resend", "m1", event)).toBe(
+      0,
+    );
+    expect(sendLog.recordEventByProviderMessageId("ses", "other", event)).toBe(
+      0,
+    );
+    expect(sendLog.getSendLog("row")!.status).toBe("sent");
+  });
+
+  test("a null status takes any event", () => {
+    const sendLog = setupSes(null);
+
+    expect(
+      sendLog.recordEventByProviderMessageId("ses", "m1", {
+        status: "delivery_delayed",
+        lastEvent: "delivery_delayed",
+      }),
+    ).toBe(1);
+  });
+
+  test.each([
+    ["delivery_delayed", "delivered", true],
+    ["delivered", "delivery_delayed", false],
+    ["delivered", "bounced", true],
+    ["delivered", "complained", true],
+    ["delivered", "rejected", true],
+    ["delivered", "failed", true],
+    ["bounced", "delivered", false],
+    ["bounced", "delivery_delayed", false],
+    ["complained", "delivered", false],
+    ["delivered", "delivered", true],
+    ["bounced", "complained", true],
+    ["failed", "bounced", true],
+  ])("current %s, event %s -> applied: %p", (current, incoming, applied) => {
+    const sendLog = setupSes(current);
+
+    const changed = sendLog.recordEventByProviderMessageId("ses", "m1", {
+      status: incoming,
+      lastEvent: `${incoming}:detail`,
+    });
+
+    expect(changed).toBe(applied ? 1 : 0);
+    expect(sendLog.getSendLog("row")).toMatchObject({
+      status: applied ? incoming : current,
+    });
+  });
+
+  test("an equal-rank event overwrites last_event", () => {
+    const sendLog = setupSes("bounced");
+
+    sendLog.recordEventByProviderMessageId("ses", "m1", {
+      status: "bounced",
+      lastEvent: "bounced:Permanent",
+    });
+
+    expect(sendLog.getSendLog("row")!.lastEvent).toBe("bounced:Permanent");
+  });
+});

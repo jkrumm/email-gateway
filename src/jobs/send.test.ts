@@ -123,6 +123,24 @@ describe("createSendHandler", () => {
     expect(fake.sent).toHaveLength(0);
   });
 
+  test("a row reconciled to delivered is still skipped — any recorded provider message id counts", async () => {
+    const sendLog = setup();
+    sendLog.recordProviderResult("send-1", {
+      providerMessageId: "msg_1",
+      status: "delivered",
+      lastEvent: "delivered",
+    });
+    const fake = createFakeSendProvider();
+    const handler = createSendHandler({
+      providerByName: () => fake,
+      sendLog,
+    });
+
+    await handler(payload);
+
+    expect(fake.sent).toHaveLength(0);
+  });
+
   test("a post-send recordProviderResult failure is swallowed, not retried — the idempotency key closes the remaining gap", async () => {
     const fake = createFakeSendProvider({ providerMessageId: "msg_1" });
     const handler = createSendHandler({

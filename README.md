@@ -49,6 +49,7 @@ This project was created using `bun init` in bun v1.0.7. [Bun](https://bun.sh) i
 - `POST /fpp-daily-analytics` — bearer `SECRET_KEY`. Body: `{ votes, estimations, rooms, unique_users, page_views }`. Sends a daily analytics summary to `RECEIVER_EMAIL`.
 - `POST /sy-serendipity` — bearer `SECRET_KEY`. Body: `{ firstName, lastName, email, numberOfPeople, destination, duration, arrivalDate, departureDate, phone, message }` (all fields except `email` are nullable). Sends a charter-request email to `SY_SERENDIPITY_RECEIVER_EMAIL`; uses `SY_SERENDIPITY_FROM_EMAIL` as the sender when set, otherwise falls back to the default `sendMail` sender.
 - `GET /sy-serendipity/requests` — bearer `SY_SERENDIPITY_READ_KEY` (read-only; `SECRET_KEY` and `API_KEY` are rejected). Query: `since` (ISO timestamp, inclusive), `limit` (1–200, default 100). Returns `{ requests, total }`: every `sy-serendipity` submission in the window, all verdicts (`legit`/`spam`/`marketing`) with `delivered`, newest first, form fields only — no classifier reason/confidence/model or `jev_*`. `total` counts the window before `limit`. Unset key → 404; wrong/missing token → `401 { "message": "Unauthorized" }`. Not behind `MAIL_HOST`. Feeds the SY Serendipity admin panel (Netlify Function).
+- `POST /webhooks/ses` — public, authenticated only by the Amazon SNS message signature (see §Amazon SES). The delivery-event door for the `ses` send provider. Unset `SES_SNS_TOPIC_ARN` → 404. Not behind `MAIL_HOST`.
 
 ## Spam filter
 
@@ -111,9 +112,31 @@ bun run client:dev      # Vite dev server on 5173, proxying /api and the /app se
 
 - `COOKIE_SECRET` — optional signing secret for the session cookie. Defaults to `ADMIN_PASSWORD` when unset or shorter than 12 chars.
 - `MAIL_HOST` — optional; the only hostname allowed to serve `/app` and `/api`.
-- `SEND_PROVIDERS` — optional; which provider each template sends through, `templateId=provider,templateId=provider` (template ids from `src/emails/registry.ts`'s `TEMPLATE_IDS`). Unset or unlisted templates use `resend`, the only provider today. An unknown provider or template id fails startup.
+- `SEND_PROVIDERS` — optional; which provider each template sends through, `templateId=provider,templateId=provider` (template ids from `src/emails/registry.ts`'s `TEMPLATE_IDS`). Unset or unlisted templates use `resend`; `ses` is the other (§Amazon SES). An unknown provider or template id fails startup.
+- `SES_REGION`, `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY`, `SES_CONFIGURATION_SET` — optional; Amazon SES as the `ses` send provider (credentials are passed to the client explicitly, never from the ambient AWS chain). SES counts as configured only when all four are set; routing a template to `ses` in `SEND_PROVIDERS` without them fails startup.
+- `SES_SNS_TOPIC_ARN` — optional; the one SNS topic `POST /webhooks/ses` accepts (needs `SES_REGION`). Unset → the webhook path 404s.
 
 `bun run seed:demo` (refuses to run with `NODE_ENV=production`) seeds `$DATA_DIR`'s old `email-gateway.sqlite` with fake spam-filter submissions for exploring the Submissions page locally. `bun run import-legacy` (`scripts/import-legacy.ts`) is the one-shot legacy import — see §Storage below.
+
+## Amazon SES
+
+`ses` is a second `SendProvider` (`src/providers/ses/send.ts`), **off by default**: with the `SES_*` env unset nothing changes and every template sends through Resend. Route a template to it with `SEND_PROVIDERS=<templateId>=ses`. SES has no idempotency key, so `send_log` is the only duplicate-send protection: the `send` job skips a row that already has a provider message id.
+
+SES reports delivery by SNS: the configuration set (`SES_CONFIGURATION_SET`) has an event destination that publishes to an SNS topic, and that topic has an HTTPS subscription to `POST /webhooks/ses`. The route reads the `text/plain` body (256 KB cap, else 413), checks `TopicArn` equals `SES_SNS_TOPIC_ARN` (else 403) **before any network call**, then verifies the SNS signature (`src/providers/ses/sns-verify.ts`, signature versions 1 and 2): the signing certificate is fetched only from exactly `https://sns.<SES_REGION>.amazonaws.com/…pem` (5 s timeout, cached) and anything else is 403. A `SubscriptionConfirmation` is confirmed by a GET of its `SubscribeURL`, held to the same host check. A `Notification` is mapped to the `send_log` row with provider `ses` and that `provider_message_id`; an unmatched, stale or ignored event is logged (event type and ids only, never the payload) and answered 200 so SNS stops retrying. Rate limiting is Traefik's.
+
+Topic requirements: **raw message delivery must stay off** (the signed SNS envelope is what gets verified) and the topic's `SignatureVersion` should be `2` (SHA-256; version 1 is still accepted).
+
+| SES event                                      | `send_log.status`  | `last_event`           |
+| ---------------------------------------------- | ------------------ | ---------------------- |
+| `Delivery`                                     | `delivered`        | `delivered`            |
+| `Bounce`                                       | `bounced`          | `bounced:<bounceType>` |
+| `Complaint`                                    | `complained`       | `complained`           |
+| `Reject`                                       | `rejected`         | `rejected`             |
+| `DeliveryDelay`                                | `delivery_delayed` | `delivery_delayed`     |
+| `Rendering Failure`                            | `failed`           | `failed`               |
+| `Send`, `Open`, `Click`, `Subscription`, other | ignored            |                        |
+
+The status never regresses: `sent` < `delivery_delayed` < `delivered` < `bounced`/`complained`/`rejected`/`failed`. An event applies only if its rank is at least the row's current rank, so a late delay cannot undo `delivered`, while a bounce after `delivered` does apply. SES rows have no `status()` read-back and are not touched by `reconcile_send_log`.
 
 ## Storage
 
@@ -163,7 +186,7 @@ curl -H "Authorization: Bearer $API_KEY" https://<host>/api/templates
 curl -H "Authorization: Bearer $API_KEY" -X POST https://<host>/api/templates/fpp-sender/test-send
 ```
 
-A test-send always goes to the owner's own `RECEIVER_EMAIL` — there is no recipient override — as a `send` job, so it goes through the same idempotent, retried path as every other send; `templates.last_test_send_at` records it. `send_log` (one row per outbound send: template id, recipients, provider, status, requested by `route`/`test-send`/future `agent`) is filled in at send time and then kept current by the `reconcile_send_log` job, which re-reads the provider's own status (Resend: `emails.get()`) for any row still short of a terminal state, dispatching on `send_log.provider`. Sending is provider-neutral (`src/providers/send-port.ts`): a template is rendered once to html + text and handed to the `SendProvider` that `SEND_PROVIDERS` selects for it; a template send fixes its provider at enqueue time (stored in `send_log.provider`) and the `send` job uses that row's provider. Resend's `last_event` has 12 values; only `sent`/`queued`/`scheduled`/`delivery_delayed` are rechecked on the next pass (oldest-updated first, capped per run) — `delivered`, `opened`, `clicked`, `bounced`, `complained`, `failed`, `canceled`, and `suppressed` are all treated as terminal.
+A test-send always goes to the owner's own `RECEIVER_EMAIL` — there is no recipient override — as a `send` job, so it goes through the same idempotent, retried path as every other send; `templates.last_test_send_at` records it. `send_log` (one row per outbound send: template id, recipients, provider, status, requested by `route`/`test-send`/future `agent`) is filled in at send time and then kept current by the `reconcile_send_log` job, which re-reads the provider's own status (Resend: `emails.get()`; SES has no read-back, its events arrive by webhook) for any row still short of a terminal state, dispatching on `send_log.provider`. Sending is provider-neutral (`src/providers/send-port.ts`): a template is rendered once to html + text and handed to the `SendProvider` that `SEND_PROVIDERS` selects for it; a template send fixes its provider at enqueue time (stored in `send_log.provider`) and the `send` job uses that row's provider. Resend's `last_event` has 12 values; only `sent`/`queued`/`scheduled`/`delivery_delayed` are rechecked on the next pass (oldest-updated first, capped per run) — `delivered`, `opened`, `clicked`, `bounced`, `complained`, `failed`, `canceled`, and `suppressed` are all treated as terminal.
 
 The client's Templates page (§Client above) is a thin view over this: list, a 375/600 preview, test-send, and the per-template send log.
 

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { TEMPLATE_IDS } from "../emails/registry";
-import { parseSendProviders, resolveSendProviderName } from "./send-select";
+import {
+  parseSendProviders,
+  resolveSendProviderName,
+  sesConfigured,
+} from "./send-select";
 
 describe("parseSendProviders", () => {
   test("unset, empty and blank all mean no overrides", () => {
@@ -19,6 +23,13 @@ describe("parseSendProviders", () => {
       [TEMPLATE_IDS.fppSender]: "resend",
       [TEMPLATE_IDS.fppReceiver]: "resend",
     });
+  });
+
+  test("ses is a known provider", () => {
+    const { map, issues } = parseSendProviders(`${TEMPLATE_IDS.fppSender}=ses`);
+
+    expect(issues).toEqual([]);
+    expect(map).toEqual({ [TEMPLATE_IDS.fppSender]: "ses" });
   });
 
   test("an unknown provider name is an issue", () => {
@@ -66,5 +77,22 @@ describe("resolveSendProviderName", () => {
 
   test("an Object.prototype key is not mistaken for a listing", () => {
     expect(resolveSendProviderName("toString", {})).toBe("resend");
+  });
+});
+
+describe("sesConfigured", () => {
+  const full = {
+    SES_REGION: "eu-central-1",
+    SES_ACCESS_KEY_ID: "id",
+    SES_SECRET_ACCESS_KEY: "secret",
+    SES_CONFIGURATION_SET: "events",
+  };
+
+  test("needs region, both keys and the configuration set", () => {
+    expect(sesConfigured(full)).toBe(true);
+    expect(sesConfigured({})).toBe(false);
+    for (const key of Object.keys(full)) {
+      expect(sesConfigured({ ...full, [key]: undefined })).toBe(false);
+    }
   });
 });

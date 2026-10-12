@@ -195,3 +195,66 @@ describe("SEND_PROVIDERS env validation", () => {
     );
   });
 });
+
+describe("SES env validation", () => {
+  const ses = {
+    SES_REGION: "eu-central-1",
+    SES_ACCESS_KEY_ID: "id",
+    SES_SECRET_ACCESS_KEY: "secret",
+    SES_CONFIGURATION_SET: "events",
+  };
+
+  test("everything unset: SES is off and nothing is required", () => {
+    const parsed = envSchema.parse(base);
+
+    expect(parsed.SES_REGION).toBeUndefined();
+    expect(parsed.SES_SNS_TOPIC_ARN).toBeUndefined();
+  });
+
+  test("routing a template to ses with SES configured parses", () => {
+    expect(
+      envSchema.parse({ ...base, ...ses, SEND_PROVIDERS: "fpp-sender=ses" })
+        .SEND_PROVIDERS,
+    ).toEqual({ "fpp-sender": "ses" });
+  });
+
+  test("routing a template to ses without SES config fails startup", () => {
+    const result = envSchema.safeParse({
+      ...base,
+      SEND_PROVIDERS: "fpp-sender=ses",
+    });
+    const partial = envSchema.safeParse({
+      ...base,
+      ...ses,
+      SES_CONFIGURATION_SET: undefined,
+      SEND_PROVIDERS: "fpp-sender=ses",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["SEND_PROVIDERS"]);
+    expect(partial.success).toBe(false);
+    expect(() =>
+      parseEnv({ ...base, SEND_PROVIDERS: "fpp-sender=ses" }),
+    ).toThrow("SEND_PROVIDERS");
+  });
+
+  test("SES config without routing is fine", () => {
+    expect(envSchema.safeParse({ ...base, ...ses }).success).toBe(true);
+  });
+
+  test("a topic ARN needs the region to pin the SNS host", () => {
+    const arn = "arn:aws:sns:eu-central-1:111122223333:ses-events";
+
+    const result = envSchema.safeParse({ ...base, SES_SNS_TOPIC_ARN: arn });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["SES_REGION"]);
+    expect(
+      envSchema.safeParse({
+        ...base,
+        SES_REGION: "eu-central-1",
+        SES_SNS_TOPIC_ARN: arn,
+      }).success,
+    ).toBe(true);
+  });
+});

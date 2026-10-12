@@ -70,7 +70,7 @@ describe("sendMail", () => {
     expect(provider.sent[0]?.idempotencyKey).toBeUndefined();
     expect(rows).toEqual([
       {
-        id: "email_42",
+        id: expect.not.stringMatching(/^email_42$/),
         templateId: "fpp-sender",
         recipients: ["guest@example.com"],
         provider: "fake",

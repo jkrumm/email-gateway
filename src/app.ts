@@ -2,6 +2,7 @@ import { Elysia, type AnyElysia } from "elysia";
 import { fppRoutes } from "./routes/fpp";
 import { sySerendipityRoutes } from "./routes/sy-serendipity";
 import { sySerendipityRequestsRoutes } from "./routes/sy-serendipity-requests";
+import { sesWebhookRoutes } from "./routes/ses-webhook";
 import { webRoutes } from "./web/plugin";
 import { apiRoutes } from "./api/plugin";
 import { mcpRoutes } from "./mcp/plugin";
@@ -42,6 +43,10 @@ export function createApp<
       // Read-only admin feed, its own key (SY_SERENDIPITY_READ_KEY); never
       // behind the MAIL_HOST gate, never opened by SECRET_KEY or API_KEY.
       .use(sySerendipityRequestsRoutes)
+      // SNS -> send_log delivery events. On the public door like the send
+      // routes (SNS cannot reach the MAIL_HOST-gated surface); the SNS
+      // signature is its only auth, and unset SES_SNS_TOPIC_ARN 404s it.
+      .use(sesWebhookRoutes)
       // The mail surface (/app, /api, /mcp) sits behind MAIL_HOST; the send
       // routes above and /health never do. A mismatching Host 404s these
       // routes entirely. A `.guard()` (not a separate plugin used via `.use`,

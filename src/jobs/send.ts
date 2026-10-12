@@ -38,9 +38,12 @@ export function createSendHandler({
     // two-container deploy overlap), the runner's at-least-once retry would
     // otherwise call send() again and duplicate the customer email. A row
     // already recorded as sent means this job is already done in every way
-    // that matters — skip straight to success.
+    // that matters — skip straight to success. Any recorded provider message
+    // id counts, not only status "sent": reconcile may have advanced the row
+    // to "delivered", and a provider without an idempotency key (SES) would
+    // send the mail a second time.
     const existing = sendLog.getSendLog(input.id);
-    if (existing?.status === "sent" && existing.providerMessageId) return;
+    if (existing?.providerMessageId) return;
 
     // The provider was chosen at enqueue time (enqueueTemplateSend) and
     // stored on the row, so a SEND_PROVIDERS change never reroutes a job
