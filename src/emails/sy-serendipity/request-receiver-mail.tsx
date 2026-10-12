@@ -10,6 +10,8 @@ import {
   Text,
 } from "react-email";
 import SySerendipityLayout from "../../layouts/sy-serendipity.layout";
+import { validDate } from "../../utils/date";
+import { parseCalendarDate } from "./request-subject";
 import { colors, eyebrowStyle, fonts } from "./theme";
 
 export interface SySerendipityRequestProps {
@@ -23,16 +25,22 @@ export interface SySerendipityRequestProps {
   departureDate: string | null;
   phone: string | null;
   message: string | null;
+  // Request time; a Date, or an ISO string once the props went through JSON.
+  receivedAt?: Date | string;
 }
 
-const isIsoDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+// The form sends Date.toDateString() ("Sat Jun 12 2027"); ISO works too.
+function toUtcDate(value: string): Date | null {
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return null;
+  return new Date(Date.UTC(parsed.year, parsed.month, parsed.day));
+}
 
 function formatDate(value: string | null): string {
   if (!value || value.trim().length === 0) return "—";
   const trimmed = value.trim();
-  if (!isIsoDate(trimmed)) return trimmed;
-  const date = new Date(`${trimmed}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) return trimmed;
+  const date = toUtcDate(trimmed);
+  if (!date) return trimmed;
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "long",
@@ -44,10 +52,8 @@ function formatDate(value: string | null): string {
 function formatShortDate(
   value: string,
 ): { day: string; month: string; year: string } | null {
-  const trimmed = value.trim();
-  if (!isIsoDate(trimmed)) return null;
-  const date = new Date(`${trimmed}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) return null;
+  const date = toUtcDate(value);
+  if (!date) return null;
   const day = new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     timeZone: "UTC",
@@ -80,6 +86,26 @@ function buildPreviewDateRange(
   if (arrival) return `${arrival.day} ${arrival.month} ${arrival.year}`;
   if (departure) return `${departure.day} ${departure.month} ${departure.year}`;
   return null;
+}
+
+function formatReceivedAt(value: Date | string | undefined): string | null {
+  const date = validDate(value);
+  if (!date) return null;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone: "Europe/Madrid",
+    })
+      .formatToParts(date)
+      .map((part) => [part.type, part.value]),
+  );
+  return `${parts.weekday}, ${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute}`;
 }
 
 function buildPreview(props: SySerendipityRequestProps): string {
@@ -200,6 +226,7 @@ export default function SySerendipityRequestMail(
     departureDate,
     phone,
     message,
+    receivedAt,
   } = props;
 
   const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
@@ -216,6 +243,7 @@ export default function SySerendipityRequestMail(
     phone && phone.trim().length > 0
       ? `tel:${phone.replace(/\s+/g, "")}`
       : null;
+  const receivedLabel = formatReceivedAt(receivedAt);
   const messageLines =
     message && message.trim().length > 0 ? message.trim().split("\n") : null;
 
@@ -223,9 +251,9 @@ export default function SySerendipityRequestMail(
     <SySerendipityLayout preview={buildPreview(props)}>
       <Section style={{ padding: "0 0 32px" }}>
         <Img
-          src="https://img.jkrumm.com/rs:fill:1200:600/f:jpg/sy-serendipity/polynesia/polynesia-03.jpg"
+          src="https://img.jkrumm.com/rs:fill:1200:320/f:jpg/sy-serendipity/polynesia/polynesia-03.jpg"
           width="600"
-          height="300"
+          height="160"
           alt="Serendipity I anchored in a deep blue Marquesas bay below volcanic cliffs"
           style={{ width: "100%", height: "auto", display: "block" }}
         />
@@ -259,6 +287,19 @@ export default function SySerendipityRequestMail(
           A guest inquired about chartering Serendipity I through the request
           form on sy-serendipity.org. The details of their request are below.
         </Text>
+        {receivedLabel ? (
+          <Text
+            style={{
+              fontFamily: fonts.body,
+              fontSize: "13px",
+              lineHeight: "1.5",
+              color: colors.muted,
+              margin: "12px 0 0",
+            }}
+          >
+            {`Received ${receivedLabel} (Madrid time)`}
+          </Text>
+        ) : null}
       </Section>
 
       <Section style={{ padding: "0 0 16px" }}>
@@ -367,9 +408,10 @@ SySerendipityRequestMail.PreviewProps = {
   numberOfPeople: "6",
   destination: "Marquesas Islands",
   duration: "7 days",
-  arrivalDate: "2027-06-12",
-  departureDate: "2027-06-19",
+  arrivalDate: "Sat Jun 12 2027",
+  departureDate: "Sat Jun 19 2027",
   phone: "+1 415 555 0173",
   message:
     "We're a group of long-time sailors celebrating a milestone birthday and would love to explore the more remote anchorages if the itinerary allows.\n\nHappy to be flexible on the exact dates if that helps with planning.",
+  receivedAt: "2027-03-04T14:32:00Z",
 } satisfies SySerendipityRequestProps;

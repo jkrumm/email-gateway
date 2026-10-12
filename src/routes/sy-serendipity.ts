@@ -4,6 +4,7 @@ import { env } from "../env";
 import SySerendipityRequestMail from "../emails/sy-serendipity/request-receiver-mail";
 import { TEMPLATE_IDS } from "../emails/registry";
 import { gateSubmission } from "../spam/gate";
+import { buildRequestSubject } from "../emails/sy-serendipity/request-subject";
 import { sendMail } from "../utils/send-mail";
 
 const sySerendipityRequestBody = t.Object({
@@ -22,6 +23,7 @@ const sySerendipityRequestBody = t.Object({
 export const sySerendipityRoutes = withBearerAuth(new Elysia()).post(
   "/sy-serendipity",
   async ({ body }) => {
+    const receivedAt = new Date();
     const replyToName = [body.firstName, body.lastName]
       .filter(Boolean)
       .join(" ")
@@ -35,8 +37,8 @@ export const sySerendipityRoutes = withBearerAuth(new Elysia()).post(
           to: env.SY_SERENDIPITY_RECEIVER_EMAIL,
           from: env.SY_SERENDIPITY_FROM_EMAIL,
           replyTo: replyToName ? `${replyToName} <${body.email}>` : body.email,
-          subject: `${subjectPrefix}SY Serendipity I - Charter Request`,
-          template: SySerendipityRequestMail(body),
+          subject: `${subjectPrefix}${buildRequestSubject(body)}`,
+          template: SySerendipityRequestMail({ ...body, receivedAt }),
           source: TEMPLATE_IDS.sySerendipityRequest,
         });
       },
