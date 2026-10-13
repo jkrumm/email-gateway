@@ -17,7 +17,7 @@ going back to the owner.
 **Models:** Wave 1 ran on Fable (architecture judgment, owner dialogue).
 Implementation waves run on the `rd wave` default (Sonnet); the finishing wave
 passes `RD_WAVE_MODEL` only if the next wave's header says so. Inside a wave,
-settled edits go to `mcp__sideclaw__dispatch` (tier `implement`) or
+settled edits go to `mcp__agent-gateway__dispatch` (tier `implement`) or
 `@implementer`; the wave agent orchestrates, it does not grind.
 
 **Hard lines for every wave:** production runs on the VPS (RollHook deploys on
