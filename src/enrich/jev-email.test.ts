@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fakeJevModel, openrouterMetadata } from "../test/fake-jev";
+import { fakeJevModel, openrouterMetadata, stateOf } from "../test/fake-jev";
 import { CATEGORIES } from "./categories";
 import { judgeEmailWithJev } from "./jev-email";
 
@@ -83,7 +83,7 @@ describe("judgeEmailWithJev", () => {
       model,
     })!;
 
-    const state = calls[0]!.state as typeof payload;
+    const state = stateOf(calls[0]!) as typeof payload;
     expect(state.text).toHaveLength(6_000);
     expect(Object.keys(state).slice(0, 3)).toEqual(["direction", "from", "to"]);
     expect(state.subject).toBe("Charter");

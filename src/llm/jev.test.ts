@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { fakeJevModel, openrouterMetadata } from "../test/fake-jev";
-import type { UsageInput } from "../usage/argo";
+import { createTypeSafeAi } from "@ai-sdk/typesafe-ai";
+import { isRateLimitError } from "../jobs/rate-limit";
+import { fakeJevModel, openrouterMetadata, stateOf } from "../test/fake-jev";
+import { env } from "../env";
+import { DECISION_RATES, type UsageInput } from "../usage/argo";
 import { decide, decideShadow, jevConfigFromEnv, type JevConfig } from "./jev";
 
 const config: JevConfig = {
@@ -54,7 +57,7 @@ describe("decide", () => {
     });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.state).toEqual({ subject: "SEO audit" });
+    expect(stateOf(calls[0]!)).toEqual({ subject: "SEO audit" });
     expect(calls[0]!.questions).toEqual(questions);
     expect(calls[0]!.abortSignal).toBeInstanceOf(AbortSignal);
 
@@ -390,37 +393,225 @@ describe("jevConfigFromEnv", () => {
 });
 
 describe("decide with the ue provider", () => {
-  test("reads providerMetadata.ue and reports billing iu with the reported cost", async () => {
-    const { model } = fakeJevModel(() => ({
-      answers: { verdict: rawAnswers.verdict },
-      warnings: [],
-      usage: { inputTokens: 206, outputTokens: 0 },
-      providerMetadata: {
-        ue: {
-          answers: { verdict: { confidence: 0.9 } },
-          usage: { cost: 0.00004944 },
+  const ueConfig = (model: string): JevConfig => ({
+    provider: "ue",
+    apiKey: "k",
+    baseUrl: "https://ue.example.com/decisions/v1",
+    model,
+  });
+
+  // The real TypeSafe provider over an injected fetch: the wire format, the
+  // `typesafe` metadata key and the 429 mapping are the provider's, not ours.
+  const typesafeModel = (
+    model: string,
+    fetchImpl: (url: string, init: RequestInit) => Promise<Response>,
+  ) =>
+    createTypeSafeAi({
+      baseURL: "https://ue.example.com/decisions/v1/",
+      apiKey: "secret-key",
+      fetch: fetchImpl as typeof fetch,
+    }).decisionModel(model);
+
+  test("posts systemone with a Bearer key, reads typesafe confidence and computes the pplx cost", async () => {
+    const requests: { url: string; init: RequestInit }[] = [];
+    const model = typesafeModel("pplx-decider-v1-27b", async (url, init) => {
+      requests.push({ url, init });
+      return Response.json({
+        model: "pplx-decider-v1-27b",
+        answers: {
+          verdict: {
+            type: "choice",
+            choice: "spam",
+            probabilities: { legit: 0.02, spam: 0.98 },
+            confidence: 0.9,
+          },
         },
-      },
-    }));
+        usage: { input_tokens: 391, output_tokens: 0 },
+      });
+    });
     const reports: UsageInput[] = [];
 
     const { answers, usage } = await decide({
-      config: { provider: "ue", apiKey: "k", baseUrl: "u", model: "clef-eu" },
+      config: ueConfig("pplx-decider-v1-27b"),
       model,
-      state: "x",
+      state: { subject: "SEO audit" },
       questions: { verdict: questions.verdict },
       subTool: "decision-email",
       report: async (input) => void reports.push(input),
     });
 
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe(
+      "https://ue.example.com/decisions/v1/systemone",
+    );
+    const headers = new Headers(requests[0]!.init.headers);
+    expect(headers.get("authorization")).toBe("Bearer secret-key");
+    expect(JSON.parse(requests[0]!.init.body as string)).toEqual({
+      model: "pplx-decider-v1-27b",
+      state: { subject: "SEO audit" },
+      questions: { verdict: questions.verdict },
+    });
+
+    expect(answers.verdict.choice).toBe("spam");
     expect(answers.verdict.confidence).toBe(0.9);
-    expect(usage.costUsd).toBe(0.00004944);
+    expect(usage.costUsd).toBeCloseTo((391 * 0.04) / 1_000_000, 12);
     expect(reports[0]).toMatchObject({
-      model: "clef-eu",
+      model: "pplx-decider-v1-27b",
       billing: "iu",
       outcome: "ok",
-      cost: { usd: 0.00004944, source: "reported" },
+      cost: { usd: usage.costUsd, source: "computed" },
     });
+  });
+
+  test("a 429 surfaces as a rate-limit error after exactly one request", async () => {
+    let requests = 0;
+    const model = typesafeModel("pplx-decider-v1-27b", async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ message: "Too many requests" }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const reports: UsageInput[] = [];
+
+    const error = await decide({
+      config: ueConfig("pplx-decider-v1-27b"),
+      model,
+      state: "x",
+      questions: { verdict: questions.verdict },
+      subTool: "decision-email",
+      report: async (input) => void reports.push(input),
+    }).catch((caught: unknown) => caught);
+
+    expect(requests).toBe(1);
+    expect(isRateLimitError(error)).toBe(true);
+    expect(reports[0]).toMatchObject({ billing: "iu", outcome: "error" });
+  });
+
+  test("an answer outside the question's options is rejected by the SDK", async () => {
+    const model = typesafeModel("pplx-decider-v1-27b", async () =>
+      Response.json({
+        answers: {
+          verdict: {
+            type: "choice",
+            choice: "marketing",
+            probabilities: { marketing: 1 },
+          },
+        },
+      }),
+    );
+
+    await expect(
+      decide({
+        config: ueConfig("pplx-decider-v1-27b"),
+        model,
+        state: "x",
+        questions: { verdict: questions.verdict },
+        subTool: "decision-email",
+        report: async () => {},
+      }),
+    ).rejects.toThrow("unknown option");
+  });
+
+  test("a boolean question round-trips as noul", async () => {
+    const wire: { questions: Record<string, { type: string }> }[] = [];
+    const model = typesafeModel("pplx-decider-v1-27b", async (_url, init) => {
+      wire.push(JSON.parse(init.body as string));
+      return Response.json({
+        answers: { is_spam: { type: "noul", noul: 0.96 } },
+        usage: { input_tokens: 10, output_tokens: 1 },
+      });
+    });
+
+    const { answers } = await decide({
+      config: ueConfig("pplx-decider-v1-27b"),
+      model,
+      state: "x",
+      questions: { is_spam: questions.is_spam },
+      subTool: "decision-email",
+      report: async () => {},
+    });
+
+    expect(wire[0]!.questions.is_spam!.type).toBe("noul");
+    expect(answers.is_spam.probability).toBe(0.96);
+  });
+
+  test("a missing or null confidence falls back to the choice's probability", async () => {
+    for (const confidence of [undefined, null]) {
+      const model = typesafeModel("pplx-decider-v1-27b", async () =>
+        Response.json({
+          answers: {
+            verdict: {
+              type: "choice",
+              choice: "spam",
+              probabilities: { legit: 0.02, spam: 0.98 },
+              ...(confidence !== undefined && { confidence }),
+            },
+          },
+        }),
+      );
+
+      const { answers } = await decide({
+        config: ueConfig("pplx-decider-v1-27b"),
+        model,
+        state: "x",
+        questions: { verdict: questions.verdict },
+        subTool: "decision-email",
+        report: async () => {},
+      });
+
+      expect(answers.verdict.confidence).toBe(0.98);
+    }
+  });
+
+  test("a malformed provider response rejects and reports an error outcome", async () => {
+    const model = typesafeModel("pplx-decider-v1-27b", async () =>
+      Response.json({ model: "pplx-decider-v1-27b" }),
+    );
+    const reports: UsageInput[] = [];
+
+    await expect(
+      decide({
+        config: ueConfig("pplx-decider-v1-27b"),
+        model,
+        state: "x",
+        questions: { verdict: questions.verdict },
+        subTool: "decision-email",
+        report: async (input) => void reports.push(input),
+      }),
+    ).rejects.toThrow();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ billing: "iu", outcome: "error" });
+  });
+
+  test("warns once, naming the model, when a ue model has no rate", async () => {
+    const warnings: unknown[][] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => void warnings.push(args);
+    try {
+      const { model } = fakeJevModel(() => ({
+        answers: { verdict: rawAnswers.verdict },
+        warnings: [],
+        usage: { inputTokens: 5, outputTokens: 1 },
+      }));
+      await decide({
+        config: ueConfig("clef-eu"),
+        model,
+        state: "x",
+        questions: { verdict: questions.verdict },
+        subTool: "decision-email",
+        report: async () => {},
+      });
+    } finally {
+      console.warn = original;
+    }
+
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0]![0])).toContain("clef-eu");
+  });
+
+  test("the default DECISION_MODEL has a cost rate", () => {
+    expect(DECISION_RATES[env.DECISION_MODEL]).toBeDefined();
   });
 
   test("decision-1 reports no cost: computed at 0.042 USD per 1M input tokens", async () => {
@@ -428,7 +619,7 @@ describe("decide with the ue provider", () => {
       answers: { verdict: rawAnswers.verdict },
       warnings: [],
       usage: { inputTokens: 1_000_000, outputTokens: 3 },
-      providerMetadata: { ue: { answers: { verdict: { confidence: 0.9 } } } },
+      providerMetadata: { typesafe: { confidence: { verdict: 0.9 } } },
     }));
     const reports: UsageInput[] = [];
 

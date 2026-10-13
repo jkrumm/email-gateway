@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fakeJevModel, openrouterMetadata } from "../test/fake-jev";
+import { fakeJevModel, openrouterMetadata, stateOf } from "../test/fake-jev";
 import { judgeSubmissionWithJev } from "./jev-judge";
 
 const config = {
@@ -42,7 +42,7 @@ describe("judgeSubmissionWithJev", () => {
       model: "cloudflare/clef",
     });
     expect(outcome.latencyMs).toBeGreaterThanOrEqual(0);
-    const state = calls[0]!.state as Record<string, unknown>;
+    const state = stateOf(calls[0]!) as Record<string, unknown>;
     expect(state.source).toBe("fpp");
     expect(JSON.stringify(state.sites)).toContain("yacht charter");
   });

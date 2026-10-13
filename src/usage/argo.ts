@@ -163,20 +163,27 @@ export function computeIuCost(model: string, tokens: UsageTokens): UsageCost {
   return { usd, source: "computed" };
 }
 
-// Decision models that report no cost: USD per million input tokens, output is
-// free (Microsoft, 2026-10-09). Clef/PPLX/Jev report `usage.cost` themselves.
-const DECISION_RATES: Record<string, number> = {
-  "decision-1": 0.042,
-  "decision-1-eu": 0.042,
+// Decision models on UE, whose reported `usage.cost` the TypeSafe provider
+// drops: USD per million tokens. decision-1 output is free (Microsoft,
+// 2026-10-09); pplx-decider-v1-27b is flat across input and output (derived
+// from a live call, 2026-10-13).
+export const DECISION_RATES: Record<string, Pick<Rate, "input" | "output">> = {
+  "decision-1": { input: 0.042, output: 0 },
+  "decision-1-eu": { input: 0.042, output: 0 },
+  "pplx-decider-v1-27b": { input: 0.04, output: 0.04 },
 };
 
 export function computeDecisionCost(
   model: string,
   inputTokens: number,
+  outputTokens = 0,
 ): UsageCost {
   const rate = DECISION_RATES[model];
   if (rate === undefined) return NO_COST;
-  return { usd: (inputTokens * rate) / 1_000_000, source: "computed" };
+  return {
+    usd: (inputTokens * rate.input + outputTokens * rate.output) / 1_000_000,
+    source: "computed",
+  };
 }
 
 // AI SDK v7 reports inputTokens as the total; the uncached part lives in

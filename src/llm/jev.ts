@@ -1,13 +1,13 @@
 import {
-  experimental_evaluate as evaluate,
-  type Experimental_EvaluationAnswer as EvaluationAnswer,
-  type Experimental_EvaluationModel as EvaluationModel,
-  type Experimental_EvaluationQuestion as EvaluationQuestion,
+  experimental_decide as decideWithModel,
+  type Experimental_DecisionAnswer as DecisionAnswer,
+  type Experimental_DecisionModel as DecisionModel,
+  type Experimental_DecisionQuestion as DecisionQuestion,
 } from "ai";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { createTypeSafeAi } from "@ai-sdk/typesafe-ai";
 import { z } from "zod";
 import { env } from "../env";
-import { createUeDecisionModel } from "./ue-decision-model";
+import { createOpenRouterDecisionModel } from "./openrouter-decision-model";
 import {
   NO_COST,
   computeDecisionCost,
@@ -20,11 +20,12 @@ import {
 
 // The shadow decision lane ("Jev" is its historical name — job kinds, `jev_*`
 // columns and function names keep it). It is a decision model: typed answers
-// with calibrated probabilities, no text generation: `decision-1-eu` on IU's
-// native decision API (systemone) by default, OpenRouter's Decisions API as the
-// selectable alternative (`DECISION_PROVIDER`). It is reached through the AI SDK's
-// experimental `evaluate`, so the question and answer types are the SDK's own
-// (`choice` / `score` / `boolean`).
+// with calibrated probabilities, no text generation: `pplx-decider-v1-27b` on
+// IU's native decision API (systemone) by default, through the official
+// `@ai-sdk/typesafe-ai` provider; OpenRouter's Decisions API is the selectable
+// alternative (`DECISION_PROVIDER`). Both are reached through the AI SDK's
+// experimental `decide`, so the question and answer types are the SDK's own
+// (`choice` / `score` / `boolean`) and the SDK validates the answers.
 
 export type JevProvider = "ue" | "openrouter";
 
@@ -34,23 +35,27 @@ export interface JevConfig {
   apiKey: string;
   // UE only: decisions base URL (`<ue-origin>/decisions/v1`).
   baseUrl?: string;
-  // Decision model id: `decision-1-eu` on UE, `cloudflare/clef` on OpenRouter.
+  // Decision model id: `pplx-decider-v1-27b` on UE, `cloudflare/clef` on OpenRouter.
   model: string;
 }
 
 // Argo `billing` per provider: UE is billed to IU, OpenRouter to the owner.
 const BILLING = { ue: "iu", openrouter: "openrouter" } as const;
 
-type JevState = Parameters<typeof evaluate>[0]["state"];
+// The key each provider files its `providerMetadata` under: the TypeSafe
+// provider (which serves UE) uses `typesafe`.
+const METADATA_KEY = { ue: "typesafe", openrouter: "openrouter" } as const;
+
+type JevState = Parameters<typeof decideWithModel>[0]["state"];
 
 // Providers report per-question choice confidence in provider metadata
 // rather than on the answer itself.
-type JevAnswer<Question extends EvaluationQuestion> =
-  EvaluationAnswer<Question> extends { type: "choice" }
-    ? EvaluationAnswer<Question> & { confidence: number }
-    : EvaluationAnswer<Question>;
+type JevAnswer<Question extends DecisionQuestion> =
+  DecisionAnswer<Question> extends { type: "choice" }
+    ? DecisionAnswer<Question> & { confidence: number }
+    : DecisionAnswer<Question>;
 
-interface JevDecision<Questions extends Record<string, EvaluationQuestion>> {
+interface JevDecision<Questions extends Record<string, DecisionQuestion>> {
   answers: { [Key in keyof Questions]: JevAnswer<Questions[Key]> };
 }
 
@@ -58,17 +63,18 @@ interface JevDecision<Questions extends Record<string, EvaluationQuestion>> {
 // see src/spam/classify.ts).
 const JEV_HANG_GUARD_MS = 30 * 60_000;
 
-// `providerMetadata[provider]` (`ue` / `openrouter`): per-answer confidence and
-// the request's cost in USD. Each field degrades to undefined on a bad shape instead of failing
-// the decision.
+// `providerMetadata[METADATA_KEY[provider]]`. TypeSafe (UE) reports
+// `confidence` per question id and no cost; OpenRouter reports `answers` (per
+// question confidence) and the request's cost in USD. Each field degrades to
+// undefined on a bad shape instead of failing the decision.
+const confidenceSchema = z.number().min(0).max(1).optional().catch(undefined);
 const providerMetadataSchema = z.object({
+  confidence: z
+    .record(z.string(), confidenceSchema)
+    .optional()
+    .catch(undefined),
   answers: z
-    .record(
-      z.string(),
-      z.object({
-        confidence: z.number().min(0).max(1).optional().catch(undefined),
-      }),
-    )
+    .record(z.string(), z.object({ confidence: confidenceSchema }))
     .optional()
     .catch(undefined),
   usage: z
@@ -134,31 +140,33 @@ export function getJevConfig(): JevConfig | null {
   return jevConfigFromEnv(env);
 }
 
-function createDecisionModel(config: JevConfig): EvaluationModel {
+function createDecisionModel(config: JevConfig): DecisionModel {
   if (config.provider === "openrouter") {
-    return createOpenRouter({
+    return createOpenRouterDecisionModel({
       apiKey: config.apiKey,
+      model: config.model,
       appName: APP_NAME,
       appUrl: APP_URL,
-    }).evaluationModel(config.model);
+    });
   }
   if (!config.baseUrl) throw new Error("Jev UE config has no baseUrl");
-  return createUeDecisionModel(config.model, {
-    baseUrl: config.baseUrl,
+  return createTypeSafeAi({
+    baseURL: config.baseUrl,
     apiKey: config.apiKey,
-  });
+  }).decisionModel(config.model);
 }
 
 export interface JevUsage {
   inputTokens: number;
   outputTokens: number;
-  // Request cost in USD, reported by the provider or computed for decision-1
-  // (which reports none); null when unknown.
+  // Request cost in USD, reported by the provider (OpenRouter) or computed from
+  // `DECISION_RATES` (UE: the TypeSafe provider drops UE's cost); null when
+  // unknown.
   costUsd: number | null;
 }
 
 export async function decide<
-  const Questions extends Record<string, EvaluationQuestion>,
+  const Questions extends Record<string, DecisionQuestion>,
 >({
   state,
   questions,
@@ -172,16 +180,16 @@ export async function decide<
   // Argo `sub_tool` the call is reported under.
   subTool: Extract<UsageSubTool, `decision-${string}`>;
   config?: JevConfig | null;
-  // Injectable evaluation model (tests); defaults to the configured provider's.
-  model?: EvaluationModel;
+  // Injectable decision model (tests); defaults to the configured provider's.
+  model?: DecisionModel;
   report?: UsageReporter;
 }): Promise<JevDecision<Questions> & { usage: JevUsage }> {
   if (!config) throw new Error("Jev not configured");
 
   const startedAt = Date.now();
-  let result: Awaited<ReturnType<typeof evaluate<Questions>>>;
+  let result: Awaited<ReturnType<typeof decideWithModel<Questions>>>;
   try {
-    result = await evaluate({
+    result = await decideWithModel({
       model: model ?? createDecisionModel(config),
       state,
       questions,
@@ -206,20 +214,35 @@ export async function decide<
     throw error;
   }
 
-  const metadata = providerMetadataSchema.safeParse(
-    result.providerMetadata?.[config.provider],
+  const parsedMeta = providerMetadataSchema.safeParse(
+    result.providerMetadata?.[METADATA_KEY[config.provider]],
   );
-  const answerMetadata = metadata.success ? metadata.data.answers : undefined;
-  const reportedCostUsd =
-    (metadata.success ? metadata.data.usage?.cost : null) ?? null;
+  const providerMeta = parsedMeta.success ? parsedMeta.data : undefined;
+  // Both providers' shapes, as one per-question confidence record.
+  const confidences: Record<string, number | undefined> = {
+    ...Object.fromEntries(
+      Object.entries(providerMeta?.answers ?? {}).map(([key, answer]) => [
+        key,
+        answer.confidence,
+      ]),
+    ),
+    ...providerMeta?.confidence,
+  };
+  const reportedCostUsd = providerMeta?.usage?.cost ?? null;
   const inputTokens = result.usage.inputTokens ?? 0;
+  const outputTokens = result.usage.outputTokens ?? 0;
   const cost: UsageCost =
     reportedCostUsd !== null
       ? { usd: reportedCostUsd, source: "reported" }
-      : computeDecisionCost(config.model, inputTokens);
+      : computeDecisionCost(config.model, inputTokens, outputTokens);
+  if (cost.source === "none" && config.provider === "ue") {
+    console.warn(
+      `Jev: no reported cost and no DECISION_RATES entry for "${config.model}"`,
+    );
+  }
   const usage: JevUsage = {
     inputTokens,
-    outputTokens: result.usage.outputTokens ?? 0,
+    outputTokens,
     costUsd: cost.usd,
   };
   // The call was billed either way; a missing confidence below still makes
@@ -247,8 +270,7 @@ export async function decide<
     }
 
     const confidence =
-      answerMetadata?.[key]?.confidence ??
-      answer.probabilities?.[answer.choice];
+      confidences[key] ?? answer.probabilities?.[answer.choice];
     if (confidence === undefined) {
       reportBilled("error");
       throw new Error(`Jev returned no confidence for "${key}"`);
@@ -274,7 +296,7 @@ interface JevCallMeta {
 // usage. Returns null when the lane is disabled (missing credentials); rejects
 // on failure — the job queue (src/jobs/jev.ts) owns retries and backoff.
 export function decideShadow<
-  const Questions extends Record<string, EvaluationQuestion>,
+  const Questions extends Record<string, DecisionQuestion>,
   Fields extends object,
 >({
   state,
@@ -290,7 +312,7 @@ export function decideShadow<
   subTool: Extract<UsageSubTool, `decision-${string}`>;
   pick: (answers: JevDecision<Questions>["answers"]) => Fields;
   config?: JevConfig | null;
-  model?: EvaluationModel;
+  model?: DecisionModel;
   report?: UsageReporter;
 }): Promise<Fields & JevCallMeta> | null {
   if (!config) return null;

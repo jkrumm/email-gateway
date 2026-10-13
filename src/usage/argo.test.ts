@@ -142,7 +142,14 @@ describe("IU cost and tokens", () => {
       expect(cost.usd).toBeCloseTo(0.042, 10);
     }
     expect(computeDecisionCost("decision-1-eu", 0).usd).toBe(0);
+    expect(computeDecisionCost("decision-1-eu", 0, 1_000_000).usd).toBe(0);
     expect(computeDecisionCost("clef-eu", 1_000_000)).toEqual(NO_COST);
+  });
+
+  test("prices pplx-decider-v1-27b at 0.04 USD per 1M input and output tokens", () => {
+    const cost = computeDecisionCost("pplx-decider-v1-27b", 391, 9);
+    expect(cost.source).toBe("computed");
+    expect(cost.usd).toBeCloseTo(0.000016, 10);
   });
 
   test("input tokens are the uncached part", () => {

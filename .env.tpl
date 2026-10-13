@@ -23,11 +23,11 @@ LLM_API_KEY=op://common/anthropic/API_KEY
 LLM_MODEL=gpt-6-luna
 
 # Shadow decision lane ("Jev"). DECISION_PROVIDER=ue (default) sends
-# `decision-1-eu` to IU's decision API (systemone) on the origin of LLM_BASE_URL
-# with LLM_API_KEY; `openrouter` uses the key below with an OpenRouter model id.
+# `pplx-decider-v1-27b` to IU's decision API (systemone, via @ai-sdk/typesafe-ai)
+# on the origin of LLM_BASE_URL with LLM_API_KEY; `openrouter` uses the key below with an OpenRouter model id.
 # Missing creds -> disabled.
 # DECISION_PROVIDER=ue
-# DECISION_MODEL=decision-1-eu
+# DECISION_MODEL=pplx-decider-v1-27b
 # DECISION_BASE_URL=<ue-origin>/decisions/v1
 # DECISION_PROVIDER=openrouter
 # DECISION_MODEL=cloudflare/clef
