@@ -10,6 +10,12 @@ import FppReceiverMail, {
   type FppReceiverProps,
 } from "./fpp/fpp-receiver-mail";
 import FppSenderMail, { type FppSenderMailProps } from "./fpp/fpp-sender-mail";
+import JkrummContactReceiverMail, {
+  type JkrummContactReceiverProps,
+} from "./jkrumm/contact-receiver-mail";
+import SySerendipityConfirmationMail, {
+  type SySerendipityConfirmationProps,
+} from "./sy-serendipity/request-confirmation-mail";
 import SySerendipityRequestMail, {
   type SySerendipityRequestProps,
 } from "./sy-serendipity/request-receiver-mail";
@@ -23,6 +29,8 @@ export const TEMPLATE_IDS = {
   fppReceiver: "fpp-receiver",
   fppDailyAnalytics: "fpp-daily-analytics",
   sySerendipityRequest: "sy-serendipity-request",
+  sySerendipityConfirmation: "sy-serendipity-confirmation",
+  jkrummContactReceiver: "jkrumm-contact-receiver",
 } as const;
 
 export interface EmailTemplateEntry<Props> {
@@ -37,6 +45,8 @@ export const emailRegistry: [
   EmailTemplateEntry<FppReceiverProps>,
   EmailTemplateEntry<FppDailyAnalyticsProps>,
   EmailTemplateEntry<SySerendipityRequestProps>,
+  EmailTemplateEntry<SySerendipityConfirmationProps>,
+  EmailTemplateEntry<JkrummContactReceiverProps>,
 ] = [
   {
     id: TEMPLATE_IDS.fppSender,
@@ -61,6 +71,18 @@ export const emailRegistry: [
     name: "SY Serendipity – charter request",
     component: SySerendipityRequestMail,
     previewProps: SySerendipityRequestMail.PreviewProps,
+  },
+  {
+    id: TEMPLATE_IDS.sySerendipityConfirmation,
+    name: "SY Serendipity – request confirmation",
+    component: SySerendipityConfirmationMail,
+    previewProps: SySerendipityConfirmationMail.PreviewProps,
+  },
+  {
+    id: TEMPLATE_IDS.jkrummContactReceiver,
+    name: "jkrumm.com – contact message",
+    component: JkrummContactReceiverMail,
+    previewProps: JkrummContactReceiverMail.PreviewProps,
   },
 ];
 

@@ -152,7 +152,13 @@ const submissionsListQuery = t.Object({
   verdict: t.Optional(
     t.Union([t.Literal("legit"), t.Literal("spam"), t.Literal("marketing")]),
   ),
-  source: t.Optional(t.Union([t.Literal("fpp"), t.Literal("sy-serendipity")])),
+  source: t.Optional(
+    t.Union([
+      t.Literal("fpp"),
+      t.Literal("sy-serendipity"),
+      t.Literal("jkrumm-contact"),
+    ]),
+  ),
   delivered: t.Optional(t.String()),
   limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100 })),
   cursor: t.Optional(t.String()),

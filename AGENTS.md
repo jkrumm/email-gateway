@@ -63,6 +63,12 @@ build`, built by the Dockerfile's client stage) or the React Email preview
 
 ## Invariants that change a decision
 
+- **`POST /jkrumm-contact` is the one unauthenticated send route.** No bearer
+  (static site, no secret to hold); its guards are the `JKRUMM_CONTACT_ORIGINS`
+  allow-list (checked in `onRequest`, so a bad Origin is 403 before body
+  validation and every response carries CORS), the `website` honeypot, the spam
+  gate and Traefik's rate limit. Never add a visitor confirmation or any
+  recipient the caller controls — that would make it an open relay.
 - **Three live callers, contract frozen.** FPP web (Vercel, 7 s abort),
   fpp-analytics (VPS, 30 s), sy-serendipity (Netlify, 10 s) post to the send
   routes with the shared `SECRET_KEY`. Paths, body schemas, 2xx-on-suppressed
@@ -190,6 +196,11 @@ tests never need secrets.
   `src/app.ts` mounts routes; `src/env.ts` zod env (parsed at import — modules
   that import it are untestable by design, factor pure logic out)
 - `src/routes/{fpp,sy-serendipity}.ts` + `src/auth.ts` — the public send routes
+- `src/routes/jkrumm-contact.ts` — `createJkrummContactRoutes`, the public
+  personal-site contact route (gate source `jkrumm-contact`, migration 6 widened
+  `submissions.source`); template `src/emails/jkrumm/contact-receiver-mail.tsx`.
+  `/sy-serendipity` also sends the requester's confirmation
+  (`src/emails/sy-serendipity/request-confirmation-mail.tsx`, fail-open)
 - `src/routes/sy-serendipity-requests.ts` — `GET /sy-serendipity/requests`, the
   read-only admin feed over `mail-submissions.ts`'s `listBySource`; own key
   `SY_SERENDIPITY_READ_KEY` (unset → 404), never `SECRET_KEY`/`API_KEY`, not host-gated

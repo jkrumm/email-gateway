@@ -22,6 +22,8 @@ describe("email registry", () => {
   testEntryRendersToHtml(emailRegistry[1]);
   testEntryRendersToHtml(emailRegistry[2]);
   testEntryRendersToHtml(emailRegistry[3]);
+  testEntryRendersToHtml(emailRegistry[4]);
+  testEntryRendersToHtml(emailRegistry[5]);
 
   test("every registry entry id comes from TEMPLATE_IDS, and nothing is missing", () => {
     expect(emailRegistry.map((entry) => entry.id).sort()).toEqual(

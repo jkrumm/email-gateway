@@ -1,4 +1,5 @@
 import type { Classification, MessageLocation } from "../../../src/db/messages";
+import type { SubmissionSource } from "../../../src/db/mail-submissions";
 
 export type { Classification, MessageLocation };
 
@@ -31,7 +32,7 @@ export interface MessageList {
 export interface Submission {
   id: string;
   receivedAt: string;
-  source: "fpp" | "sy-serendipity";
+  source: SubmissionSource;
   verdict: "legit" | "spam" | "marketing";
   confidence: number;
   reason: string;

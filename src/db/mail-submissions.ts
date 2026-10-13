@@ -8,7 +8,7 @@ import type { Database } from "bun:sqlite";
 // `jobs` (kind `jev_submission`, subject_key = submission id), owned by a
 // later brief.
 
-export type SubmissionSource = "fpp" | "sy-serendipity";
+export type SubmissionSource = "fpp" | "sy-serendipity" | "jkrumm-contact";
 export type Verdict = "legit" | "spam" | "marketing";
 
 // The Jev columns as stored; null when Jev hasn't recorded anything yet for

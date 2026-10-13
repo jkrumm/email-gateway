@@ -18,6 +18,8 @@ const SITES = {
   fpp: "Free-Planning-Poker.com — a free online planning-poker tool for agile teams. Legitimate senders are users writing feedback, bug reports, feature requests, or questions about the tool.",
   "sy-serendipity":
     "SY Serendipity — a private yacht charter. Legitimate senders are prospective guests requesting a charter, even terse messages containing only an email address and travel dates.",
+  "jkrumm-contact":
+    "jkrumm.com — the personal site of its owner, a software developer. Legitimate senders are people writing to the owner personally: job offers, collaboration or partnership proposals, press enquiries, questions about his work.",
 } satisfies Record<SubmissionSource, string>;
 
 export const JEV_VERDICT_QUESTION = {
@@ -27,7 +29,7 @@ export const JEV_VERDICT_QUESTION = {
   criteria: {
     legit:
       "A genuine fpp feedback/support message, a genuine yacht charter enquiry, or a genuine personal approach to the site's owner: a job offer, a collaboration or partnership proposal, a sponsorship or advertising deal where the sender wants to pay to advertise on or sponsor the site, or a press enquiry.",
-    spam: "Generic spam, phishing, scams, crypto/investment/trading schemes, adult content, gibberish, or content unrelated to both sites and their owner.",
+    spam: "Generic spam, phishing, scams, crypto/investment/trading schemes, adult content, gibberish, or content unrelated to the sites and their owner.",
     marketing:
       'Unsolicited marketing/outreach pitches, e.g. SEO audits, "I noticed your website...", offers to improve your Google ranking, link-building, backlinks, guest post exchanges, website redesign offers, lead-generation services, app/web development outsourcing pitches, or offers to sell traffic, ads, reviews, or followers.',
   },

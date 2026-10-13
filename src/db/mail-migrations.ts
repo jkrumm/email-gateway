@@ -223,6 +223,45 @@ const MAIL_MIGRATIONS: Migration[] = [
       DROP INDEX IF EXISTS idx_send_log_provider_updated_at;
     `,
   },
+  {
+    // Wave 16: POST /jkrumm-contact adds a third submission source. SQLite
+    // cannot alter a CHECK, so rebuild `submissions` (nothing references it by
+    // foreign key; jev_submission jobs point at it by subject_key only).
+    version: 6,
+    up: `
+      CREATE TABLE submissions_new (
+        id TEXT PRIMARY KEY,
+        received_at TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('fpp', 'sy-serendipity', 'jkrumm-contact')),
+        verdict TEXT NOT NULL CHECK (verdict IN ('legit', 'spam', 'marketing')),
+        confidence REAL NOT NULL,
+        reason TEXT NOT NULL,
+        model TEXT,
+        delivered INTEGER NOT NULL,
+        submission TEXT NOT NULL,
+        llm_latency_ms INTEGER,
+        jev_verdict TEXT,
+        jev_confidence REAL,
+        jev_probabilities TEXT,
+        jev_latency_ms INTEGER,
+        jev_model TEXT,
+        jev_error TEXT
+      );
+      INSERT INTO submissions_new (
+        id, received_at, source, verdict, confidence, reason, model, delivered,
+        submission, llm_latency_ms, jev_verdict, jev_confidence,
+        jev_probabilities, jev_latency_ms, jev_model, jev_error
+      ) SELECT
+        id, received_at, source, verdict, confidence, reason, model, delivered,
+        submission, llm_latency_ms, jev_verdict, jev_confidence,
+        jev_probabilities, jev_latency_ms, jev_model, jev_error
+      FROM submissions;
+      DROP TABLE submissions;
+      ALTER TABLE submissions_new RENAME TO submissions;
+      CREATE INDEX idx_submissions_received_at ON submissions (received_at);
+      CREATE INDEX idx_submissions_verdict ON submissions (verdict);
+    `,
+  },
 ];
 
 export function runMailMigrations(

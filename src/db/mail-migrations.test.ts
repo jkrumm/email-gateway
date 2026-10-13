@@ -151,3 +151,54 @@ describe("mail migration 5", () => {
     expect(indexNames()).not.toContain("idx_send_log_provider_updated_at");
   });
 });
+
+describe("mail migration 6", () => {
+  const insert = (db: Database, id: string, source: string) =>
+    db.run(
+      `INSERT INTO submissions (id, received_at, source, verdict, confidence, reason, delivered, submission)
+       VALUES (?, '2026-10-13T08:00:00.000Z', ?, 'legit', 1, 'ok', 1, '{}')`,
+      [id, source],
+    );
+
+  test("keeps existing submissions and accepts the jkrumm-contact source", () => {
+    const db = new Database(":memory:");
+    runMailMigrations(db, { targetVersion: 5 });
+    insert(db, "old", "fpp");
+    expect(() => insert(db, "new", "jkrumm-contact")).toThrow();
+
+    runMailMigrations(db);
+
+    insert(db, "new", "jkrumm-contact");
+    const rows = db
+      .query<{ id: string }, []>("SELECT id FROM submissions ORDER BY id")
+      .all();
+    expect(rows.map((row) => row.id)).toEqual(["new", "old"]);
+    expect(() => insert(db, "bad", "other")).toThrow();
+  });
+
+  test("round-trips every column", () => {
+    const db = new Database(":memory:");
+    runMailMigrations(db, { targetVersion: 5 });
+    db.run(
+      `INSERT INTO submissions VALUES ('r', '2026-10-13T08:00:00.000Z', 'fpp', 'spam', 0.8, 'why', 'mod', 0, '{"a":1}', 42, 'legit', 0.6, '{"legit":0.6}', 7, 'jev', 'err')`,
+    );
+    const before = db.query("SELECT * FROM submissions").all();
+
+    runMailMigrations(db);
+
+    expect(db.query("SELECT * FROM submissions").all()).toEqual(before);
+  });
+
+  test("recreates the submissions indexes", () => {
+    const db = new Database(":memory:");
+    runMailMigrations(db);
+    const names = db
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'submissions'",
+      )
+      .all()
+      .map((row) => row.name);
+    expect(names).toContain("idx_submissions_received_at");
+    expect(names).toContain("idx_submissions_verdict");
+  });
+});

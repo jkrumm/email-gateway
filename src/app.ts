@@ -1,5 +1,6 @@
 import { Elysia, type AnyElysia } from "elysia";
 import { fppRoutes } from "./routes/fpp";
+import { jkrummContactRoutes } from "./routes/jkrumm-contact";
 import { sySerendipityRoutes } from "./routes/sy-serendipity";
 import { sySerendipityRequestsRoutes } from "./routes/sy-serendipity-requests";
 import { sesWebhookRoutes } from "./routes/ses-webhook";
@@ -45,6 +46,9 @@ export function createApp<
       .get("/health", () => ({ ok: true }))
       .use(fppRoutes)
       .use(sySerendipityRoutes)
+      // Public (no bearer): the static personal site cannot hold a secret.
+      // Origin allow-list + honeypot + spam gate instead; see the route.
+      .use(jkrummContactRoutes)
       // Read-only admin feed, its own key (SY_SERENDIPITY_READ_KEY); never
       // behind the MAIL_HOST gate, never opened by SECRET_KEY or API_KEY.
       .use(sySerendipityRequestsRoutes)
