@@ -48,9 +48,11 @@ export const envSchema = z
     SY_SERENDIPITY_FROM_EMAIL: z.string().optional(),
     // POST /jkrumm-contact is public (the personal site is static and cannot
     // hold SECRET_KEY): comma-separated allowed browser Origins. Unset -> the
-    // route 404s. JKRUMM_CONTACT_FROM_EMAIL falls back to the default sender.
+    // route 404s. JKRUMM_CONTACT_FROM_EMAIL falls back to the default sender;
+    // JKRUMM_CONTACT_RECEIVER_EMAIL falls back to RECEIVER_EMAIL.
     JKRUMM_CONTACT_ORIGINS: z.string().optional(),
     JKRUMM_CONTACT_FROM_EMAIL: z.string().optional(),
+    JKRUMM_CONTACT_RECEIVER_EMAIL: z.email().optional(),
     PORT: z.coerce.number().default(3010),
 
     LLM_BASE_URL: z.string().optional(),

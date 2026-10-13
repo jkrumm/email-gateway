@@ -1,5 +1,8 @@
-import { Heading, Text, Section } from "react-email";
-import FppLayout from "../../layouts/fpp.layout";
+import { Heading, Section, Text } from "react-email";
+import JkrummLayout, {
+  jkrummColors,
+  jkrummFonts,
+} from "../../layouts/jkrumm.layout";
 
 export interface JkrummContactReceiverProps {
   name: string | null;
@@ -12,29 +15,57 @@ export default function JkrummContactReceiverMail({
   email,
   message,
 }: JkrummContactReceiverProps) {
+  const sender = name ?? "Someone";
+
   return (
-    <FppLayout>
+    <JkrummLayout preview={`New message from ${sender} via jkrumm.com`}>
       <Section>
-        <Heading as="h2">New message from jkrumm.com</Heading>
-        <Text>Someone used the contact form on the personal site.</Text>
+        <Heading
+          as="h1"
+          style={{
+            fontSize: "22px",
+            lineHeight: "1.25",
+            letterSpacing: "-0.02em",
+            fontWeight: 600,
+            margin: "0 0 12px",
+          }}
+        >
+          New message from jkrumm.com
+        </Heading>
+        <Text style={{ fontWeight: 600, margin: 0 }}>
+          {name ?? "No name given"}
+        </Text>
+        <Text
+          style={{ fontFamily: jkrummFonts.mono, fontSize: "14px", margin: 0 }}
+        >
+          {email}
+        </Text>
       </Section>
+
       <Section
         style={{
-          marginTop: 30,
+          backgroundColor: jkrummColors.panel,
+          borderLeft: `3px solid ${jkrummColors.accent}`,
+          borderRadius: "4px",
+          padding: "4px 20px",
+          margin: "24px 0 0",
         }}
       >
-        <Heading as="h3">Name</Heading>
-        <Text>{name}</Text>
+        <Text style={{ whiteSpace: "pre-wrap", margin: "12px 0" }}>
+          {message}
+        </Text>
       </Section>
-      <Section>
-        <Heading as="h3">Email</Heading>
-        <Text>{email}</Text>
-      </Section>
-      <Section>
-        <Heading as="h3">Message</Heading>
-        <Text style={{ whiteSpace: "pre-wrap" }}>{message}</Text>
-      </Section>
-    </FppLayout>
+
+      <Text
+        style={{
+          fontSize: "13px",
+          color: jkrummColors.muted,
+          margin: "20px 0 0",
+        }}
+      >
+        Reply to this mail to answer {sender} directly.
+      </Text>
+    </JkrummLayout>
   );
 }
 

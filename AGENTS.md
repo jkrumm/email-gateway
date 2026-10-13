@@ -68,7 +68,9 @@ build`, built by the Dockerfile's client stage) or the React Email preview
   allow-list (checked in `onRequest`, so a bad Origin is 403 before body
   validation and every response carries CORS), the `website` honeypot, the spam
   gate and Traefik's rate limit. Never add a visitor confirmation or any
-  recipient the caller controls — that would make it an open relay.
+  recipient the caller controls — that would make it an open relay. The
+  receiver is `JKRUMM_CONTACT_RECEIVER_EMAIL` (e.g. `hello@<your-domain>`),
+  falling back to `RECEIVER_EMAIL`; `JKRUMM_CONTACT_FROM_EMAIL` is the sender.
 - **Three live callers, contract frozen.** FPP web (Vercel, 7 s abort),
   fpp-analytics (VPS, 30 s), sy-serendipity (Netlify, 10 s) post to the send
   routes with the shared `SECRET_KEY`. Paths, body schemas, 2xx-on-suppressed

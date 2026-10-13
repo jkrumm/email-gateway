@@ -40,7 +40,7 @@ export function createJkrummContactRoutes({
   origins = splitCsv(env.JKRUMM_CONTACT_ORIGINS) ?? [],
   gate = gateSubmission,
   send = sendMail,
-  receiverEmail = env.RECEIVER_EMAIL,
+  receiverEmail = env.JKRUMM_CONTACT_RECEIVER_EMAIL ?? env.RECEIVER_EMAIL,
   fromEmail = env.JKRUMM_CONTACT_FROM_EMAIL,
 }: JkrummContactDeps = {}) {
   const allowed = new Set(origins);
