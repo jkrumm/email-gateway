@@ -1365,7 +1365,48 @@ prod healthy; a test-send still lands `delivered`.
 - Not done: no stuck-`sent` send_log observability (SES has no read-back);
   fallow dupes in the `src/db` repos pre-exist.
 
-## Wave 16 — SES-native features <!-- status: active -->
+## Wave 16 — Contact routes: SY confirmation + public personal contact <!-- status: active -->
+
+Two owner asks (2026-10-13), both gateway-side. The account is still in the SES
+sandbox: mail to unverified recipients is rejected until production access is
+granted, so anything addressed to a visitor fails until then. Every such send
+stays fail-open (the route returns 2xx, the receiver copy still goes out),
+exactly like `fppSender` in `src/routes/fpp.ts`.
+
+- [ ] **SY Serendipity customer confirmation.** On `POST /sy-serendipity`, after
+      the gate delivers the receiver mail, also send the requester a
+      confirmation at `body.email` (from `SY_SERENDIPITY_FROM_EMAIL`), new
+      template + `TEMPLATE_IDS` entry, `.catch` like `fppSender`, never for a
+      submission the gate held as spam. Copy matches the site's language and
+      tone (read `~/SourceRoot/sy-serendipity`'s request page; do not edit that
+      repo). Request body schema unchanged — the contract stays frozen.
+- [ ] **`POST /jkrumm-contact`, public.** The personal site is static (nginx, no
+      server), so it cannot hold `SECRET_KEY`: this route takes no bearer.
+      Contract (already handed to the site's agent — keep it exactly):
+      JSON `{ name: string|null (≤200), email: string (email), message: string
+      (1..5000), website: string (honeypot, optional) }` → 200
+      `{ message }`; 422 on validation; 403 when `Origin` is not in the
+      allow-list. Protections: `Origin` allow-list from a new env var (CORS
+      preflight answered for those origins only, `POST` + `Content-Type`), a
+      non-empty honeypot returns 200 and sends nothing, the existing spam gate
+      (`gateSubmission`, new source), Traefik's rate limit already on the
+      router. Sends one receiver mail to `RECEIVER_EMAIL` with `replyTo` the
+      visitor, a new template in the FPP receiver's style; no visitor
+      confirmation. Not host-gated (like the other send routes). Any `source`
+      CHECK constraint → append-only migration.
+- [ ] Env + docs in the same commit: README (endpoint, env), AGENTS.md
+      (file map, invariants: the first unauthenticated send route), `src/env.ts`,
+      `src/test/setup.ts`. New prod env goes into `~/SourceRoot/vps`
+      (`apps/email-gateway/.env.tpl` / `compose.yml`, placeholders for
+      domains/addresses in tracked files); never `make <app>-up`, a push
+      redeploys.
+- [ ] Gate (`make check`), `/review`, commit, push, then verify on prod: a
+      `/jkrumm-contact` POST with an allowed `Origin` lands `delivered` in
+      `send_log`; a wrong `Origin` gets 403; the honeypot sends nothing.
+
+**Left behind:**
+
+## Wave 17 — SES-native features <!-- status: pending -->
 
 Shape with the owner first; his direction is quoted in D5's amendment:
 analytics over the send log and SES events, a UI for the SES integration,
