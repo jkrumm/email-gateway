@@ -324,7 +324,8 @@ describe("decideShadow", () => {
 describe("jevConfigFromEnv", () => {
   const base = {
     DECISION_PROVIDER: "ue" as const,
-    DECISION_MODEL: "clef-eu",
+    DECISION_MODEL: "decision-1-eu",
+    DECISION_BASE_URL: undefined,
     OPENROUTER_API_KEY: undefined,
     LLM_BASE_URL: "https://ue.example.com/openai/v1",
     LLM_API_KEY: "ue-key",
@@ -334,8 +335,8 @@ describe("jevConfigFromEnv", () => {
     expect(jevConfigFromEnv(base)).toEqual({
       provider: "ue",
       apiKey: "ue-key",
-      baseUrl: "https://ue.example.com/openai/v1",
-      model: "clef-eu",
+      baseUrl: "https://ue.example.com/decisions/v1",
+      model: "decision-1-eu",
     });
     expect(jevConfigFromEnv({ ...base, LLM_API_KEY: undefined })).toBeNull();
     expect(jevConfigFromEnv({ ...base, LLM_BASE_URL: undefined })).toBeNull();
@@ -347,6 +348,27 @@ describe("jevConfigFromEnv", () => {
         OPENROUTER_API_KEY: "or-key",
       }),
     ).toBeNull();
+  });
+
+  test("DECISION_BASE_URL overrides the derived decisions base", () => {
+    expect(
+      jevConfigFromEnv({
+        ...base,
+        DECISION_BASE_URL: "https://decisions.example.com/decisions/v1",
+      }),
+    ).toMatchObject({ baseUrl: "https://decisions.example.com/decisions/v1" });
+    // The override alone is enough for the base URL; the key is still needed.
+    expect(
+      jevConfigFromEnv({
+        ...base,
+        LLM_BASE_URL: undefined,
+        DECISION_BASE_URL: "https://decisions.example.com/decisions/v1",
+      }),
+    ).toMatchObject({ baseUrl: "https://decisions.example.com/decisions/v1" });
+  });
+
+  test("an unparseable LLM_BASE_URL disables the ue lane", () => {
+    expect(jevConfigFromEnv({ ...base, LLM_BASE_URL: "not a url" })).toBeNull();
   });
 
   test("openrouter needs OPENROUTER_API_KEY only", () => {
@@ -398,6 +420,36 @@ describe("decide with the ue provider", () => {
       billing: "iu",
       outcome: "ok",
       cost: { usd: 0.00004944, source: "reported" },
+    });
+  });
+
+  test("decision-1 reports no cost: computed at 0.042 USD per 1M input tokens", async () => {
+    const { model } = fakeJevModel(() => ({
+      answers: { verdict: rawAnswers.verdict },
+      warnings: [],
+      usage: { inputTokens: 1_000_000, outputTokens: 3 },
+      providerMetadata: { ue: { answers: { verdict: { confidence: 0.9 } } } },
+    }));
+    const reports: UsageInput[] = [];
+
+    const { usage } = await decide({
+      config: {
+        provider: "ue",
+        apiKey: "k",
+        baseUrl: "u",
+        model: "decision-1-eu",
+      },
+      model,
+      state: "x",
+      questions: { verdict: questions.verdict },
+      subTool: "decision-email",
+      report: async (input) => void reports.push(input),
+    });
+
+    expect(usage.costUsd).toBeCloseTo(0.042, 10);
+    expect(reports[0]).toMatchObject({
+      model: "decision-1-eu",
+      cost: { usd: usage.costUsd, source: "computed" },
     });
   });
 

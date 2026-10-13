@@ -59,13 +59,16 @@ export const envSchema = z
     LLM_API_KEY: z.string().optional(),
     LLM_MODEL: z.string().optional(),
     // Shadow decision lane ("Jev", historical name). `ue` (default) is IU's
-    // Unified Endpoint via LLM_BASE_URL + LLM_API_KEY; `openrouter` is the
+    // native decision API (`decision-1-eu`, POST <origin>/decisions/v1/systemone)
+    // via LLM_API_KEY, its origin taken from LLM_BASE_URL unless
+    // DECISION_BASE_URL overrides the whole decisions base; `openrouter` is the
     // OpenRouter Decisions API via OPENROUTER_API_KEY (use an OpenRouter model
     // id such as `cloudflare/clef` with it). Missing creds -> the lane is
     // disabled everywhere.
     DECISION_PROVIDER: z.enum(["ue", "openrouter"]).default("ue"),
     OPENROUTER_API_KEY: z.string().optional(),
-    DECISION_MODEL: z.string().default("clef-eu"),
+    DECISION_BASE_URL: z.string().url().optional(),
+    DECISION_MODEL: z.string().default("decision-1-eu"),
     // Usage reporting to Argo (src/usage/argo.ts). Either unset -> no-op.
     ARGO_USAGE_URL: z.string().optional(),
     ARGO_API_SECRET: z.string().optional(),

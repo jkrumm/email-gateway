@@ -10,16 +10,14 @@ import type {
 } from "@ai-sdk/provider";
 import { z } from "zod";
 
-// An AI SDK evaluation model over IU's Unified Endpoint (UE): a chat-completions
-// request whose `response_format` is `{ type: "questions" }`. The answers come
-// back as a JSON string in `choices[0].message.content`. AI SDK question types
-// map `boolean` -> `noul` (P(yes)), `choice` -> `choice`, `score` -> `score`.
-// Sampling params are deliberately never sent.
+// An AI SDK evaluation model over IU's Unified Endpoint (UE) native decision
+// API: `POST <decisions base>/systemone` with `{ model, state, questions }` and
+// a Bearer key. The answers come back as a real object under `answers`. AI SDK
+// question types map `boolean` -> `noul` (P(yes)), `choice` -> `choice`,
+// `score` -> `score`. No sampling params, `messages` or `stream` are sent, and
+// no `rounding` is declared: decision-1 does not round its probabilities.
 
 export const UE_PROVIDER = "ue";
-
-// UE rounds probabilities and scores to four decimals.
-const UE_ROUNDING = { probabilityDecimals: 4, scoreDecimals: 4 };
 
 const probability = z.number().finite().min(0).max(1);
 const probabilities = z.record(z.string(), probability);
@@ -42,16 +40,15 @@ const ueAnswerSchema = z.discriminatedUnion("type", [
 ]);
 type UeAnswer = z.infer<typeof ueAnswerSchema>;
 
+// `usage.cost` (USD) is reported by Clef/PPLX/Jev, not by decision-1.
 const ueResponseSchema = z.object({
   id: z.string().optional(),
   model: z.string().optional(),
-  choices: z
-    .array(z.object({ message: z.object({ content: z.string() }) }))
-    .min(1),
+  answers: z.record(z.string(), ueAnswerSchema),
   usage: z
     .object({
-      prompt_tokens: z.number().optional(),
-      completion_tokens: z.number().optional(),
+      input_tokens: z.number().optional(),
+      output_tokens: z.number().optional(),
       cost: z.number().optional(),
     })
     .optional(),
@@ -121,7 +118,7 @@ function toAnswerMetadata(answer: UeAnswer) {
 }
 
 export interface UeDecisionModelSettings {
-  // Chat-completions base, e.g. `https://…/openai/v1`.
+  // Decisions base, e.g. `<ue-origin>/decisions/v1`.
   baseUrl: string;
   apiKey: string;
   // Injectable for tests.
@@ -132,7 +129,7 @@ export function createUeDecisionModel(
   modelId: string,
   { baseUrl, apiKey, fetch: fetchImpl = fetch }: UeDecisionModelSettings,
 ): EvaluationModelV4 {
-  const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const url = `${baseUrl.replace(/\/+$/, "")}/systemone`;
 
   return {
     specificationVersion: "v4",
@@ -148,22 +145,13 @@ export function createUeDecisionModel(
     }: CallOptions): Promise<EvaluationModelV4Result> {
       const body = {
         model: modelId,
-        stream: false,
-        messages: [
-          {
-            role: "user",
-            content: typeof state === "string" ? state : JSON.stringify(state),
-          },
-        ],
-        response_format: {
-          type: "questions",
-          questions: Object.fromEntries(
-            Object.entries(questions).map(([id, question]) => [
-              id,
-              toUeQuestion(question),
-            ]),
-          ),
-        },
+        state,
+        questions: Object.fromEntries(
+          Object.entries(questions).map(([id, question]) => [
+            id,
+            toUeQuestion(question),
+          ]),
+        ),
       };
 
       const response = await fetchImpl(url, {
@@ -171,7 +159,7 @@ export function createUeDecisionModel(
         headers: {
           ...headers,
           "content-type": "application/json",
-          "api-key": apiKey,
+          authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
         signal: abortSignal,
@@ -199,32 +187,21 @@ export function createUeDecisionModel(
         });
       }
 
-      const content = envelope.data.choices[0]!.message.content;
-      const parsed = z
-        .record(z.string(), ueAnswerSchema)
-        .safeParse(safeJson(content));
-      if (!parsed.success) {
-        throw new InvalidResponseDataError({
-          data: content,
-          message: `UE decision answers are malformed: ${parsed.error.message}`,
-        });
-      }
-
+      const parsed = envelope.data.answers;
       const answers: Record<string, EvaluationModelV4Answer> = {};
       const answerMetadata: Record<string, { confidence?: number }> = {};
       for (const [id, question] of Object.entries(questions)) {
-        const answer = parsed.data[id];
-        answers[id] = toEvaluationAnswer(id, question, answer, content);
+        const answer = parsed[id];
+        answers[id] = toEvaluationAnswer(id, question, answer, rawBody);
         answerMetadata[id] = answer ? toAnswerMetadata(answer) : {};
       }
 
       const { usage } = envelope.data;
       return {
         answers,
-        rounding: UE_ROUNDING,
         usage: usage && {
-          inputTokens: usage.prompt_tokens,
-          outputTokens: usage.completion_tokens,
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
         },
         warnings: [],
         providerMetadata: {

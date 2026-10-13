@@ -10,6 +10,7 @@ import { env } from "../env";
 import { createUeDecisionModel } from "./ue-decision-model";
 import {
   NO_COST,
+  computeDecisionCost,
   ZERO_TOKENS,
   reportUsage,
   type UsageCost,
@@ -19,9 +20,9 @@ import {
 
 // The shadow decision lane ("Jev" is its historical name — job kinds, `jev_*`
 // columns and function names keep it). It is a decision model: typed answers
-// with calibrated probabilities, no text generation, today Cloudflare's Clef:
-// `clef-eu` on IU's Unified Endpoint by default, OpenRouter's Decisions API as
-// the selectable alternative (`DECISION_PROVIDER`). It is reached through the AI SDK's
+// with calibrated probabilities, no text generation: `decision-1-eu` on IU's
+// native decision API (systemone) by default, OpenRouter's Decisions API as the
+// selectable alternative (`DECISION_PROVIDER`). It is reached through the AI SDK's
 // experimental `evaluate`, so the question and answer types are the SDK's own
 // (`choice` / `score` / `boolean`).
 
@@ -31,9 +32,9 @@ export interface JevConfig {
   provider: JevProvider;
   // API key for the provider (UE: LLM_API_KEY, OpenRouter: OPENROUTER_API_KEY).
   apiKey: string;
-  // UE only: chat-completions base URL (LLM_BASE_URL).
+  // UE only: decisions base URL (`<ue-origin>/decisions/v1`).
   baseUrl?: string;
-  // Decision model id: `clef-eu` on UE, `cloudflare/clef` on OpenRouter.
+  // Decision model id: `decision-1-eu` on UE, `cloudflare/clef` on OpenRouter.
   model: string;
 }
 
@@ -83,16 +84,29 @@ type JevEnv = Pick<
   typeof env,
   | "DECISION_PROVIDER"
   | "DECISION_MODEL"
+  | "DECISION_BASE_URL"
   | "OPENROUTER_API_KEY"
   | "LLM_BASE_URL"
   | "LLM_API_KEY"
 >;
+
+// The decision API lives beside the chat API on the same origin
+// (`<origin>/openai/v1` -> `<origin>/decisions/v1`).
+function decisionsBaseFrom(llmBaseUrl: string | undefined): string | null {
+  if (!llmBaseUrl) return null;
+  try {
+    return `${new URL(llmBaseUrl).origin}/decisions/v1`;
+  } catch {
+    return null;
+  }
+}
 
 // Pure over its env argument so provider selection is testable (`env` itself
 // is parsed at import).
 export function jevConfigFromEnv({
   DECISION_PROVIDER,
   DECISION_MODEL,
+  DECISION_BASE_URL,
   OPENROUTER_API_KEY,
   LLM_BASE_URL,
   LLM_API_KEY,
@@ -105,11 +119,13 @@ export function jevConfigFromEnv({
       model: DECISION_MODEL,
     };
   }
-  if (!LLM_BASE_URL || !LLM_API_KEY) return null;
+  if (!LLM_API_KEY) return null;
+  const baseUrl = DECISION_BASE_URL ?? decisionsBaseFrom(LLM_BASE_URL);
+  if (!baseUrl) return null;
   return {
     provider: "ue",
     apiKey: LLM_API_KEY,
-    baseUrl: LLM_BASE_URL,
+    baseUrl,
     model: DECISION_MODEL,
   };
 }
@@ -136,7 +152,8 @@ function createDecisionModel(config: JevConfig): EvaluationModel {
 export interface JevUsage {
   inputTokens: number;
   outputTokens: number;
-  // Request cost in USD as reported by the provider; null when absent.
+  // Request cost in USD, reported by the provider or computed for decision-1
+  // (which reports none); null when unknown.
   costUsd: number | null;
 }
 
@@ -193,14 +210,18 @@ export async function decide<
     result.providerMetadata?.[config.provider],
   );
   const answerMetadata = metadata.success ? metadata.data.answers : undefined;
-  const costUsd = (metadata.success ? metadata.data.usage?.cost : null) ?? null;
-  const usage: JevUsage = {
-    inputTokens: result.usage.inputTokens ?? 0,
-    outputTokens: result.usage.outputTokens ?? 0,
-    costUsd,
-  };
+  const reportedCostUsd =
+    (metadata.success ? metadata.data.usage?.cost : null) ?? null;
+  const inputTokens = result.usage.inputTokens ?? 0;
   const cost: UsageCost =
-    costUsd === null ? NO_COST : { usd: costUsd, source: "reported" };
+    reportedCostUsd !== null
+      ? { usd: reportedCostUsd, source: "reported" }
+      : computeDecisionCost(config.model, inputTokens);
+  const usage: JevUsage = {
+    inputTokens,
+    outputTokens: result.usage.outputTokens ?? 0,
+    costUsd: cost.usd,
+  };
   // The call was billed either way; a missing confidence below still makes
   // the decision a failure, so the outcome is settled only after the loop.
   const reportBilled = (outcome: "ok" | "error") =>

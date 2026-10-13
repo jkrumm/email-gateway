@@ -22,11 +22,13 @@ LLM_BASE_URL=op://common/anthropic/OPENAI_BASE_URL
 LLM_API_KEY=op://common/anthropic/API_KEY
 LLM_MODEL=gpt-6-luna
 
-# Shadow decision lane ("Jev"). DECISION_PROVIDER=ue (default) sends `clef-eu`
-# to the IU endpoint above (LLM_BASE_URL/LLM_API_KEY); `openrouter` uses the
-# key below with an OpenRouter model id. Missing creds -> disabled.
+# Shadow decision lane ("Jev"). DECISION_PROVIDER=ue (default) sends
+# `decision-1-eu` to IU's decision API (systemone) on the origin of LLM_BASE_URL
+# with LLM_API_KEY; `openrouter` uses the key below with an OpenRouter model id.
+# Missing creds -> disabled.
 # DECISION_PROVIDER=ue
-# DECISION_MODEL=clef-eu
+# DECISION_MODEL=decision-1-eu
+# DECISION_BASE_URL=<ue-origin>/decisions/v1
 # DECISION_PROVIDER=openrouter
 # DECISION_MODEL=cloudflare/clef
 OPENROUTER_API_KEY=op://common/openrouter/API_KEY

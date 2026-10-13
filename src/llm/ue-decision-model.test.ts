@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { APICallError, experimental_evaluate as evaluate } from "ai";
 import { createUeDecisionModel } from "./ue-decision-model";
 
-const BASE_URL = "https://ue.example.com/openai/v1";
+const BASE_URL = "https://ue.example.com/decisions/v1";
 
 const questions = {
   spam: { type: "boolean", instructions: "Is this spam?" },
@@ -18,21 +18,13 @@ const questions = {
   },
 } as const;
 
-function envelope(content: unknown, usage?: object) {
+function envelope(answers: unknown, usage?: object) {
   return {
-    choices: [
-      {
-        message: {
-          content:
-            typeof content === "string" ? content : JSON.stringify(content),
-        },
-      },
-    ],
+    answers,
     model: "Cloudflare/clef",
     usage: usage ?? {
-      completion_tokens: 0,
-      prompt_tokens: 206,
-      total_tokens: 206,
+      input_tokens: 206,
+      output_tokens: 0,
       cost: 0.00004944,
     },
   };
@@ -74,11 +66,11 @@ const json = (body: unknown, status = 200) =>
   });
 
 describe("createUeDecisionModel", () => {
-  test("posts the questions wire format with the api-key header", async () => {
+  test("posts the systemone wire format with a Bearer header", async () => {
     const { fetchImpl, requests } = fakeFetch(() =>
       json(envelope(verifiedContent)),
     );
-    const model = createUeDecisionModel("clef-eu", {
+    const model = createUeDecisionModel("decision-1-eu", {
       baseUrl: `${BASE_URL}/`,
       apiKey: "secret",
       fetch: fetchImpl,
@@ -92,24 +84,19 @@ describe("createUeDecisionModel", () => {
     });
 
     expect(requests).toHaveLength(1);
-    expect(requests[0]!.url).toBe(`${BASE_URL}/chat/completions`);
+    expect(requests[0]!.url).toBe(`${BASE_URL}/systemone`);
     const headers = requests[0]!.init.headers as Record<string, string>;
-    expect(headers["api-key"]).toBe("secret");
+    expect(headers.authorization).toBe("Bearer secret");
+    expect(headers["api-key"]).toBeUndefined();
 
     const body = JSON.parse(requests[0]!.init.body as string);
     expect(body).toEqual({
-      model: "clef-eu",
-      stream: false,
-      messages: [
-        { role: "user", content: JSON.stringify({ subject: "SEO audit" }) },
-      ],
-      response_format: {
-        type: "questions",
-        questions: {
-          spam: { type: "noul", instructions: "Is this spam?" },
-          kind: questions.kind,
-          rating: questions.rating,
-        },
+      model: "decision-1-eu",
+      state: { subject: "SEO audit" },
+      questions: {
+        spam: { type: "noul", instructions: "Is this spam?" },
+        kind: questions.kind,
+        rating: questions.rating,
       },
     });
   });
@@ -118,7 +105,7 @@ describe("createUeDecisionModel", () => {
     const { fetchImpl, requests } = fakeFetch(() =>
       json(envelope({ spam: { noul: 0.5, type: "noul" } })),
     );
-    const model = createUeDecisionModel("clef-eu", {
+    const model = createUeDecisionModel("decision-1-eu", {
       baseUrl: BASE_URL,
       apiKey: "k",
       fetch: fetchImpl,
@@ -132,12 +119,15 @@ describe("createUeDecisionModel", () => {
     });
 
     const body = JSON.parse(requests[0]!.init.body as string);
-    expect(body.messages[0].content).toBe("plain text");
+    expect(body.state).toBe("plain text");
+    expect(body).not.toHaveProperty("messages");
+    expect(body).not.toHaveProperty("response_format");
+    expect(body).not.toHaveProperty("stream");
   });
 
   test("parses noul, choice and score answers, usage and cost", async () => {
     const { fetchImpl } = fakeFetch(() => json(envelope(verifiedContent)));
-    const model = createUeDecisionModel("clef-eu", {
+    const model = createUeDecisionModel("decision-1-eu", {
       baseUrl: BASE_URL,
       apiKey: "k",
       fetch: fetchImpl,
@@ -172,13 +162,16 @@ describe("createUeDecisionModel", () => {
     });
   });
 
-  test("omits cost metadata when UE reports none", async () => {
+  test("omits cost metadata when UE reports none (decision-1)", async () => {
     const { fetchImpl } = fakeFetch(() =>
-      json({
-        choices: envelope({ spam: { noul: 0.1, type: "noul" } }).choices,
-      }),
+      json(
+        envelope(
+          { spam: { noul: 0.1, type: "noul" } },
+          { input_tokens: 133, output_tokens: 3 },
+        ),
+      ),
     );
-    const model = createUeDecisionModel("clef-eu", {
+    const model = createUeDecisionModel("decision-1-eu", {
       baseUrl: BASE_URL,
       apiKey: "k",
       fetch: fetchImpl,
@@ -192,13 +185,15 @@ describe("createUeDecisionModel", () => {
     });
 
     expect(result.providerMetadata?.ue).toEqual({ answers: { spam: {} } });
+    expect(result.usage.inputTokens).toBe(133);
+    expect(result.usage.outputTokens).toBe(3);
   });
 
   test("a 429 throws an APICallError carrying statusCode and responseBody", async () => {
     const { fetchImpl } = fakeFetch(() =>
       json({ error: "Capacity temporarily exceeded" }, 429),
     );
-    const model = createUeDecisionModel("clef-eu", {
+    const model = createUeDecisionModel("decision-1-eu", {
       baseUrl: BASE_URL,
       apiKey: "k",
       fetch: fetchImpl,
@@ -220,7 +215,7 @@ describe("createUeDecisionModel", () => {
 
   test("a 400 is not retryable", async () => {
     const { fetchImpl } = fakeFetch(() => json({ error: "bad" }, 400));
-    const model = createUeDecisionModel("clef-eu", {
+    const model = createUeDecisionModel("decision-1-eu", {
       baseUrl: BASE_URL,
       apiKey: "k",
       fetch: fetchImpl,
@@ -241,7 +236,7 @@ describe("createUeDecisionModel", () => {
     const run = (response: () => Response) => {
       const { fetchImpl } = fakeFetch(response);
       return evaluate({
-        model: createUeDecisionModel("clef-eu", {
+        model: createUeDecisionModel("decision-1-eu", {
           baseUrl: BASE_URL,
           apiKey: "k",
           fetch: fetchImpl,
@@ -252,14 +247,20 @@ describe("createUeDecisionModel", () => {
       });
     };
 
-    test("content that is not JSON", async () => {
-      await expect(run(() => json(envelope("not json")))).rejects.toThrow(
-        "malformed",
+    test("a body that is not JSON", async () => {
+      await expect(run(() => new Response("not json"))).rejects.toThrow(
+        "unexpected shape",
       );
     });
 
-    test("a body without choices", async () => {
-      await expect(run(() => json({ choices: [] }))).rejects.toThrow(
+    test("a body without answers", async () => {
+      await expect(run(() => json({ model: "x" }))).rejects.toThrow(
+        "unexpected shape",
+      );
+    });
+
+    test("answers that are not an object", async () => {
+      await expect(run(() => json(envelope("not an object")))).rejects.toThrow(
         "unexpected shape",
       );
     });
@@ -297,7 +298,7 @@ describe("createUeDecisionModel", () => {
             }),
           ),
         ),
-      ).rejects.toThrow("malformed");
+      ).rejects.toThrow("unexpected shape");
     });
   });
 });

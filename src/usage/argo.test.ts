@@ -3,6 +3,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { generateText, type LanguageModelUsage } from "ai";
 import {
   buildUsageRecord,
+  computeDecisionCost,
   computeIuCost,
   createUsageReporter,
   NO_COST,
@@ -132,6 +133,16 @@ describe("IU cost and tokens", () => {
     expect(cost.source).toBe("computed");
     expect(cost.usd).toBeCloseTo(0.1 + 0.5 + 0.01, 10);
     expect(computeIuCost("mystery-model", ZERO_TOKENS)).toEqual(NO_COST);
+  });
+
+  test("prices decision-1 and decision-1-eu per input token, others are none", () => {
+    for (const model of ["decision-1", "decision-1-eu"]) {
+      const cost = computeDecisionCost(model, 1_000_000);
+      expect(cost.source).toBe("computed");
+      expect(cost.usd).toBeCloseTo(0.042, 10);
+    }
+    expect(computeDecisionCost("decision-1-eu", 0).usd).toBe(0);
+    expect(computeDecisionCost("clef-eu", 1_000_000)).toEqual(NO_COST);
   });
 
   test("input tokens are the uncached part", () => {
