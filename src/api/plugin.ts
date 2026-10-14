@@ -60,6 +60,7 @@ import {
   type AgentApi,
 } from "../services/agent-api";
 import { enqueueTemplateSend } from "../services/template-send";
+import { log } from "../telemetry/log";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60_000;
 
@@ -677,7 +678,7 @@ export function createApiRoutes({
             cursor: query.cursor,
           });
         } catch (error) {
-          console.warn("ses suppressions list failed", {
+          log.warn("ses suppressions list failed", {
             reason: error instanceof Error ? error.name : "unknown",
           });
           set.status = 502;
@@ -696,7 +697,7 @@ export function createApiRoutes({
             set.status = 404;
             return { error: "not_found" };
           }
-          console.warn("ses suppression removal failed", {
+          log.warn("ses suppression removal failed", {
             reason: error instanceof Error ? error.name : "unknown",
           });
           set.status = 502;

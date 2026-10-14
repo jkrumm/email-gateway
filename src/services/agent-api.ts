@@ -26,6 +26,7 @@ import { draftReply as defaultDraftReply } from "../llm/draft-reply";
 import { getLlmConfig } from "../llm/model";
 import { findTemplateEntry } from "../emails/registry";
 import { enqueueTemplateSend } from "./template-send";
+import { log } from "../telemetry/log";
 
 // The one service layer both doors call (docs/architecture.md §Agent API: "Both
 // doors share one service layer; neither talks to SQLite or a provider
@@ -318,7 +319,7 @@ export function createAgentApi({
           fetchedAt: new Date().toISOString(),
         };
       } catch (error) {
-        console.error("Draft reply body read failed", { error });
+        log.error("Draft reply body read failed", { error });
         return { ok: false as const, error: "read_failed" as const };
       }
     }

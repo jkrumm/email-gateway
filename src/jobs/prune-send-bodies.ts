@@ -7,6 +7,7 @@ import {
 } from "../db/mail-index";
 import type { JobQueue } from "../db/jobs";
 import type { JobHandler } from "./runner";
+import { log } from "../telemetry/log";
 
 // The `prune_send_bodies` job kind: deletes the rendered mail kept for review
 // once it is older than SEND_BODY_RETENTION_MS (30 days), and the send_events
@@ -26,10 +27,10 @@ export function createPruneSendBodiesHandler({
       now().getTime() - SEND_BODY_RETENTION_MS,
     ).toISOString();
     const pruned = sendBodies.pruneOlderThan(cutoff);
-    if (pruned > 0) console.log(`[jobs] pruned ${pruned} stored send bodies`);
+    if (pruned > 0) log.info(`[jobs] pruned ${pruned} stored send bodies`);
     const prunedEvents = sendLog.pruneEventsOlderThan(cutoff);
     if (prunedEvents > 0) {
-      console.log(`[jobs] pruned ${prunedEvents} send events`);
+      log.info(`[jobs] pruned ${prunedEvents} send events`);
     }
   };
 }

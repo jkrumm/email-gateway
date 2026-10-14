@@ -9,6 +9,7 @@ import { getLlmConfig } from "../llm/model";
 import { getJevConfig } from "../llm/jev";
 import type { MailProvider, MessageRef } from "../providers/port";
 import type { JobHandler } from "./runner";
+import { log } from "../telemetry/log";
 
 export interface ClassifyJobPayload {
   key: string;
@@ -38,7 +39,7 @@ export function createClassifyHandler({
 
     const message = messages.getMessage(key);
     if (!message) {
-      console.log(`[classify] message ${key} not found — skipping`);
+      log.info(`[classify] message ${key} not found — skipping`);
       return;
     }
 
@@ -47,7 +48,7 @@ export function createClassifyHandler({
     // instead of burning through the job's attempt budget with no operator
     // signal beyond logs.
     if (!isLlmConfigured()) {
-      console.log("[classify] LLM not configured — skipping");
+      log.info("[classify] LLM not configured — skipping");
       return;
     }
 
@@ -108,7 +109,7 @@ export function createClassifyHandler({
         // table write failure here must not re-run the live IMAP read and
         // LLM call just to retry this same-process enqueue. Log and move on;
         // gate.ts's equivalent enqueue call is wrapped the same way.
-        console.error(`[classify] failed to enqueue jev_message for ${key}`, {
+        log.error(`[classify] failed to enqueue jev_message for ${key}`, {
           error,
         });
       }

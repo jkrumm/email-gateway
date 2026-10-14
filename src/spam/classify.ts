@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { SubmissionSource, Verdict } from "../db/mail-submissions";
 import { getLlmConfig, getModel, getModelId } from "../llm/model";
 import { trackLlmCall } from "../usage/argo";
+import { log } from "../telemetry/log";
 
 const SUPPRESS_CONFIDENCE_THRESHOLD = 0.7;
 
@@ -79,7 +80,7 @@ export async function classifySubmission({
     return { ...result.output, model: getModelId(resolvedModel) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("Spam classification failed", { source, error });
+    log.error("Spam classification failed", { source, error });
     return {
       verdict: "legit",
       confidence: 0,

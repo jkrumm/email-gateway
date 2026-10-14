@@ -5,6 +5,7 @@ import type { Capabilities, FlagChange, Mailbox, SearchQuery } from "../port";
 import { validDate } from "../../utils/date";
 import { normalizePem } from "../../utils/pem";
 import { addressList } from "./address";
+import { log } from "../../telemetry/log";
 
 // Low-level session/mailbox shape the sync algorithm (src/sync/imap-sync.ts)
 // consumes directly: bounded UID-window listing, batched raw-source fetches,
@@ -619,7 +620,7 @@ export function createImapflowPort(
       // Without a listener an emitted socket error (including timeouts)
       // would crash the process.
       client.on("error", (error: unknown) => {
-        console.error("[imap] connection error", { error });
+        log.error("[imap] connection error", { error });
       });
 
       try {
@@ -658,7 +659,7 @@ export function createIdleClient(
     buildClientOptions(config, { disableAutoIdle: false }),
   );
   client.on("error", (error: unknown) => {
-    console.error("[imap] idle connection error", { error });
+    log.error("[imap] idle connection error", { error });
   });
   return client;
 }

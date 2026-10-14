@@ -13,6 +13,8 @@ import { accountIdFor, ingestMailbox } from "./ingest";
 import type { ImapConfig } from "../providers/imap/adapter";
 import type { MailProvider } from "../providers/port";
 import type { JobHandler } from "../jobs/runner";
+import { log } from "../telemetry/log";
+import { errorName } from "../telemetry/otel-format";
 
 // The mailboxes each configured provider ingests, keyed by provider — one
 // account's mailbox list must never be applied to the other. Proton ingests
@@ -81,6 +83,10 @@ export async function runSyncTick({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(`${accountIdFor(provider)}: ${message}`);
+      log.error("[sync] provider failed", {
+        provider: provider.id,
+        error: errorName(error),
+      });
     }
   }
 
@@ -100,11 +106,10 @@ export function createSyncTickHandler({
 } = {}): JobHandler {
   return async () => {
     const result = await runSyncTick({ enqueueClassify });
+    // Count only: the error strings embed folder paths and account ids. The
+    // per-mailbox detail is the role-based imap.sync span / sync.tick event.
     if (result.errors.length > 0) {
-      console.error(
-        `sync_tick completed with ${result.errors.length} error(s)`,
-        result.errors,
-      );
+      log.error(`sync_tick completed with ${result.errors.length} error(s)`);
     }
   };
 }

@@ -18,6 +18,9 @@ import {
 } from "../sync/composition";
 import { configuredProviders } from "../providers/from-env";
 import type { MailProvider, Unsubscribe } from "../providers/port";
+import { log } from "../telemetry/log";
+import { errorName } from "../telemetry/otel-format";
+import { mailboxRole } from "../utils/mailboxes";
 
 // Boot composition for every async source (docs/architecture.md §Jobs),
 // replacing src/sync/index.ts's startSync, src/enrich/worker.ts's
@@ -82,7 +85,7 @@ export function startJobSystem(): void {
     void runner
       .drain()
       .catch((error) => {
-        console.error("[jobs] drain failed", { error });
+        log.error("[jobs] drain failed", { error });
       })
       .finally(() => {
         draining = false;
@@ -112,7 +115,7 @@ export function startJobSystem(): void {
         try {
           enqueue();
         } catch (error) {
-          console.error(`[jobs] failed to enqueue ${kind}`, { error });
+          log.error(`[jobs] failed to enqueue ${kind}`, { error });
         }
       };
       guarded();
@@ -141,7 +144,7 @@ async function wireProviderIdle(
   if (!provider.watch) return [];
 
   const capabilities = await provider.capabilities().catch((error) => {
-    console.error("[imap] failed to read capabilities for watch()", {
+    log.error("[imap] failed to read capabilities for watch()", {
       error,
     });
     return null;
@@ -162,10 +165,12 @@ async function wireProviderIdle(
     try {
       const unsubscribe = await provider.watch(mailbox, onChange);
       unsubscribes.push(unsubscribe);
-      console.log(`[imap] watching ${mailbox} for changes (IDLE)`);
+      log.info(`[imap] watching ${mailboxRole(mailbox)} for changes (IDLE)`);
     } catch (error) {
-      console.error(`[imap] failed to start watch() on ${mailbox}`, {
-        error,
+      // Role and error name only: the raw folder path and the error text can
+      // carry personal data, and this line is shipped as a telemetry record.
+      log.error(`[imap] failed to start watch() on ${mailboxRole(mailbox)}`, {
+        error: errorName(error),
       });
     }
   }
@@ -184,7 +189,7 @@ async function wireImapIdle(enqueueSyncTick: () => void): Promise<void> {
   // with no signal at all.
   results.forEach((result, index) => {
     if (result.status === "rejected") {
-      console.error(
+      log.error(
         `[imap] wireProviderIdle failed unexpectedly for ${providers[index]!.id}`,
         { error: result.reason },
       );

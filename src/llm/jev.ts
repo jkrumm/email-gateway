@@ -13,10 +13,13 @@ import {
   computeDecisionCost,
   ZERO_TOKENS,
   reportUsage,
+  startLlmCall,
   type UsageCost,
   type UsageReporter,
   type UsageSubTool,
+  type UsageTokens,
 } from "../usage/argo";
+import { log } from "../telemetry/log";
 
 // The shadow decision lane ("Jev" is its historical name — job kinds, `jev_*`
 // columns and function names keep it). It is a decision model: typed answers
@@ -187,6 +190,7 @@ export async function decide<
   if (!config) throw new Error("Jev not configured");
 
   const startedAt = Date.now();
+  const call = startLlmCall(subTool, config.model);
   let result: Awaited<ReturnType<typeof decideWithModel<Questions>>>;
   try {
     result = await decideWithModel({
@@ -202,6 +206,7 @@ export async function decide<
       abortSignal: AbortSignal.timeout(JEV_HANG_GUARD_MS),
     });
   } catch (error) {
+    call.finish({ outcome: "error", error });
     void report({
       subTool,
       model: config.model,
@@ -236,7 +241,7 @@ export async function decide<
       ? { usd: reportedCostUsd, source: "reported" }
       : computeDecisionCost(config.model, inputTokens, outputTokens);
   if (cost.source === "none" && config.provider === "ue") {
-    console.warn(
+    log.warn(
       `Jev: no reported cost and no DECISION_RATES entry for "${config.model}"`,
     );
   }
@@ -247,20 +252,23 @@ export async function decide<
   };
   // The call was billed either way; a missing confidence below still makes
   // the decision a failure, so the outcome is settled only after the loop.
-  const reportBilled = (outcome: "ok" | "error") =>
+  const billedTokens: UsageTokens = {
+    ...ZERO_TOKENS,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+  };
+  const reportBilled = (outcome: "ok" | "error") => {
+    call.finish({ outcome, tokens: billedTokens });
     void report({
       subTool,
       model: config.model,
       billing: BILLING[config.provider],
       outcome,
       durationMs: Date.now() - startedAt,
-      tokens: {
-        ...ZERO_TOKENS,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-      },
+      tokens: billedTokens,
       cost,
     }).catch(() => {});
+  };
 
   const answers: Record<string, unknown> = {};
   for (const [key, answer] of Object.entries(result.answers)) {

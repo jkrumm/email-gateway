@@ -10,6 +10,7 @@ import { apiRoutes } from "./api/plugin";
 import { mcpRoutes } from "./mcp/plugin";
 import { env } from "./env";
 import { hostAllowed } from "./host-gate";
+import { httpTelemetry } from "./telemetry/http";
 
 export interface CreateAppOptions<
   TWeb extends AnyElysia = typeof webRoutes,
@@ -39,6 +40,8 @@ export function createApp<
 
   return (
     new Elysia()
+      // First, so its global hooks span every route below (skips /health).
+      .use(httpTelemetry())
       .get("/", () => "Hello Elysia")
       // Public (no bearer, reachable on the tunnel) for Uptime Kuma's liveness
       // check — never lists accounts here, that's real-address PII. The

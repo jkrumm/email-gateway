@@ -4,6 +4,7 @@ import { CATEGORIES } from "./categories";
 import { getLlmConfig, getModel, getModelId } from "../llm/model";
 import { plainText } from "../utils/html";
 import { trackLlmCall } from "../usage/argo";
+import { log } from "../telemetry/log";
 
 export type EmailDirection = "inbound" | "outbound";
 
@@ -116,7 +117,7 @@ export async function enrichEmail({
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("Email enrichment failed", { error });
+    log.error("Email enrichment failed", { error });
     return { ok: false, error: message };
   }
 }

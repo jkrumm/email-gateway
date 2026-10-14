@@ -9,6 +9,7 @@ import {
   snsPublicKeyPem,
   subscriptionConfirmation,
 } from "../test/sns-fixture";
+import { _test } from "../telemetry/otel";
 import { createSesWebhookRoutes } from "./ses-webhook";
 
 function setup({
@@ -227,6 +228,22 @@ describe("POST /webhooks/ses", () => {
 
     expect(row().status).toBe("bounced");
     expect(row().lastEvent).toBe("bounced:Permanent");
+  });
+
+  test("a Bounce emits a ses.event with type names only", async () => {
+    const { postEvent } = setup();
+    const capture = _test.capture();
+
+    await postEvent("Bounce", { bounce: { bounceType: "Permanent" } });
+    capture.stop();
+
+    const event = capture.logs.find((l) => l.body.stringValue === "ses.event")!;
+    expect(event.severityText).toBe("WARN");
+    expect(event.attributes).toEqual([
+      { key: "event_type", value: { stringValue: "Bounce" } },
+      { key: "bounce_type", value: { stringValue: "Permanent" } },
+    ]);
+    expect(JSON.stringify(capture.logs)).not.toContain("ses-msg-1");
   });
 
   test("every mapped event lands in the send_events timeline", async () => {

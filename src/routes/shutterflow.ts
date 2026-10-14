@@ -7,6 +7,7 @@ import ShutterflowCodeMail, {
 } from "../emails/shutterflow/code-mail";
 import { TEMPLATE_IDS } from "../emails/registry";
 import { sendMail } from "../utils/send-mail";
+import { log } from "../telemetry/log";
 
 const shutterflowBody = t.Object({
   kind: t.Union(SHUTTERFLOW_CODE_KINDS.map((kind) => t.Literal(kind))),
@@ -66,7 +67,7 @@ export function createShutterflowRoutes({
           });
         } catch (error) {
           // Never the error object: a render failure could embed the props (the code).
-          console.error("Shutterflow code send failed", {
+          log.error("Shutterflow code send failed", {
             to: body.to,
             reason: error instanceof Error ? error.name : "unknown",
           });

@@ -1,5 +1,6 @@
 import type { SendBodiesRepo } from "../db/send-bodies";
 import { findTemplateEntry, templateSecrets } from "../emails/registry";
+import { log } from "../telemetry/log";
 
 const REDACTED = "[redacted]";
 
@@ -47,7 +48,7 @@ export function storeSendBody({
     // Fail closed: a template that names secrets but yields none (props
     // missing or unreadable) cannot be redacted, so it is not stored.
     if (entry?.redact && secrets.length === 0) {
-      console.error("Skipped storing send body: no secrets to redact", {
+      log.error("Skipped storing send body: no secrets to redact", {
         id: sendId,
         templateId,
       });
@@ -55,7 +56,7 @@ export function storeSendBody({
     }
     sendBodies.save({ sendId, ...redactRendered(rendered, secrets) });
   } catch (error) {
-    console.error("Failed to store send body", {
+    log.error("Failed to store send body", {
       id: sendId,
       reason: error instanceof Error ? error.name : "unknown",
     });

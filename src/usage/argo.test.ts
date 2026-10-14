@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { MockLanguageModelV4 } from "ai/test";
 import { generateText, type LanguageModelUsage } from "ai";
+import { _test } from "../telemetry/otel";
 import {
   buildUsageRecord,
   computeDecisionCost,
@@ -180,6 +181,71 @@ describe("IU cost and tokens", () => {
         },
       }).inputTokens,
     ).toBe(100);
+  });
+});
+
+describe("trackLlmCall telemetry", () => {
+  test("a call is an llm.<lane> client span plus an llm.call event, without prompt or output", async () => {
+    const capture = _test.capture();
+    await trackLlmCall({
+      subTool: "spam-classify",
+      model: "gpt-6-luna",
+      run: async () => ({
+        text: "SECRET-OUTPUT",
+        usage: {
+          inputTokens: 10,
+          outputTokens: 4,
+          inputTokenDetails: {},
+          outputTokenDetails: {},
+        } as never,
+      }),
+      report: async () => {},
+    });
+    capture.stop();
+
+    const [span] = capture.spans;
+    expect(span?.name).toBe("llm.classify");
+    expect(span?.kind).toBe(3);
+    expect(span?.attributes).toContainEqual({
+      key: "llm.model",
+      value: { stringValue: "gpt-6-luna" },
+    });
+    expect(span?.attributes).toContainEqual({
+      key: "outcome",
+      value: { stringValue: "ok" },
+    });
+    expect(span?.attributes).toContainEqual({
+      key: "llm.input_tokens",
+      value: { intValue: "10" },
+    });
+    const event = capture.logs.find((l) => l.body.stringValue === "llm.call");
+    expect(event?.attributes).toContainEqual({
+      key: "lane",
+      value: { stringValue: "classify" },
+    });
+    expect(JSON.stringify([capture.spans, capture.logs])).not.toContain(
+      "SECRET-OUTPUT",
+    );
+  });
+
+  test("a failure is an error span carrying only the error name", async () => {
+    const capture = _test.capture();
+    await trackLlmCall({
+      subTool: "decision-email",
+      model: "m",
+      run: async () => {
+        throw new TypeError("prompt echoed: hello@example.com");
+      },
+      report: async () => {},
+    }).catch(() => {});
+    capture.stop();
+
+    expect(capture.spans[0]?.name).toBe("llm.jev");
+    expect(capture.spans[0]?.status).toEqual({ code: 2, message: "TypeError" });
+    expect(JSON.stringify(capture.spans)).not.toContain("hello@example.com");
+    expect(
+      capture.logs.find((l) => l.body.stringValue === "llm.call")?.severityText,
+    ).toBe("WARN");
   });
 });
 

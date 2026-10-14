@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { errorMessage } from "../utils/error";
+import { log } from "../telemetry/log";
 
 // Generalises src/db/jev-queue.ts's claim/backoff/stale-takeover semantics
 // into one table for every async kind (classify, jev_message, jev_submission,
@@ -158,6 +159,8 @@ export interface JobClaim {
   id: string;
   kind: string;
   payload: unknown;
+  // Attempts already spent before this run (0 on the first).
+  attempts: number;
   // The `claimed_at` value this claim last wrote. Completing, failing or
   // renewing the job only takes effect while that value is still on it, so a
   // claim lost to a stale takeover can't clobber the new owner's work.
@@ -333,6 +336,7 @@ export function createJobQueue({
     id: string;
     kind: string;
     payloadJson: string;
+    attempts: number;
     claimToken: string;
   } | null {
     // `kinds: []` means "restrict to no kinds", i.e. match nothing — distinct
@@ -351,7 +355,13 @@ export function createJobQueue({
 
     const row = db
       .query<
-        { id: string; kind: string; payload_json: string; claimToken: string },
+        {
+          id: string;
+          kind: string;
+          payload_json: string;
+          attempts: number;
+          claimToken: string;
+        },
         (string | number)[]
       >(
         `UPDATE jobs SET claimed_at = ?, claimed_by = ?
@@ -364,7 +374,7 @@ export function createJobQueue({
            ORDER BY created_at ASC
            LIMIT 1
          )
-         RETURNING id, kind, payload_json, claimed_at AS claimToken`,
+         RETURNING id, kind, payload_json, attempts, claimed_at AS claimToken`,
       )
       .get(nowIso, claimedBy, nowIso, staleBefore, ...(kinds ?? []));
 
@@ -373,6 +383,7 @@ export function createJobQueue({
       id: row.id,
       kind: row.kind,
       payloadJson: row.payload_json,
+      attempts: row.attempts,
       claimToken: row.claimToken,
     };
   }
@@ -390,6 +401,7 @@ export function createJobQueue({
           id: claimed.id,
           kind: claimed.kind,
           payload: JSON.parse(claimed.payloadJson),
+          attempts: claimed.attempts,
           claimToken: claimed.claimToken,
         };
       } catch (error) {
@@ -409,7 +421,7 @@ export function createJobQueue({
           // the two-container deploy overlap) — log and stop here rather
           // than looping forever or throwing out of claimNext. The row
           // stays claimed and is retried once that claim goes stale.
-          console.error(
+          log.error(
             `[jobs] failed to record corrupt payload_json for job ${claimed.id}`,
             { error: writeError },
           );

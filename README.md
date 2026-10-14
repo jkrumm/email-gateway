@@ -159,6 +159,41 @@ The hourly `ses_account` job stores SES's `GetAccount` (sending enabled, enforce
 
 `bun scripts/ses-provision.ts [--create-key] <domain>…` converges the AWS side through the `aws` CLI (profile `jk-ses`, `eu-central-1`; override with `AWS_PROFILE`/`AWS_REGION`): per domain an SES identity with Easy DKIM 2048 and a custom MAIL FROM on `ses.<domain>`, the configuration set `email-gateway` with an SNS event destination (send, delivery, bounce, complaint, reject, delivery delay), the SNS topic `email-gateway-ses` (publish allowed only for that configuration set), and the IAM user `email-gateway-ses` scoped to `ses:SendEmail`/`SendRawEmail` on exactly those identities and the set. Re-running is safe. It prints the DNS records to add (three DKIM CNAMEs, the MAIL FROM MX and SPF TXT) and never applies them. `--create-key` mints the access key only if the user has none and prints it once. The HTTPS subscription to `/webhooks/ses` is created after the gateway is deployed with `SES_SNS_TOPIC_ARN` set (the confirmation would 404 before that), with raw message delivery off.
 
+## Observability
+
+OpenTelemetry traces and trace-linked logs for `service.name` `email-gateway`, exported to the ClickStack collector as OTLP/HTTP JSON (`<endpoint>/v1/traces`, `/v1/logs`). SDK-free (`src/telemetry/`, plain `fetch`, batched every 2 s, flushed on SIGTERM/SIGINT); there is no metrics exporter, so counters are structured log events that ClickStack tiles and alerts query. Off — no network at all — unless the endpoint is set.
+
+| Env var                       | Meaning                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector base URL (e.g. `http://<collector>:4319`). Unset → exporter off (dev, tests). |
+| `OTEL_EXPORTER_OTLP_HEADERS`  | Optional `key=value,key=value` headers (a bearer for a public ingest).                  |
+| `OTEL_SERVICE_NAME`           | Default `email-gateway`.                                                                |
+| `OTEL_RESOURCE_ATTRIBUTES`    | Optional `key=value,key=value` extra resource attributes (e.g. `host.name=...`).        |
+
+Spans (all attributes are names, outcomes and counts — never an address, subject, body, auth code, message id, header, query string or prompt; a failed span's status text and its `exception` event carry the error name only, never the message or stack):
+
+| Span                                                                                 | Kind   | Attributes                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<METHOD> <route pattern>`                                                           | server | `http.request.method`, `http.route` (pattern, omitted when unmatched), `http.response.status_code`; 5xx → error status, 4xx unset; `/health` is skipped                         |
+| `job.<kind>`                                                                         | root   | `job.kind`, `job.attempt`, `outcome` = `ok` / `retry` / `error` (out of attempts) / `rate_limited`; error status on any handler failure; trace id = the job id when UUID-shaped |
+| `ses.send`                                                                           | client | `email.template`, `email.source`, `outcome`; on failure the error name only                                                                                                     |
+| `imap.sync`                                                                          | client | `mail.provider`, `mail.mailbox` (role: `inbox`, `spam`, `sent`, ... else `other`), `outcome`, `sync.fetched`, `sync.ingested`                                                   |
+| `llm.classify` / `llm.enrich` / `llm.jev` / `llm.thread-summary` / `llm.draft-reply` | client | `llm.model`, `outcome`, `llm.latency_ms`, `llm.input_tokens`, `llm.output_tokens`, `llm.cache_read_tokens`; on failure the error name only                                      |
+
+Log events (OTLP log records, body = name, no stdout line; stamped with the active trace and span id):
+
+| Event              | Attributes                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `send.result`      | `template`, `source`, `status` (`sent` / `failed`)                                                            |
+| `ses.event`        | `event_type`, `bounce_type` (warn for bounce / complaint / reject)                                            |
+| `job.failed`       | `kind`, `outcome` (`retry` / `error`), `attempt`                                                              |
+| `job.rate_limited` | `kind`, `rate_limits`                                                                                         |
+| `sync.tick`        | `provider`, `mailbox` (role), `outcome`, `fetched`, `ingested` — a stalled sync is the absence of `ok` events |
+| `llm.call`         | `lane`, `outcome`, `latency_ms`                                                                               |
+| `ses.account`      | `sending_enabled`, `sent_24h`, `max_24h_send`, `headroom_pct`                                                 |
+
+Mailboxes appear in spans, events and the IMAP log lines by role only. Every `log.info/warn/error` line in `src/` keeps its stdout output byte for byte and additionally ships one log record (message as body, fields as attributes). The OTLP copy is sanitised at the exporter: sensitive attribute names (`to`, `from`, `subject`, `body`, `code`, `*messageId`, ...) are dropped and address-shaped text is replaced with `[redacted-email]` in every attribute, status message and body. The AI SDK's `experimental_telemetry` is deliberately not used (it records prompts and outputs).
+
 ## Storage
 
 Two SQLite databases, both opened with `bun:sqlite`, live side by side in `$DATA_DIR` (D4, `docs/architecture.md` §Decisions — the lean-store cutover never migrated the old file, it built a fresh one and left the old one for the owner to delete):

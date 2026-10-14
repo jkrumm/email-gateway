@@ -7,6 +7,7 @@ import FppSenderMail from "../emails/fpp/fpp-sender-mail";
 import { TEMPLATE_IDS } from "../emails/registry";
 import { gateSubmission } from "../spam/gate";
 import { sendMail } from "../utils/send-mail";
+import { log } from "../telemetry/log";
 
 const fppContactBody = t.Object({
   name: t.Nullable(t.String()),
@@ -62,7 +63,7 @@ export const fppRoutes = withBearerAuth(new Elysia())
         source: TEMPLATE_IDS.fppDailyAnalytics,
       });
 
-      console.log("Daily analytic emails sent successfully", body);
+      log.info("Daily analytic emails sent successfully", body);
       return { message: "Daily analytic emails sent successfully" };
     },
     { body: fppDailyAnalyticsBody },

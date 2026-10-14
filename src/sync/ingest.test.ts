@@ -9,6 +9,8 @@ import type {
   Page,
   ProviderId,
 } from "../providers/port";
+import { _test } from "../telemetry/otel";
+import { mailboxRole } from "../utils/mailboxes";
 import { ingestMailbox } from "./ingest";
 
 function repos() {
@@ -97,6 +99,104 @@ function fakeProvider({
     },
   };
 }
+
+describe("ingest telemetry", () => {
+  test("mailboxRole names only well-known folders", () => {
+    expect(mailboxRole("INBOX")).toBe("inbox");
+    expect(mailboxRole("[Gmail]/Sent")).toBe("sent");
+    expect(mailboxRole("Clients/Acme Corp")).toBe("other");
+  });
+
+  test("one mailbox is an imap.sync client span plus a sync.tick event, counts only", async () => {
+    const { accounts, messages } = repos();
+    const provider = fakeProvider({
+      pages: {
+        "Clients/Acme": [
+          [
+            envelope({ ref: imapRef(1, "Clients/Acme") }),
+            envelope({ ref: imapRef(2, "Clients/Acme") }),
+          ],
+        ],
+      },
+    });
+    const capture = _test.capture();
+
+    await ingestMailbox({
+      provider,
+      mailbox: "Clients/Acme",
+      accounts,
+      messages,
+    });
+    capture.stop();
+
+    const [span] = capture.spans;
+    expect(span?.name).toBe("imap.sync");
+    expect(span?.kind).toBe(3);
+    expect(span?.status.code).toBe(1);
+    expect(span?.attributes).toEqual([
+      { key: "mail.provider", value: { stringValue: "proton" } },
+      { key: "mail.mailbox", value: { stringValue: "other" } },
+      { key: "outcome", value: { stringValue: "ok" } },
+      { key: "sync.fetched", value: { intValue: "2" } },
+      { key: "sync.ingested", value: { intValue: "2" } },
+    ]);
+    const event = capture.logs.find((l) => l.body.stringValue === "sync.tick");
+    expect(event?.traceId).toBe(span?.traceId);
+    expect(JSON.stringify(capture.logs)).not.toContain("Acme");
+    expect(JSON.stringify(capture.logs)).not.toContain("example.com");
+  });
+
+  test("a failure leaves no raw folder name or error text on the span", async () => {
+    const { accounts, messages } = repos();
+    const provider = fakeProvider({ pages: {} });
+    provider.list = async () => {
+      throw new Error("Mailbox doesn't exist: Clients/Acme");
+    };
+    const capture = _test.capture();
+
+    await ingestMailbox({
+      provider,
+      mailbox: "Clients/Acme",
+      accounts,
+      messages,
+    });
+    capture.stop();
+
+    expect(capture.spans[0]?.status).toEqual({
+      code: 2,
+      message: "other: sync failed",
+    });
+    expect(JSON.stringify([capture.spans, capture.logs])).not.toContain("Acme");
+  });
+
+  test("a provider failure is an error span and a warn event", async () => {
+    const { accounts, messages } = repos();
+    const provider = fakeProvider({ pages: {} });
+    provider.list = async () => {
+      throw new Error("connection reset");
+    };
+    const capture = _test.capture();
+
+    const result = await ingestMailbox({
+      provider,
+      mailbox: "INBOX",
+      accounts,
+      messages,
+    });
+    capture.stop();
+
+    expect(result.errors).toHaveLength(1);
+    expect(capture.spans[0]?.status.code).toBe(2);
+    expect(capture.spans[0]?.attributes).toContainEqual({
+      key: "outcome",
+      value: { stringValue: "error" },
+    });
+    expect(
+      capture.logs.find((l) => l.body.stringValue === "sync.tick")
+        ?.severityText,
+    ).toBe("WARN");
+  });
+});
 
 describe("ingestMailbox", () => {
   test("paginates across multiple pages in one run (head pass plus backfill catching up to it)", async () => {

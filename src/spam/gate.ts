@@ -7,6 +7,7 @@ import type {
   InsertSubmissionInput,
   SubmissionSource,
 } from "../db/mail-submissions";
+import { log } from "../telemetry/log";
 
 // Callers of /fpp and /sy-serendipity are a Netlify function (~10-26s limit)
 // and Cloudflare edge (~100s) — waiting for the full classifySubmission call
@@ -80,7 +81,7 @@ export async function gateSubmission({
     try {
       created = record({ ...input, llmLatencyMs });
     } catch (error) {
-      console.error("Failed to record submission", {
+      log.error("Failed to record submission", {
         error,
         source: input.source,
         verdict: input.verdict,
@@ -93,7 +94,7 @@ export async function gateSubmission({
     try {
       enqueueJevSubmission(created.id);
     } catch (error) {
-      console.error("Failed to enqueue jev_submission", {
+      log.error("Failed to enqueue jev_submission", {
         error,
         id: created.id,
       });
@@ -125,7 +126,7 @@ export async function gateSubmission({
 
   // Deadline won: fail open. The classification is still running — never
   // abort it, just stop waiting on it and record its verdict once it lands.
-  console.log(`${source} submission: classification deadline hit, delivering`);
+  log.info(`${source} submission: classification deadline hit, delivering`);
 
   try {
     await deliver({ subjectPrefix: "" });
@@ -143,7 +144,7 @@ export async function gateSubmission({
         }),
       )
       .catch((backgroundError) => {
-        console.error("Background classification failed after deadline", {
+        log.error("Background classification failed after deadline", {
           source,
           error: backgroundError,
         });
@@ -162,12 +163,12 @@ export async function gateSubmission({
         delivered: true,
         submission,
       });
-      console.log(
+      log.info(
         `${source} submission: late verdict verdict=${verdict.verdict} confidence=${verdict.confidence}`,
       );
     })
     .catch((error) => {
-      console.error("Background classification failed after deadline", {
+      log.error("Background classification failed after deadline", {
         source,
         error,
       });
@@ -199,7 +200,7 @@ async function handleClassified({
       delivered: false,
       submission,
     });
-    console.log(
+    log.info(
       `${source} submission suppressed: verdict=${verdict.verdict} confidence=${verdict.confidence}`,
     );
     return { delivered: false };
@@ -231,6 +232,6 @@ async function handleClassified({
     delivered: true,
     submission,
   });
-  console.log(`${source} submission delivered: verdict=${verdict.verdict}`);
+  log.info(`${source} submission delivered: verdict=${verdict.verdict}`);
   return { delivered: true };
 }

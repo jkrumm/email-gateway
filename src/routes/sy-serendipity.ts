@@ -7,6 +7,7 @@ import { TEMPLATE_IDS } from "../emails/registry";
 import { gateSubmission } from "../spam/gate";
 import { buildRequestSubject } from "../emails/sy-serendipity/request-subject";
 import { sendMail } from "../utils/send-mail";
+import { log } from "../telemetry/log";
 
 const sySerendipityRequestBody = t.Object({
   firstName: t.Nullable(t.String({ maxLength: 200 })),
@@ -64,7 +65,7 @@ export function createSySerendipityRoutes({
             }),
             source: TEMPLATE_IDS.sySerendipityConfirmation,
           }).catch((error) => {
-            console.error("SY Serendipity confirmation failed", { error });
+            log.error("SY Serendipity confirmation failed", { error });
           });
         },
       });

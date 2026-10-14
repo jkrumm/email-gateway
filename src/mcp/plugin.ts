@@ -14,6 +14,7 @@ import {
   type AgentApi,
 } from "../services/agent-api";
 import { splitCsv } from "../utils/csv";
+import { log } from "../telemetry/log";
 
 // The MCP door onto the same service layer the REST routes use (docs/
 // architecture.md §Agent API): seven tools, each a thin wrapper over one
@@ -255,7 +256,7 @@ export function createMcpRoutes({
   const handler = createMcpHandler(() => buildMcpServer(service), {
     responseMode: "sse",
     onerror: (error) => {
-      console.error("MCP handler error", { error });
+      log.error("MCP handler error", { error });
     },
   });
 

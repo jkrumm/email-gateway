@@ -3,6 +3,7 @@ import { getLlmConfig, getModel, getModelId } from "./model";
 import { plainText } from "../utils/html";
 import { serializeUntrusted } from "../utils/prompt";
 import { trackLlmCall } from "../usage/argo";
+import { log } from "../telemetry/log";
 
 export interface DraftReplyMessage {
   fromAddress: string | null;
@@ -67,7 +68,7 @@ export async function draftReply({
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error("Draft reply failed", { error });
+    log.error("Draft reply failed", { error });
     return { ok: false, error: errorMessage };
   }
 }

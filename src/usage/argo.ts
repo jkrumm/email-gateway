@@ -1,5 +1,8 @@
 import type { LanguageModelUsage } from "ai";
 import { env } from "../env";
+import { log } from "../telemetry/log";
+import { startSpan } from "../telemetry/otel";
+import { errorName } from "../telemetry/otel-format";
 
 // Usage reporting to Argo (`POST /usage/records`, upsert key (source,
 // source_id, machine)). Fire-and-forget: a strict no-op while ARGO_USAGE_URL
@@ -119,12 +122,12 @@ export function createUsageReporter({
       // fetch only rejects on network failure; an auth or schema rejection
       // would otherwise drop the record silently.
       if (!response.ok) {
-        console.error("Usage report rejected by Argo", {
+        log.error("Usage report rejected by Argo", {
           status: response.status,
         });
       }
     } catch (error) {
-      console.error("Usage report failed", { error });
+      log.error("Usage report failed", { error });
     }
   };
 }
@@ -201,6 +204,53 @@ export function tokensFromUsage(usage: LanguageModelUsage): UsageTokens {
   };
 }
 
+// The span/event lane of an Argo sub_tool: `llm.<lane>`.
+function laneOf(subTool: UsageSubTool): string {
+  if (subTool === "spam-classify") return "classify";
+  if (subTool.startsWith("decision-")) return "jev";
+  return subTool;
+}
+
+// Opens the `llm.<lane>` client span for one model call; `finish` ends it and emits the
+// `llm.call` event. Only the model, outcome, latency and token counts are recorded — never a
+// prompt, an output, or the provider's error text (which can echo either).
+export function startLlmCall(subTool: UsageSubTool, model: string) {
+  const lane = laneOf(subTool);
+  const startedAt = Date.now();
+  const span = startSpan(`llm.${lane}`, { "llm.model": model }, "client");
+  return {
+    finish({
+      outcome,
+      tokens,
+      error,
+    }: {
+      outcome: "ok" | "error";
+      tokens?: UsageTokens;
+      error?: unknown;
+    }): void {
+      const latencyMs = Date.now() - startedAt;
+      span.setAttributes({
+        outcome,
+        "llm.latency_ms": latencyMs,
+        ...(tokens && {
+          "llm.input_tokens": tokens.inputTokens,
+          "llm.output_tokens": tokens.outputTokens,
+          "llm.cache_read_tokens": tokens.cacheReadTokens,
+        }),
+      });
+      if (outcome === "error") {
+        span.setStatus("error", errorName(error));
+      }
+      span.end();
+      log.event(
+        "llm.call",
+        { lane, outcome, latency_ms: latencyMs },
+        outcome === "error" ? "warn" : "info",
+      );
+    },
+  };
+}
+
 // Runs one IU `generateText` call and reports it, success or failure, without
 // changing its result or error. Billing is always `iu`; cost is computed.
 export async function trackLlmCall<
@@ -217,9 +267,11 @@ export async function trackLlmCall<
   report?: UsageReporter;
 }): Promise<Result> {
   const startedAt = Date.now();
+  const call = startLlmCall(subTool, model);
   try {
     const result = await run();
     const tokens = tokensFromUsage(result.usage);
+    call.finish({ outcome: "ok", tokens });
     void report({
       subTool,
       model,
@@ -231,6 +283,7 @@ export async function trackLlmCall<
     }).catch(() => {});
     return result;
   } catch (error) {
+    call.finish({ outcome: "error", error });
     void report({
       subTool,
       model,

@@ -11,6 +11,7 @@ import { judgeEmailWithJev as defaultJudgeEmail } from "../enrich/jev-email";
 import { buildEmailPayload } from "../enrich/enrich-email";
 import type { MailProvider, MessageRef } from "../providers/port";
 import type { JobHandler } from "./runner";
+import { log } from "../telemetry/log";
 
 export interface JevSubmissionJobPayload {
   id: string;
@@ -34,7 +35,7 @@ export function createJevSubmissionHandler({
 
     const submission = submissions.getSubmission(id);
     if (!submission) {
-      console.log(`[jev_submission] submission ${id} not found — skipping`);
+      log.info(`[jev_submission] submission ${id} not found — skipping`);
       return;
     }
 
@@ -42,7 +43,7 @@ export function createJevSubmissionHandler({
     if (!jevConfig) {
       // Defensive: enqueue-time already gates on Jev being configured, so
       // this only fires if config vanished between enqueue and claim.
-      console.log("[jev_submission] Jev not configured — skipping");
+      log.info("[jev_submission] Jev not configured — skipping");
       return;
     }
 
@@ -93,13 +94,13 @@ export function createJevMessageHandler({
 
     const message = messages.getMessage(key);
     if (!message) {
-      console.log(`[jev_message] message ${key} not found — skipping`);
+      log.info(`[jev_message] message ${key} not found — skipping`);
       return;
     }
 
     const jevConfig = config();
     if (!jevConfig) {
-      console.log("[jev_message] Jev not configured — skipping");
+      log.info("[jev_message] Jev not configured — skipping");
       return;
     }
 

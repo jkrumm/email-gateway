@@ -16,6 +16,7 @@ import {
   sessionSecret,
   sessionValue,
 } from "../session";
+import { log } from "../telemetry/log";
 
 const ASSET_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
 
@@ -52,7 +53,7 @@ export function createWebRoutes({
   // case keeps every route in `typeof webRoutes` — separate `app.post(...)`
   // statements would leave the binding's type at the empty initial instance.
   if (secret === undefined || password === undefined) {
-    console.log(
+    log.info(
       `[web] ADMIN_PASSWORD unset or shorter than ${MIN_PASSWORD_LENGTH} chars — /app disabled`,
     );
     return new Elysia().onError(({ error, set }) =>

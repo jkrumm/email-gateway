@@ -1574,6 +1574,7 @@ are inside the 3-day cooldown). `/check` green: `make check` 761 tests; fallow o
 flags the usual repo-boilerplate clones and function size. Two `/review` angles
 rounds' blockers fixed (IAM policy lacked `GetAccount`/suppression actions; unguarded
 housekeeping `enqueue` in timers; paused-sending now logs distinctly).
+
 - **VDM not enabled — owner decision.** It bills a per-email fee (~EUR 0.069 per
   1,000 mails on top of sending, first 5,000 queries/month free); the plan stops
   at any per-message fee. `ses-provision.ts` deliberately omits it.

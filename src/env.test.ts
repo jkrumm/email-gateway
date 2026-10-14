@@ -201,3 +201,34 @@ describe("SES env validation", () => {
     expect(result.error?.issues[0]?.path).toEqual(["SES_SNS_TOPIC_ARN"]);
   });
 });
+
+describe("OTEL env validation", () => {
+  test("unset: the exporter is off and the service name defaults", () => {
+    const parsed = envSchema.parse(base);
+    expect(parsed.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
+    expect(parsed.OTEL_SERVICE_NAME).toBe("email-gateway");
+  });
+
+  test("the endpoint must be a URL", () => {
+    expect(
+      envSchema.parse({
+        ...base,
+        OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4319",
+      }).OTEL_EXPORTER_OTLP_ENDPOINT,
+    ).toBe("http://collector:4319");
+    expect(
+      envSchema.safeParse({ ...base, OTEL_EXPORTER_OTLP_ENDPOINT: "nope" })
+        .success,
+    ).toBe(false);
+  });
+
+  test("an empty compose-interpolated value reads as unset", () => {
+    const parsed = parseEnv({
+      ...base,
+      OTEL_EXPORTER_OTLP_ENDPOINT: "",
+      OTEL_SERVICE_NAME: "",
+    });
+    expect(parsed.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
+    expect(parsed.OTEL_SERVICE_NAME).toBe("email-gateway");
+  });
+});

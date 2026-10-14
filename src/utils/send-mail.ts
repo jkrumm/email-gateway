@@ -9,6 +9,9 @@ import {
 import { renderTemplate, type SendProvider } from "../providers/send-port";
 import { sendProvider } from "../providers/send-registry";
 import { storeSendBody } from "./send-body";
+import { emitSendResult } from "./send-result";
+import { log } from "../telemetry/log";
+import { errorName } from "../telemetry/otel-format";
 
 export const DEFAULT_FROM =
   "Free-Planning-Poker.com <no-reply@free-planning-poker.com>";
@@ -24,7 +27,7 @@ export function recordSendLog(
   try {
     sendLog.insertSendLog(input);
   } catch (error) {
-    console.error("Failed to persist send_log row", {
+    log.error("Failed to persist send_log row", {
       error,
       id: input.id,
     });
@@ -94,9 +97,16 @@ export async function sendMail({
       },
     }));
   } catch (error) {
-    console.error("Email sent failed", {
+    emitSendResult({
+      template: source ?? "unspecified",
+      source: ROUTE_SOURCE,
+      status: "failed",
+    });
+    log.error("Email sent failed", {
       provider: provider.id,
-      error,
+      // A sensitive send's failure text could echo the rendered mail (the
+      // auth code), so only the error's name is logged for it.
+      error: sensitiveSubject ? errorName(error) : error,
       to,
       from,
       replyTo,
@@ -105,7 +115,12 @@ export async function sendMail({
     throw error;
   }
 
-  console.log("Email sent successfully", {
+  emitSendResult({
+    template: source ?? "unspecified",
+    source: ROUTE_SOURCE,
+    status: "sent",
+  });
+  log.info("Email sent successfully", {
     provider: provider.id,
     providerMessageId,
     to,

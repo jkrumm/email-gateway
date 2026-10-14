@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createJobQueue } from "../db/jobs";
 import { openMailDatabase } from "../db/mail-client";
 import { createSesAccountRepo } from "../db/ses-account";
+import { _test } from "../telemetry/otel";
 import { createSesAccountHandler, enqueueSesAccount } from "./ses-account";
 import { isRateLimitError } from "./rate-limit";
 
@@ -20,6 +21,28 @@ function clientThrowing(error: Error) {
 }
 
 describe("createSesAccountHandler", () => {
+  test("emits one ses.account event with the quota headroom", async () => {
+    const capture = _test.capture();
+    await createSesAccountHandler({
+      client: clientReturning({
+        SendingEnabled: true,
+        SendQuota: { Max24HourSend: 200, SentLast24Hours: 50 },
+      }),
+      repo: createSesAccountRepo(openMailDatabase(":memory:")),
+      now,
+    })({});
+    capture.stop();
+
+    const [event] = capture.logs;
+    expect(event?.body.stringValue).toBe("ses.account");
+    expect(event?.attributes).toEqual([
+      { key: "sending_enabled", value: { boolValue: true } },
+      { key: "sent_24h", value: { intValue: "50" } },
+      { key: "max_24h_send", value: { intValue: "200" } },
+      { key: "headroom_pct", value: { intValue: "75" } },
+    ]);
+  });
+
   test("stores the snapshot, overwriting the previous one", async () => {
     const repo = createSesAccountRepo(openMailDatabase(":memory:"));
 

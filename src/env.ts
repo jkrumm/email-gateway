@@ -99,6 +99,16 @@ export const envSchema = z
       .min(1, "SES_CONFIGURATION_SET is required!"),
     SES_SNS_TOPIC_ARN: z.string().optional(),
 
+    // OpenTelemetry (src/telemetry): traces and trace-linked logs as OTLP/HTTP
+    // JSON to `<endpoint>/v1/traces` and `/v1/logs`. Unset endpoint -> the
+    // exporter is off (dev, tests); spans and records are still built.
+    // HEADERS is `key=value,key=value` (e.g. a bearer for a public ingest);
+    // RESOURCE_ATTRIBUTES the standard `key=value,key=value` resource extras.
+    OTEL_EXPORTER_OTLP_ENDPOINT: z.url().optional(),
+    OTEL_EXPORTER_OTLP_HEADERS: z.string().optional(),
+    OTEL_SERVICE_NAME: z.string().default("email-gateway"),
+    OTEL_RESOURCE_ATTRIBUTES: z.string().optional(),
+
     // Directory for the SQLite database file. Defaults to ./data so local dev
     // doesn't need any setup; ops sets it to a mounted volume path in prod.
     DATA_DIR: z.string().default("./data"),

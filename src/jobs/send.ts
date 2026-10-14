@@ -8,7 +8,9 @@ import type { SendBodiesRepo } from "../db/send-bodies";
 import { SEND_CLAIM_STALE_MS, type SendLogRepo } from "../db/send-log";
 import { findTemplateEntry, renderTemplateElement } from "../emails/registry";
 import { storeSendBody } from "../utils/send-body";
+import { emitSendResult } from "../utils/send-result";
 import type { JobHandler } from "./runner";
+import { log } from "../telemetry/log";
 
 // The `send` job kind (docs/architecture.md §Jobs: "sends become jobs"):
 // template test-send and agent `POST /api/sends` insert the send_log row and
@@ -122,8 +124,18 @@ export function createSendHandler({
     } catch (error) {
       // Nothing was sent: hand the claim back so the retry can take it.
       sendLog.releaseSend(input.id, claim);
+      emitSendResult({
+        template: input.templateName,
+        source: existing.requestedBy,
+        status: "failed",
+      });
       throw error;
     }
+    emitSendResult({
+      template: input.templateName,
+      source: existing.requestedBy,
+      status: "sent",
+    });
 
     // A write failure here must never propagate: the email already sent, so
     // the runner's at-least-once retry on a thrown error would call send()
@@ -136,7 +148,7 @@ export function createSendHandler({
         status: "sent",
       });
     } catch (error) {
-      console.error("Failed to record send_log provider result", {
+      log.error("Failed to record send_log provider result", {
         error,
         id: input.id,
       });

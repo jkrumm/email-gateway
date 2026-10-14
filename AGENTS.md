@@ -27,7 +27,9 @@ lane "Jev" runs `pplx-decider-v1-27b` on IU's native decision API
 (`POST <ue-origin>/decisions/v1/systemone`) through the official
 `@ai-sdk/typesafe-ai` provider and `experimental_decide`, OpenRouter's
 Decisions API via `@openrouter/ai-sdk-provider` as the
-`DECISION_PROVIDER=openrouter` alternative) · a Vite 8 + React 19 + basalt-ui SPA in `client/`
+`DECISION_PROVIDER=openrouter` alternative) · SDK-free OpenTelemetry (hand-rolled OTLP/HTTP JSON over `fetch`, no
+`@opentelemetry/*` and no `@elysiajs/opentelemetry`; `AsyncLocalStorage` for
+context) · a Vite 8 + React 19 + basalt-ui SPA in `client/`
 (TanStack Router + Query, Eden Treaty typed against `src/app.ts`'s `App`) served
 by Elysia at `/app` from `client/dist` · zod 4 · TypeScript strict,
 `verbatimModuleSyntax`. One small build step now: the client is built into
@@ -193,9 +195,12 @@ password) — `docs/vps-cutover.md` has the ready-to-apply `.env.tpl`/
   because this repo is public (`rules/security.md`).
 - **Uptime Kuma monitor:** `EmailGateway - HTTP` — a keyword monitor on that URL
   (keyword `{"ok":true}`) in the Kuma `VPS` group.
-- **OTel `service.name`:** `none` — email-gateway is not OpenTelemetry-
-  instrumented (no OTel SDK dependency or env anywhere in this repo); it logs to
-  stdout.
+- **OTel `service.name`:** `email-gateway` — SDK-free OTLP/HTTP JSON traces and
+  trace-linked logs to the ClickStack collector (`src/telemetry/`), off unless
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Span and event names:
+  README.md §Observability. Telemetry never carries an address, subject, body,
+  auth code or message id (the exporter drops sensitive keys and scrubs
+  address-shaped text).
 - `make verify` probes the deployed container's `/health` over ssh
   (`HEALTH_URL=<public-url>` probes the public URL instead); `make logs` prints
   the last 200 container log lines, then exits.
@@ -216,7 +221,18 @@ tests never need secrets.
 
 ## File map
 
-- `src/index.ts` boot: listen, then `startJobSystem` (`src/jobs/register.ts`);
+- `src/telemetry/` (the one OTel module): `otel.ts` span model on
+  `AsyncLocalStorage` (`withSpan`, `withRootSpan`, `startSpan`/`activateSpan`),
+  batched OTLP exporter and `flushOtel()`, `_test.capture()` to inspect the built
+  records without a collector; `otel-format.ts` the pure parts (env parsing,
+  `severityFor`, and the redaction: `isSensitiveKey`, `scrubText`);
+  `log.ts` the `log.info/warn/error` wrapper every `src/` console call goes
+  through (stdout unchanged, OTLP record additive) plus `log.event(name, attrs)`
+  for the metric-style events; `http.ts` the Elysia hook plugin behind each
+  request's server span. Call sites never touch the exporter. New code logs via
+  `log`, never `console.*`, and puts only names/outcomes/counts on a span.
+- `src/index.ts` boot: listen, then `startJobSystem` (`src/jobs/register.ts`),
+  flushes telemetry on SIGTERM/SIGINT;
   `src/app.ts` mounts routes; `src/env.ts` zod env (parsed at import — modules
   that import it are untestable by design, factor pure logic out)
 - `src/routes/{fpp,sy-serendipity}.ts` + `src/auth.ts` — the public send routes

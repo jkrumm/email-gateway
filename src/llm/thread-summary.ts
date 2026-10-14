@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getLlmConfig, getModel, getModelId } from "./model";
 import { serializeUntrusted } from "../utils/prompt";
 import { trackLlmCall } from "../usage/argo";
+import { log } from "../telemetry/log";
 
 export interface ThreadMessageForSummary {
   fromAddress: string | null;
@@ -65,7 +66,7 @@ export async function summarizeThread({
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("Thread summary failed", { error });
+    log.error("Thread summary failed", { error });
     return { ok: false, error: message };
   }
 }

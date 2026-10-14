@@ -6,6 +6,9 @@ import {
   type JobFailOutcome,
   type JobQueue,
 } from "../db/jobs";
+import { log as logger } from "../telemetry/log";
+import { traceIdFromJobId, withRootSpan } from "../telemetry/otel";
+import { errorName } from "../telemetry/otel-format";
 import { errorMessage } from "../utils/error";
 import { isRateLimitError } from "./rate-limit";
 
@@ -65,7 +68,7 @@ function startClaimRenewal({
         clearInterval(timer);
       }
     } catch (error) {
-      console.error(
+      logger.error(
         `[jobs] failed to renew claim for ${claim.kind} job ${claim.id}`,
         { error },
       );
@@ -95,17 +98,22 @@ function recordOutcome({
 }): void {
   try {
     if (!write()) {
-      console.error(
+      logger.error(
         `[jobs] ${claim.kind} job ${claim.id} ${verb}, but its claim was already lost — may run again elsewhere`,
       );
     }
   } catch (error) {
-    console.error(
+    logger.error(
       `[jobs] failed to record ${claim.kind} job ${claim.id} as ${verb}`,
       { error },
     );
   }
 }
+
+// How a failed run ended, as the job span's `outcome`: parked on the rate-limit
+// ladder, scheduled for another attempt, or out of attempts (or its failure
+// could not be recorded).
+type FailedJobOutcome = "rate_limited" | "retry" | "error";
 
 // Records a failed handler's outcome. Rate-limited failures are common and
 // expected under a sustained upstream 429 — logging the full error object
@@ -126,7 +134,7 @@ function recordFailOutcome({
   renewal: { currentToken: () => string };
   error: unknown;
   log: (message: string, meta?: unknown) => void;
-}): void {
+}): FailedJobOutcome {
   const rateLimited = isRateLimitError(error);
   const failNow = new Date();
   let outcome: JobFailOutcome;
@@ -144,19 +152,19 @@ function recordFailOutcome({
     log(`[jobs] failed to record ${claim.kind} job ${claim.id} as failed`, {
       error: writeError,
     });
-    return;
+    return "error";
   }
 
   if (!outcome.ok) {
     log(
       `[jobs] ${claim.kind} job ${claim.id} failed, but its claim was already lost — may run again elsewhere`,
     );
-    return;
+    return "error";
   }
 
   if (outcome.rateLimited) {
     if (error instanceof Error && error.name === "SendingPausedException") {
-      console.warn(
+      logger.warn(
         `[jobs] SES sending is paused (${error.name}) — ${claim.kind} job ${claim.id} parked`,
       );
     }
@@ -172,10 +180,22 @@ function recordFailOutcome({
     log(
       `[jobs] ${claim.kind} ${claim.id} rate-limited, retry in ${retrySeconds}s (rate_limits=${outcome.rateLimits})`,
     );
-    return;
+    logger.event("job.rate_limited", {
+      kind: claim.kind,
+      rate_limits: outcome.rateLimits,
+    });
+    return "rate_limited";
   }
 
   log(`[jobs] ${claim.kind} job ${claim.id} failed`, { error });
+  // No next attempt means the job is out of attempts and now terminally failed.
+  const failure = outcome.nextAttemptAt ? "retry" : "error";
+  logger.event("job.failed", {
+    kind: claim.kind,
+    outcome: failure,
+    attempt: claim.attempts + 1,
+  });
+  return failure;
 }
 
 export function createJobRunner({
@@ -183,14 +203,14 @@ export function createJobRunner({
   claimedBy,
   queue = createJobQueue({ db, claimedBy }),
   renewIntervalMs = DEFAULT_RENEW_INTERVAL_MS,
-  log = console.error,
+  log = logger.error,
 }: {
   db: Database;
   claimedBy: string;
   queue?: JobQueue;
   renewIntervalMs?: number;
   // Injectable so a test can assert on the exact log line without spyOn
-  // (repo convention) — defaults to the real console.error in production.
+  // (repo convention) — defaults to the telemetry logger's error in production.
   log?: (message: string, meta?: unknown) => void;
 }): JobRunner {
   if (renewIntervalMs >= JOB_STALE_CLAIM_MS) {
@@ -215,7 +235,7 @@ export function createJobRunner({
       // Same reasoning as recordOutcome: a DB error here (SQLITE_BUSY during
       // the deploy overlap) must not abort drain()'s loop — report no job
       // ran this pass and let the next scheduled pass retry.
-      console.error(`[jobs] failed to claim a job`, { error });
+      logger.error(`[jobs] failed to claim a job`, { error });
       return null;
     }
   }
@@ -228,32 +248,55 @@ export function createJobRunner({
     if (!claim) return false;
 
     const handler = handlers.get(claim.kind)!;
-    const renewal = startClaimRenewal({
-      queue,
-      claim,
-      intervalMs: renewIntervalMs,
-    });
 
-    try {
-      await handler(claim.payload);
-    } catch (error) {
-      renewal.stop();
-      recordFailOutcome({ queue, claim, renewal, error, log });
-      return true;
-    }
+    // Each run is its own root span: a job is not a continuation of whatever
+    // enqueued it, and the trace id derives from the job id.
+    return withRootSpan(
+      {
+        traceId: traceIdFromJobId(claim.id),
+        name: `job.${claim.kind}`,
+        attrs: { "job.kind": claim.kind, "job.attempt": claim.attempts + 1 },
+      },
+      async (span) => {
+        const renewal = startClaimRenewal({
+          queue,
+          claim,
+          intervalMs: renewIntervalMs,
+        });
 
-    renewal.stop();
-    recordOutcome({
-      claim,
-      verb: "done",
-      write: () =>
-        queue.complete({
-          id: claim.id,
-          claimToken: renewal.currentToken(),
-          now: new Date(),
-        }),
-    });
-    return true;
+        try {
+          await handler(claim.payload);
+        } catch (error) {
+          renewal.stop();
+          const outcome = recordFailOutcome({
+            queue,
+            claim,
+            renewal,
+            error,
+            log,
+          });
+          span.setAttributes({ outcome });
+          // Name only: the message can echo the mail the handler was working on.
+          span.setStatus("error", errorName(error));
+          span.recordException(error);
+          return true;
+        }
+
+        renewal.stop();
+        recordOutcome({
+          claim,
+          verb: "done",
+          write: () =>
+            queue.complete({
+              id: claim.id,
+              claimToken: renewal.currentToken(),
+              now: new Date(),
+            }),
+        });
+        span.setAttributes({ outcome: "ok" });
+        return true;
+      },
+    );
   }
 
   async function drain(now?: Date): Promise<number> {

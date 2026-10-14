@@ -10,6 +10,13 @@ import {
   type SnsMessage,
   type SnsVerifier,
 } from "../providers/ses/sns-verify";
+import { log } from "../telemetry/log";
+
+const FAILURE_STATUSES = new Set(["bounced", "complained", "rejected"]);
+
+function isFailureStatus(status: string | null): boolean {
+  return status !== null && FAILURE_STATUSES.has(status);
+}
 
 const MAX_BODY_BYTES = 256 * 1024;
 const CONFIRM_FETCH_TIMEOUT_MS = 5_000;
@@ -81,8 +88,13 @@ export function createSesWebhookRoutes({
       ? trustedSnsUrl(message.SubscribeURL, snsRegion)
       : null;
     if (!url) {
-      console.warn(
-        `ses webhook: SubscriptionConfirmation ${message.MessageId} has no trusted SubscribeURL`,
+      // Ids ride in `message_id`, a key the telemetry exporter drops: they stay
+      // on stdout but never reach a log record's body or attributes.
+      log.warn(
+        "ses webhook: SubscriptionConfirmation has no trusted SubscribeURL",
+        {
+          message_id: message.MessageId,
+        },
       );
       return;
     }
@@ -93,14 +105,14 @@ export function createSesWebhookRoutes({
         redirect: "error",
       });
       if (!response.ok) throw new Error(`status ${response.status}`);
-      console.log(
-        `ses webhook: confirmed subscription ${message.MessageId} for ${message.TopicArn}`,
-      );
+      log.info("ses webhook: confirmed subscription", {
+        message_id: message.MessageId,
+      });
     } catch (error) {
-      console.warn(
-        `ses webhook: confirming subscription ${message.MessageId} failed`,
+      log.warn("ses webhook: confirming subscription failed", {
+        message_id: message.MessageId,
         error,
-      );
+      });
     }
   }
 
@@ -109,9 +121,9 @@ export function createSesWebhookRoutes({
     try {
       event = JSON.parse(message.Message);
     } catch {
-      console.warn(
-        `ses webhook: Notification ${message.MessageId} Message is not JSON, ignored`,
-      );
+      log.warn("ses webhook: Notification Message is not JSON, ignored", {
+        message_id: message.MessageId,
+      });
       return;
     }
 
@@ -121,9 +133,9 @@ export function createSesWebhookRoutes({
         typeof event === "object" && event !== null && "eventType" in event
           ? String(event.eventType)
           : "unknown";
-      console.log(
-        `ses webhook: ignored ${eventType} event (notification ${message.MessageId})`,
-      );
+      log.info(`ses webhook: ignored ${eventType} event`, {
+        message_id: message.MessageId,
+      });
       return;
     }
 
@@ -133,9 +145,16 @@ export function createSesWebhookRoutes({
       providerMessageId,
       patch,
     );
+    // Type names only — never the message id or any recipient.
+    log.event(
+      "ses.event",
+      { event_type: mapped.eventType, bounce_type: mapped.bounceType },
+      isFailureStatus(mapped.status) ? "warn" : "info",
+    );
     if (!outcome.found || (patch.status !== null && outcome.changed === 0)) {
-      console.log(
-        `ses webhook: ${mapped.lastEvent} for ${providerMessageId} not applied (no such send or stale)`,
+      log.info(
+        `ses webhook: ${mapped.lastEvent} not applied (no such send or stale)`,
+        { provider_message_id: providerMessageId },
       );
     }
   }
@@ -178,10 +197,10 @@ export function createSesWebhookRoutes({
       try {
         verified = await verifier.verify(message);
       } catch (error) {
-        console.warn(
-          `ses webhook: verifying ${message.MessageId} failed`,
+        log.warn("ses webhook: verifying message failed", {
+          message_id: message.MessageId,
           error,
-        );
+        });
       }
       if (!verified) {
         set.status = 403;

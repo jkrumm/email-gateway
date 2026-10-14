@@ -26,6 +26,9 @@ import {
   type ImapPort,
   type ImapSession,
 } from "./adapter";
+import { log } from "../../telemetry/log";
+import { errorName } from "../../telemetry/otel-format";
+import { mailboxRole } from "../../utils/mailboxes";
 
 // Both provider ids are IMAP-backed.
 export type ImapProviderId = ProviderId;
@@ -411,8 +414,8 @@ async function imapListChangedSince(
     // way indefinitely (a bulk operation touching more than one page's
     // worth of messages). Worth a line so it shows up as a real signal
     // rather than looking like a quiet, permanently degraded sync.
-    console.error(
-      `[imap] ${mailboxPath} has more CONDSTORE changes than fit one page ` +
+    log.error(
+      `[imap] ${mailboxRole(mailboxPath)} has more CONDSTORE changes than fit one page ` +
         `(limit ${LIST_PAGE_LIMIT}); falling back to a full scan this tick`,
     );
     return undefined;
@@ -799,7 +802,10 @@ async function imapWatch(
       // just-established replacement (see PLAN.md Wave 4 review round 2,
       // bug 2).
       if (client !== current) return;
-      console.error("[imap] watch idle loop failed", { mailboxPath, error });
+      log.error("[imap] watch idle loop failed", {
+        mailbox: mailboxRole(mailboxPath),
+        error: errorName(error),
+      });
       handleDrop();
     }
   }
@@ -843,8 +849,8 @@ async function imapWatch(
     if (stopped) return;
     const delay = idleReconnectDelayMs(attempt, random);
     attempt++;
-    console.error("[imap] watch connection dropped, reconnecting", {
-      mailboxPath,
+    log.error("[imap] watch connection dropped, reconnecting", {
+      mailbox: mailboxRole(mailboxPath),
       delayMs: delay,
     });
     await wait(delay);
@@ -852,7 +858,10 @@ async function imapWatch(
     try {
       await connectAndIdle();
     } catch (error) {
-      console.error("[imap] watch reconnect failed", { mailboxPath, error });
+      log.error("[imap] watch reconnect failed", {
+        mailbox: mailboxRole(mailboxPath),
+        error: errorName(error),
+      });
       void reconnectLoop();
     }
   }

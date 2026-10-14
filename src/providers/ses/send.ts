@@ -1,4 +1,6 @@
 import type { SESv2Client } from "@aws-sdk/client-sesv2";
+import { withSpan } from "../../telemetry/otel";
+import { errorName } from "../../telemetry/otel-format";
 import type { SendProvider } from "../send-port";
 
 // SES message tag names and values accept only [A-Za-z0-9_\-.@], at most 256
@@ -31,35 +33,53 @@ export function createSesSendProvider({
       // Loaded on first send: the SDK costs ~19 MB RSS at boot, which
       // matters in the 256 MB container.
       const { SendEmailCommand } = await import("@aws-sdk/client-sesv2");
-      const response = await client.send(
-        new SendEmailCommand({
-          FromEmailAddress: from,
-          Destination: { ToAddresses: [to] },
-          ...(replyTo ? { ReplyToAddresses: [replyTo] } : {}),
-          ConfigurationSetName: configurationSetName,
-          ...(tags && Object.keys(tags).length > 0
-            ? {
-                EmailTags: Object.entries(tags).map(([name, value]) => ({
-                  Name: sanitizeSesTag(name),
-                  Value: sanitizeSesTag(value),
-                })),
-              }
-            : {}),
-          Content: {
-            Simple: {
-              Subject: { Data: subject, Charset: "UTF-8" },
-              Body: {
-                Html: { Data: html, Charset: "UTF-8" },
-                Text: { Data: text, Charset: "UTF-8" },
-              },
+      const command = new SendEmailCommand({
+        FromEmailAddress: from,
+        Destination: { ToAddresses: [to] },
+        ...(replyTo ? { ReplyToAddresses: [replyTo] } : {}),
+        ConfigurationSetName: configurationSetName,
+        ...(tags && Object.keys(tags).length > 0
+          ? {
+              EmailTags: Object.entries(tags).map(([name, value]) => ({
+                Name: sanitizeSesTag(name),
+                Value: sanitizeSesTag(value),
+              })),
+            }
+          : {}),
+        Content: {
+          Simple: {
+            Subject: { Data: subject, Charset: "UTF-8" },
+            Body: {
+              Html: { Data: html, Charset: "UTF-8" },
+              Text: { Data: text, Charset: "UTF-8" },
             },
           },
-        }),
+        },
+      });
+      // Only the template and source names go on the span — never an address,
+      // subject, body or auth code.
+      return withSpan(
+        "ses.send",
+        { "email.template": tags?.template, "email.source": tags?.source },
+        async (span) => {
+          try {
+            const response = await client.send(command);
+            if (!response.MessageId) {
+              throw new Error(
+                "SES accepted the message but returned no MessageId",
+              );
+            }
+            span.setAttributes({ outcome: "ok" });
+            return { providerMessageId: response.MessageId };
+          } catch (error) {
+            span.setAttributes({ outcome: "error" });
+            // The error name only: a failure's text could echo the subject or body.
+            span.setStatus("error", errorName(error));
+            throw error;
+          }
+        },
+        "client",
       );
-      if (!response.MessageId) {
-        throw new Error("SES accepted the message but returned no MessageId");
-      }
-      return { providerMessageId: response.MessageId };
     },
   };
 }

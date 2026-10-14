@@ -8,6 +8,7 @@ import {
 import { sesClient } from "../providers/send-registry";
 import { isRateLimitError } from "./rate-limit";
 import type { JobHandler } from "./runner";
+import { log } from "../telemetry/log";
 
 // The `ses_account` job kind: snapshots SES's GetAccount (sending state,
 // enforcement, quota) into the single ses_account row for the dashboard.
@@ -26,10 +27,21 @@ export function createSesAccountHandler({
 } = {}): JobHandler {
   return async () => {
     try {
-      repo.save(await fetchSesAccount({ client, now }));
+      const snapshot = await fetchSesAccount({ client, now });
+      repo.save(snapshot);
+      const { max24HourSend, sentLast24Hours } = snapshot;
+      log.event("ses.account", {
+        sending_enabled: snapshot.sendingEnabled,
+        sent_24h: sentLast24Hours,
+        max_24h_send: max24HourSend,
+        headroom_pct:
+          max24HourSend && sentLast24Hours !== null
+            ? Math.round((1 - sentLast24Hours / max24HourSend) * 100)
+            : null,
+      });
     } catch (error) {
       if (isRateLimitError(error)) throw error;
-      console.warn("[jobs] ses_account fetch failed", {
+      log.warn("[jobs] ses_account fetch failed", {
         reason: error instanceof Error ? error.name : "unknown",
       });
     }

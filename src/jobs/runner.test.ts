@@ -4,8 +4,10 @@ import {
   createJobQueue,
   defaultClaimedBy,
   ensureJobsSchema,
+  JOB_MAX_ATTEMPTS,
   JOB_STALE_CLAIM_MS,
 } from "../db/jobs";
+import { _test, withSpan, type SpanRecord } from "../telemetry/otel";
 import { createJobRunner } from "./runner";
 
 function sleep(ms: number): Promise<void> {
@@ -333,5 +335,119 @@ describe("createJobRunner", () => {
     runner.register("classify", async () => {});
 
     await expect(runner.runOnce()).resolves.toBe(false);
+  });
+});
+
+describe("job spans", () => {
+  const attr = (span: SpanRecord, key: string) =>
+    span.attributes.find((a) => a.key === key)?.value;
+
+  async function runOne(
+    handler: () => Promise<void>,
+    { attempts = 0 }: { attempts?: number } = {},
+  ) {
+    const { db, queue } = setup();
+    const id = queue.enqueue({ kind: "send", payload: {}, now: T0 });
+    if (attempts > 0) {
+      db.run(`UPDATE jobs SET attempts = ? WHERE id = ?`, [attempts, id]);
+    }
+    const runner = createJobRunner({
+      db,
+      claimedBy: CLAIMED_BY,
+      queue,
+      log: () => {},
+    });
+    runner.register("send", handler);
+
+    const capture = _test.capture();
+    // Started inside another span: a job must still be its own root.
+    await withSpan("enqueuer", {}, () => runner.runOnce(T0));
+    capture.stop();
+
+    const span = capture.spans.find((s) => s.name === "job.send")!;
+    return { id, span, spans: capture.spans, logs: capture.logs };
+  }
+
+  test("a successful run is a root span job.<kind> with outcome ok", async () => {
+    const { id, span } = await runOne(async () => {});
+
+    expect(span.parentSpanId).toBeUndefined();
+    expect(span.status.code).toBe(1);
+    expect(attr(span, "job.kind")).toEqual({ stringValue: "send" });
+    expect(attr(span, "job.attempt")).toEqual({ intValue: "1" });
+    expect(attr(span, "outcome")).toEqual({ stringValue: "ok" });
+    // A UUID job id is the trace id, dashes stripped.
+    expect(span.traceId).toBe(id.replace(/-/g, "").toLowerCase());
+  });
+
+  test("spans and logs made by the handler belong to the job trace", async () => {
+    const { span, spans } = await runOne(async () => {
+      await withSpan("inner", {}, async () => {});
+    });
+
+    const inner = spans.find((s) => s.name === "inner")!;
+    expect(inner.parentSpanId).toBe(span.spanId);
+    expect(inner.traceId).toBe(span.traceId);
+  });
+
+  test("a failure with attempts left -> error status, outcome retry, job.failed event", async () => {
+    const { span, logs } = await runOne(async () => {
+      throw new Error("boom");
+    });
+
+    expect(span.status).toEqual({ code: 2, message: "Error" });
+    expect(attr(span, "outcome")).toEqual({ stringValue: "retry" });
+    expect(span.events?.some((e) => e.name === "exception")).toBe(true);
+    const event = logs.find((l) => l.body.stringValue === "job.failed")!;
+    expect(event.severityText).toBe("ERROR");
+    expect(event.attributes).toContainEqual({
+      key: "outcome",
+      value: { stringValue: "retry" },
+    });
+    expect(event.traceId).toBe(span.traceId);
+  });
+
+  test("a failure that echoes the mail leaves no message or stack on the span", async () => {
+    const { span } = await runOne(async () => {
+      throw new RangeError(
+        'rejected "482913 is your code" for guest@example.com',
+      );
+    });
+
+    expect(span.status).toEqual({ code: 2, message: "RangeError" });
+    const json = JSON.stringify(span);
+    expect(json).not.toContain("482913");
+    expect(json).not.toContain("guest@example.com");
+    expect(json).not.toContain("stacktrace");
+  });
+
+  test("a failure on the last attempt -> outcome error", async () => {
+    const { span } = await runOne(
+      async () => {
+        throw new Error("boom");
+      },
+      { attempts: JOB_MAX_ATTEMPTS - 1 },
+    );
+
+    expect(span.status.code).toBe(2);
+    expect(attr(span, "outcome")).toEqual({ stringValue: "error" });
+    expect(attr(span, "job.attempt")).toEqual({
+      intValue: String(JOB_MAX_ATTEMPTS),
+    });
+  });
+
+  test("a rate limit -> outcome rate_limited and a job.rate_limited event", async () => {
+    const { span, logs } = await runOne(async () => {
+      throw new Error("rate_limit_exceeded");
+    });
+
+    expect(span.status.code).toBe(2);
+    expect(attr(span, "outcome")).toEqual({ stringValue: "rate_limited" });
+    const event = logs.find((l) => l.body.stringValue === "job.rate_limited")!;
+    expect(event.attributes).toContainEqual({
+      key: "kind",
+      value: { stringValue: "send" },
+    });
+    expect(logs.some((l) => l.body.stringValue === "job.failed")).toBe(false);
   });
 });

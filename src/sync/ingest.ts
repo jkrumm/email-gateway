@@ -3,6 +3,9 @@ import type { AccountsRepo } from "../db/accounts";
 import type { MessagesRepo } from "../db/messages";
 import type { Envelope, MailProvider } from "../providers/port";
 import { errorMessage } from "../utils/error";
+import { mailboxRole } from "../utils/mailboxes";
+import { log } from "../telemetry/log";
+import { withSpan } from "../telemetry/otel";
 
 // Bounds the backfill pass only (see ingestMailbox below) so a first-run
 // backfill never holds the sync_tick job's claim for minutes; the saved
@@ -62,7 +65,7 @@ export interface IngestMailboxResult {
 // (docs/architecture.md §Provider port, §Jobs). Never fetches a body — that
 // happens live, on read(), from the classify job. Runs the head pass and,
 // unless backfill has already finished, the backfill pass described above.
-export async function ingestMailbox({
+async function ingestMailboxPages({
   provider,
   mailbox,
   accounts,
@@ -70,6 +73,7 @@ export async function ingestMailbox({
   maxPagesPerRun = DEFAULT_MAX_PAGES_PER_RUN,
   enqueueClassify = () => {},
   now = () => new Date(),
+  stats,
 }: {
   provider: MailProvider;
   mailbox: string;
@@ -82,6 +86,8 @@ export async function ingestMailbox({
   // composition root (src/sync/composition.ts) wires the real job enqueue.
   enqueueClassify?: (key: string) => void;
   now?: () => Date;
+  // Filled in as pages arrive, for the caller's span.
+  stats: { fetched: number };
 }): Promise<IngestMailboxResult> {
   const accountId = accountIdFor(provider);
   accounts.upsertAccount({
@@ -98,6 +104,7 @@ export async function ingestMailbox({
   // it: knownMessageKeys() is queried fresh per page, and upsertMessage()
   // from an earlier page has already landed by the time a later one runs.
   function ingestPage(items: Envelope[]): void {
+    stats.fetched += items.length;
     const nowIso = now().toISOString();
     const keys = items.map((envelope) => messageKey(accountId, envelope));
     const known = messages.knownMessageKeys(keys);
@@ -155,7 +162,7 @@ export async function ingestMailbox({
           // re-enqueues it (a future re-ingest sees it as already-known and
           // won't). Logged rather than silent so the gap is at least
           // visible.
-          console.error(`[ingest] failed to enqueue classify for ${key}`, {
+          log.error(`[ingest] failed to enqueue classify for ${key}`, {
             error,
           });
         }
@@ -232,4 +239,43 @@ export async function ingestMailbox({
   }
 
   return { new: newCount, errors };
+}
+
+// The `imap.sync` client span and `sync.tick` event around one mailbox's ingest. Attributes
+// are the provider, the mailbox ROLE, and counts — never an address, subject or message id.
+// (`sync.tick` carries no lag figure: the age of the newest envelope cannot tell a stalled
+// sync from a quiet mailbox, so a stall is the ABSENCE of ok `sync.tick` events.)
+export function ingestMailbox(
+  params: Omit<Parameters<typeof ingestMailboxPages>[0], "stats">,
+): Promise<IngestMailboxResult> {
+  const role = mailboxRole(params.mailbox);
+  return withSpan(
+    "imap.sync",
+    { "mail.provider": params.provider.id, "mail.mailbox": role },
+    async (span) => {
+      const stats = { fetched: 0 };
+      const result = await ingestMailboxPages({ ...params, stats });
+      const outcome = result.errors.length > 0 ? "error" : "ok";
+      span.setAttributes({
+        outcome,
+        "sync.fetched": stats.fetched,
+        "sync.ingested": result.new,
+      });
+      // Role-based text: the raw error strings embed the folder path.
+      if (outcome === "error") span.setStatus("error", `${role}: sync failed`);
+      log.event(
+        "sync.tick",
+        {
+          provider: params.provider.id,
+          mailbox: role,
+          outcome,
+          fetched: stats.fetched,
+          ingested: result.new,
+        },
+        outcome === "error" ? "warn" : "info",
+      );
+      return result;
+    },
+    "client",
+  );
 }
