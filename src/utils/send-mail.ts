@@ -1,11 +1,14 @@
 import type { ReactElement } from "react";
 import {
+  sendBodiesRepo,
   sendLogRepo,
   type InsertSendLogInput,
+  type SendBodiesRepo,
   type SendLogRepo,
 } from "../db/mail-index";
 import { renderTemplate, type SendProvider } from "../providers/send-port";
 import { sendProvider } from "../providers/send-registry";
+import { storeSendBody } from "./send-body";
 
 export const DEFAULT_FROM =
   "Free-Planning-Poker.com <no-reply@free-planning-poker.com>";
@@ -28,9 +31,13 @@ export function recordSendLog(
   }
 }
 
+// What requested a send, as send_log.requested_by and the provider's `source`
+// tag: the inline routes are all "route".
+const ROUTE_SOURCE = "route";
+
 /**
- * Sends one rendered template through the send provider and records a
- * send_log row. The returned `id` is the PROVIDER's message id (what the
+ * Sends one rendered template through the send provider, records a send_log
+ * row and keeps the (redacted) rendered mail for review. The returned `id` is the PROVIDER's message id (what the
  * caller can look up at the provider), not the send_log row id, which is a
  * separate random UUID.
  */
@@ -42,8 +49,10 @@ export async function sendMail({
   template,
   source,
   sensitiveSubject = false,
+  templateProps,
   provider = sendProvider(),
   sendLog = sendLogRepo,
+  sendBodies = sendBodiesRepo,
 }: {
   from?: string;
   to: string;
@@ -55,12 +64,20 @@ export async function sendMail({
   source?: string;
   // The subject carries a secret (an auth code): logs say "[redacted]".
   sensitiveSubject?: boolean;
+  // The props `template` was built from: the registry's `redact` reads the
+  // secrets (an auth code) to blank out of the stored body from them. A
+  // template that names secrets is not stored without them.
+  templateProps?: unknown;
   // Injectable for tests; defaults to the SES provider.
   provider?: SendProvider;
   sendLog?: Pick<SendLogRepo, "insertSendLog">;
+  sendBodies?: Pick<SendBodiesRepo, "save">;
 }): Promise<{ id: string; from: string }> {
   const { html, text } = await renderTemplate(template);
   const loggedSubject = sensitiveSubject ? "[redacted]" : subject;
+  // Provider-independent: two providers' message ids could collide on
+  // INSERT OR IGNORE, and the id must not change with the provider.
+  const sendId = crypto.randomUUID();
 
   let providerMessageId: string;
   try {
@@ -71,6 +88,10 @@ export async function sendMail({
       subject,
       html,
       text,
+      tags: {
+        ...(source ? { template: source } : {}),
+        source: ROUTE_SOURCE,
+      },
     }));
   } catch (error) {
     console.error("Email sent failed", {
@@ -94,15 +115,20 @@ export async function sendMail({
   });
 
   recordSendLog(sendLog, {
-    // Provider-independent: two providers' message ids could collide on
-    // INSERT OR IGNORE, and the id must not change with the provider.
-    id: crypto.randomUUID(),
+    id: sendId,
     templateId: source ?? null,
     recipients: [to],
     provider: provider.id,
     providerMessageId,
     status: "sent",
-    requestedBy: "route",
+    requestedBy: ROUTE_SOURCE,
+  });
+  storeSendBody({
+    sendBodies,
+    sendId,
+    rendered: { html, text },
+    templateId: source,
+    templateProps,
   });
 
   // The resolved sender (DEFAULT_FROM when the caller passed none) — so a

@@ -30,7 +30,7 @@ describe("openMailDatabase", () => {
     const { user_version } = db
       .query<{ user_version: number }, []>("PRAGMA user_version")
       .get()!;
-    expect(user_version).toBe(6);
+    expect(user_version).toBe(9);
   });
 
   test("is idempotent — running twice does not throw or duplicate schema", () => {

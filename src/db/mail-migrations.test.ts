@@ -202,3 +202,70 @@ describe("mail migration 6", () => {
     expect(names).toContain("idx_submissions_verdict");
   });
 });
+
+describe("mail migrations 7-9 (Wave 18)", () => {
+  test("keeps send_log rows and adds the bounce columns, null for old rows", () => {
+    const db = new Database(":memory:");
+    runMailMigrations(db, { targetVersion: 6 });
+    db.run(
+      `INSERT INTO send_log (id, recipients, provider, requested_by, created_at, updated_at)
+       VALUES ('old', '[]', 'ses', 'route', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')`,
+    );
+
+    runMailMigrations(db);
+
+    expect(
+      db
+        .query(
+          "SELECT bounce_type, bounce_subtype, diagnostic_code FROM send_log WHERE id = 'old'",
+        )
+        .get(),
+    ).toEqual({
+      bounce_type: null,
+      bounce_subtype: null,
+      diagnostic_code: null,
+    });
+  });
+
+  test("send_events rejects a duplicate (send_id, event_type, occurred_at)", () => {
+    const db = new Database(":memory:");
+    runMailMigrations(db);
+    const insert = (occurredAt: string) =>
+      db.run(
+        `INSERT INTO send_events (send_id, event_type, occurred_at, received_at)
+         VALUES ('s1', 'Delivery', ?, '2026-10-14T00:00:00.000Z')`,
+        [occurredAt],
+      );
+
+    insert("2026-10-14T08:00:00.000Z");
+    expect(() => insert("2026-10-14T08:00:00.000Z")).toThrow();
+    expect(() => insert("2026-10-14T08:00:01.000Z")).not.toThrow();
+  });
+
+  test("ses_account holds a single row", () => {
+    const db = new Database(":memory:");
+    runMailMigrations(db);
+
+    db.run(
+      "INSERT INTO ses_account (id, data, fetched_at) VALUES (1, '{}', 'now')",
+    );
+
+    expect(() =>
+      db.run(
+        "INSERT INTO ses_account (id, data, fetched_at) VALUES (2, '{}', 'now')",
+      ),
+    ).toThrow();
+  });
+
+  test("send_bodies is keyed by the send id", () => {
+    const db = new Database(":memory:");
+    runMailMigrations(db);
+    const insert = () =>
+      db.run(
+        "INSERT INTO send_bodies (send_id, html, text, created_at) VALUES ('s1', 'h', 't', 'now')",
+      );
+
+    insert();
+    expect(insert).toThrow();
+  });
+});

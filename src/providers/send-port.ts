@@ -16,6 +16,10 @@ export interface SendMessage {
   // Forwarded as the provider's own idempotency key when it supports one —
   // the send job passes its send_log row id so a re-run cannot duplicate.
   idempotencyKey?: string;
+  // Free-form labels for the provider's own reporting (SES message tags):
+  // `template` is the template id, `source` what requested the send (route,
+  // test-send, agent). A provider sanitizes them to what it accepts.
+  tags?: Record<string, string>;
 }
 
 export interface SendProvider {

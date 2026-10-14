@@ -1,8 +1,13 @@
 import { renderTemplate, type SendProvider } from "../providers/send-port";
 import { sendProviderByName } from "../providers/send-registry";
-import { sendLogRepo as defaultSendLog } from "../db/mail-index";
+import {
+  sendBodiesRepo as defaultSendBodies,
+  sendLogRepo as defaultSendLog,
+} from "../db/mail-index";
+import type { SendBodiesRepo } from "../db/send-bodies";
 import { SEND_CLAIM_STALE_MS, type SendLogRepo } from "../db/send-log";
 import { findTemplateEntry, renderTemplateElement } from "../emails/registry";
+import { storeSendBody } from "../utils/send-body";
 import type { JobHandler } from "./runner";
 
 // The `send` job kind (docs/architecture.md §Jobs: "sends become jobs"):
@@ -26,12 +31,14 @@ export interface SendJobPayload {
 export function createSendHandler({
   providerByName = sendProviderByName,
   sendLog = defaultSendLog,
+  sendBodies = defaultSendBodies,
 }: {
   providerByName?: (name: string) => SendProvider | null;
   sendLog?: Pick<
     SendLogRepo,
     "recordProviderResult" | "getSendLog" | "claimSend" | "releaseSend"
   >;
+  sendBodies?: Pick<SendBodiesRepo, "save">;
 } = {}): JobHandler {
   return async (payload) => {
     const input = payload as SendJobPayload;
@@ -110,6 +117,7 @@ export function createSendHandler({
         html,
         text,
         idempotencyKey: input.id,
+        tags: { template: input.templateName, source: existing.requestedBy },
       }));
     } catch (error) {
       // Nothing was sent: hand the claim back so the retry can take it.
@@ -133,5 +141,15 @@ export function createSendHandler({
         id: input.id,
       });
     }
+
+    // Fail-open like the write above: the mail is out, a body that cannot be
+    // kept never fails the job.
+    storeSendBody({
+      sendBodies,
+      sendId: input.id,
+      rendered: { html, text },
+      templateId: input.templateName,
+      templateProps: input.templateProps,
+    });
   };
 }

@@ -262,6 +262,58 @@ const MAIL_MIGRATIONS: Migration[] = [
       CREATE INDEX idx_submissions_verdict ON submissions (verdict);
     `,
   },
+  {
+    // Wave 18: SES delivery timeline. Bounce detail lands on the send_log row;
+    // every SES event (Send included) lands in send_events, which has no
+    // address column on purpose — the webhook never stores SNS recipient PII.
+    // The UNIQUE index makes an SNS redelivery of the same event a no-op.
+    version: 7,
+    up: `
+      ALTER TABLE send_log ADD COLUMN bounce_type TEXT;
+      ALTER TABLE send_log ADD COLUMN bounce_subtype TEXT;
+      ALTER TABLE send_log ADD COLUMN diagnostic_code TEXT;
+      CREATE TABLE send_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        send_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        status TEXT,
+        bounce_type TEXT,
+        bounce_subtype TEXT,
+        diagnostic_code TEXT,
+        occurred_at TEXT NOT NULL,
+        received_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_send_events_send_id_occurred_at ON send_events (send_id, occurred_at);
+      CREATE UNIQUE INDEX idx_send_events_unique ON send_events (send_id, event_type, occurred_at);
+    `,
+  },
+  {
+    // Wave 18: the rendered mail of a dispatched send, kept 30 days for review
+    // (pruned by the prune_send_bodies job). Secrets are redacted before the
+    // row is written (src/utils/send-body.ts).
+    version: 8,
+    up: `
+      CREATE TABLE send_bodies (
+        send_id TEXT PRIMARY KEY,
+        html TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_send_bodies_created_at ON send_bodies (created_at);
+    `,
+  },
+  {
+    // Wave 18: the latest SES GetAccount snapshot (the ses_account job), one
+    // row, upserted.
+    version: 9,
+    up: `
+      CREATE TABLE ses_account (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        data TEXT NOT NULL,
+        fetched_at TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMailMigrations(

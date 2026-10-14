@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { render } from "react-email";
 import {
   emailRegistry,
+  findTemplateEntry,
   renderTemplateElement,
+  templateSecrets,
   TEMPLATE_IDS,
-  type findTemplateEntry,
 } from "./registry";
 
 function testEntryRendersToHtml(
@@ -23,5 +24,32 @@ describe("email registry", () => {
     expect(emailRegistry.map((entry) => entry.id).sort()).toEqual(
       Object.values(TEMPLATE_IDS).sort(),
     );
+  });
+
+  test("only shutterflow-code names secrets: its auth code", () => {
+    const named = emailRegistry
+      .filter((entry) => entry.redact)
+      .map((entry) => entry.id);
+    expect(named).toEqual([TEMPLATE_IDS.shutterflowCode]);
+
+    const entry = findTemplateEntry(TEMPLATE_IDS.shutterflowCode)!;
+    expect(
+      templateSecrets(entry, {
+        kind: "sign-in",
+        code: "482913",
+        expiresInMinutes: 10,
+      }),
+    ).toEqual(["482913"]);
+    expect(
+      templateSecrets(findTemplateEntry(TEMPLATE_IDS.fppSender)!, {}),
+    ).toEqual([]);
+  });
+
+  test("templateSecrets throws on an empty or non-string secret", () => {
+    const entry = findTemplateEntry(TEMPLATE_IDS.shutterflowCode)!;
+    expect(() => templateSecrets(entry, { code: "" })).toThrow();
+    expect(() => templateSecrets(entry, { code: 482913 })).toThrow();
+    expect(() => templateSecrets(entry, {})).toThrow();
+    expect(() => templateSecrets(entry, undefined)).toThrow();
   });
 });

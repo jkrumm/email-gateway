@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { openMailDatabase } from "../db/mail-client";
+import { createSendBodiesRepo } from "../db/send-bodies";
 import { createSendLogRepo, SEND_CLAIM_STALE_MS } from "../db/send-log";
 import { createFakeSendProvider } from "../test/fake-send-provider";
 import { createSendHandler, type SendJobPayload } from "./send";
@@ -90,6 +91,71 @@ describe("createSendHandler", () => {
       providerMessageId: "msg_99",
       status: "sent",
     });
+  });
+
+  test("tags the send with its template and who requested it", async () => {
+    const fake = createFakeSendProvider({ id: "fake" });
+    const handler = createSendHandler({
+      providerByName: () => fake,
+      sendLog: setup(),
+      sendBodies: createSendBodiesRepo(openMailDatabase(":memory:")),
+    });
+
+    await handler(payload);
+
+    expect(fake.sent[0]?.tags).toEqual({
+      template: "fpp-sender",
+      source: "api",
+    });
+  });
+
+  test("keeps the rendered mail, with a template's secrets redacted", async () => {
+    const sendBodies = createSendBodiesRepo(openMailDatabase(":memory:"));
+    const handler = createSendHandler({
+      providerByName: () => createFakeSendProvider({ id: "fake" }),
+      sendLog: setup(),
+      sendBodies,
+    });
+
+    await handler({
+      ...payload,
+      templateName: "shutterflow-code",
+      templateProps: { kind: "sign-in", code: "482913", expiresInMinutes: 10 },
+    });
+
+    const stored = sendBodies.get("send-1");
+    expect(stored?.html).toContain("[redacted]");
+    expect(stored?.html).not.toContain("482913");
+    expect(stored?.text).not.toContain("482913");
+  });
+
+  test("a body that cannot be stored never fails the job", async () => {
+    const fake = createFakeSendProvider({ id: "fake" });
+    const sendLog = setup();
+    const handler = createSendHandler({
+      providerByName: () => fake,
+      sendLog,
+      sendBodies: {
+        save: () => {
+          throw new Error("SQLITE_BUSY");
+        },
+      },
+    });
+
+    await expect(handler(payload)).resolves.toBeUndefined();
+    expect(sendLog.getSendLog("send-1")?.status).toBe("sent");
+  });
+
+  test("a failed send stores no body", async () => {
+    const sendBodies = createSendBodiesRepo(openMailDatabase(":memory:"));
+    const handler = createSendHandler({
+      providerByName: () => createFakeSendProvider({ sendError: "boom" }),
+      sendLog: setup(),
+      sendBodies,
+    });
+
+    await expect(handler(payload)).rejects.toThrow("boom");
+    expect(sendBodies.get("send-1")).toBeNull();
   });
 
   test("a provider error throws and records nothing", async () => {

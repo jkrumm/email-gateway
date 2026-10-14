@@ -339,3 +339,306 @@ describe("claimSend / releaseSend", () => {
     ).toBe(1);
   });
 });
+
+describe("recordEventByProviderMessageId bounce detail", () => {
+  test("persists the bounce fields and keeps them across a later same-rank event", () => {
+    const { sendLog } = setupWithDb();
+    seed(sendLog, "row", { providerMessageId: "m1", status: "sent" });
+
+    sendLog.recordEventByProviderMessageId("ses", "m1", {
+      status: "bounced",
+      lastEvent: "bounced:Permanent",
+      bounceType: "Permanent",
+      bounceSubtype: "General",
+      diagnosticCode: "smtp; 550 5.1.1 user unknown",
+    });
+    sendLog.recordEventByProviderMessageId("ses", "m1", {
+      status: "complained",
+      lastEvent: "complained",
+    });
+
+    expect(sendLog.getSendLog("row")).toMatchObject({
+      status: "complained",
+      bounceType: "Permanent",
+      bounceSubtype: "General",
+      diagnosticCode: "smtp; 550 5.1.1 user unknown",
+    });
+  });
+});
+
+describe("recordProviderEvent and listSendEvents", () => {
+  const delivered = {
+    eventType: "Delivery",
+    status: "delivered",
+    lastEvent: "delivered",
+    occurredAt: "2026-10-14T08:00:02.000Z",
+  };
+
+  test("updates the status and records the timeline row together", () => {
+    const { sendLog } = setupWithDb();
+    seed(sendLog, "row", { providerMessageId: "m1", status: "sent" });
+
+    expect(sendLog.recordProviderEvent("ses", "m1", delivered)).toEqual({
+      found: true,
+      changed: 1,
+      recorded: true,
+    });
+
+    expect(sendLog.getSendLog("row")?.status).toBe("delivered");
+    expect(sendLog.listSendEvents("row")).toEqual([
+      expect.objectContaining({
+        sendId: "row",
+        eventType: "Delivery",
+        status: "delivered",
+        occurredAt: "2026-10-14T08:00:02.000Z",
+      }),
+    ]);
+  });
+
+  test("a timeline-only event (status null) leaves send_log untouched", () => {
+    const { sendLog } = setupWithDb();
+    seed(sendLog, "row", { providerMessageId: "m1", status: "delivered" });
+    const before = sendLog.getSendLog("row");
+
+    const outcome = sendLog.recordProviderEvent("ses", "m1", {
+      eventType: "Send",
+      status: null,
+      lastEvent: "send",
+      occurredAt: "2026-10-14T08:00:00.000Z",
+    });
+
+    expect(outcome).toEqual({ found: true, changed: 0, recorded: true });
+    expect(sendLog.getSendLog("row")).toEqual(before);
+  });
+
+  test("a stale event is still recorded in the timeline", () => {
+    const { sendLog } = setupWithDb();
+    seed(sendLog, "row", { providerMessageId: "m1", status: "delivered" });
+
+    const outcome = sendLog.recordProviderEvent("ses", "m1", {
+      eventType: "DeliveryDelay",
+      status: "delivery_delayed",
+      lastEvent: "delivery_delayed",
+      occurredAt: "2026-10-14T07:59:00.000Z",
+    });
+
+    expect(outcome).toEqual({ found: true, changed: 0, recorded: true });
+    expect(sendLog.getSendLog("row")?.status).toBe("delivered");
+  });
+
+  test("a redelivered event is idempotent", () => {
+    const { sendLog } = setupWithDb();
+    seed(sendLog, "row", { providerMessageId: "m1", status: "sent" });
+
+    sendLog.recordProviderEvent("ses", "m1", delivered);
+    const again = sendLog.recordProviderEvent("ses", "m1", delivered);
+
+    expect(again.recorded).toBe(false);
+    expect(sendLog.listSendEvents("row")).toHaveLength(1);
+  });
+
+  test("pruneEventsOlderThan deletes only events received before the cutoff", () => {
+    const { db, sendLog } = setupWithDb();
+    seed(sendLog, "row", { providerMessageId: "m1", status: "sent" });
+    sendLog.recordProviderEvent("ses", "m1", {
+      eventType: "Send",
+      status: null,
+      lastEvent: "send",
+      occurredAt: "2026-08-01T00:00:00.000Z",
+    });
+    sendLog.recordProviderEvent("ses", "m1", delivered);
+    db.run("UPDATE send_events SET received_at = ? WHERE event_type = 'Send'", [
+      "2026-08-01T00:00:00.000Z",
+    ]);
+
+    expect(sendLog.pruneEventsOlderThan("2026-09-01T00:00:00.000Z")).toBe(1);
+
+    expect(sendLog.listSendEvents("row").map((e) => e.eventType)).toEqual([
+      "Delivery",
+    ]);
+  });
+
+  test("an unknown provider message id is a no-op", () => {
+    const { db, sendLog } = setupWithDb();
+    seed(sendLog, "row", { providerMessageId: "m1", status: "sent" });
+
+    expect(sendLog.recordProviderEvent("ses", "nope", delivered)).toEqual({
+      found: false,
+      changed: 0,
+      recorded: false,
+    });
+    expect(sendLog.recordProviderEvent("other", "m1", delivered).found).toBe(
+      false,
+    );
+    expect(db.query("SELECT COUNT(*) AS n FROM send_events").get()).toEqual({
+      n: 0,
+    });
+  });
+
+  test("lists events oldest first by occurrence", () => {
+    const { sendLog } = setupWithDb();
+    seed(sendLog, "row", { providerMessageId: "m1", status: "sent" });
+
+    sendLog.recordProviderEvent("ses", "m1", delivered);
+    sendLog.recordProviderEvent("ses", "m1", {
+      eventType: "Send",
+      status: null,
+      lastEvent: "send",
+      occurredAt: "2026-10-14T08:00:00.000Z",
+    });
+
+    expect(sendLog.listSendEvents("row").map((e) => e.eventType)).toEqual([
+      "Send",
+      "Delivery",
+    ]);
+    expect(sendLog.listSendEvents("missing")).toEqual([]);
+  });
+
+  test("the schema has no address column on send_events", () => {
+    const { db } = setupWithDb();
+    const columns = db
+      .query<{ name: string }, []>("PRAGMA table_info(send_events)")
+      .all()
+      .map((column) => column.name);
+
+    expect(columns.some((name) => /mail|address|recipient/.test(name))).toBe(
+      false,
+    );
+  });
+});
+
+describe("getSendStats", () => {
+  const NOW = new Date("2026-10-14T12:00:00.000Z");
+
+  function seedAt(
+    db: ReturnType<typeof setupWithDb>["db"],
+    sendLog: ReturnType<typeof createSendLogRepo>,
+    id: string,
+    {
+      createdAt,
+      templateId,
+      status,
+      providerMessageId = `msg-${id}`,
+    }: {
+      createdAt: string;
+      templateId: string | null;
+      status: string | null;
+      providerMessageId?: string | null;
+    },
+  ) {
+    sendLog.insertSendLog({
+      id,
+      templateId,
+      recipients: ["jane@example.com"],
+      provider: "ses",
+      providerMessageId,
+      status,
+      requestedBy: "route",
+    });
+    db.run("UPDATE send_log SET created_at = ? WHERE id = ?", [createdAt, id]);
+  }
+
+  test("buckets by UTC day, template and status inside the window", () => {
+    const { db, sendLog } = setupWithDb();
+    seedAt(db, sendLog, "a", {
+      createdAt: "2026-10-14T01:00:00.000Z",
+      templateId: "fpp-sender",
+      status: "delivered",
+    });
+    seedAt(db, sendLog, "b", {
+      createdAt: "2026-10-14T23:00:00.000Z",
+      templateId: "fpp-sender",
+      status: "delivered",
+    });
+    seedAt(db, sendLog, "c", {
+      createdAt: "2026-10-13T10:00:00.000Z",
+      templateId: "shutterflow-code",
+      status: "bounced",
+    });
+    seedAt(db, sendLog, "d", {
+      createdAt: "2026-10-13T11:00:00.000Z",
+      templateId: null,
+      status: null,
+      providerMessageId: null,
+    });
+    seedAt(db, sendLog, "old", {
+      createdAt: "2026-08-01T00:00:00.000Z",
+      templateId: "fpp-sender",
+      status: "delivered",
+    });
+
+    const stats = sendLog.getSendStats({ days: 30, now: NOW });
+
+    expect(stats.days).toBe(30);
+    expect(stats.since).toBe("2026-09-14T12:00:00.000Z");
+    expect(stats.daily).toEqual([
+      {
+        date: "2026-10-13",
+        templateId: "shutterflow-code",
+        status: "bounced",
+        count: 1,
+      },
+      {
+        date: "2026-10-13",
+        templateId: "unknown",
+        status: "pending",
+        count: 1,
+      },
+      {
+        date: "2026-10-14",
+        templateId: "fpp-sender",
+        status: "delivered",
+        count: 2,
+      },
+    ]);
+  });
+
+  test("computes bounce and complaint rates over 7 and 30 days", () => {
+    const { db, sendLog } = setupWithDb();
+    const rows: [string, string, string][] = [
+      ["r1", "2026-10-13T00:00:00.000Z", "delivered"],
+      ["r2", "2026-10-12T00:00:00.000Z", "delivered"],
+      ["r3", "2026-10-11T00:00:00.000Z", "bounced"],
+      ["r4", "2026-10-10T00:00:00.000Z", "complained"],
+      ["r5", "2026-09-25T00:00:00.000Z", "bounced"],
+      ["r6", "2026-09-20T00:00:00.000Z", "delivered"],
+    ];
+    for (const [id, createdAt, status] of rows) {
+      seedAt(db, sendLog, id, { createdAt, templateId: "t", status });
+    }
+    // Never reached the provider: not a send.
+    seedAt(db, sendLog, "queued", {
+      createdAt: "2026-10-13T00:00:00.000Z",
+      templateId: "t",
+      status: null,
+      providerMessageId: null,
+    });
+
+    const { rates } = sendLog.getSendStats({ days: 30, now: NOW });
+
+    expect(rates.last7Days).toEqual({
+      sends: 4,
+      bounceRate: 0.25,
+      complaintRate: 0.25,
+    });
+    expect(rates.last30Days).toEqual({
+      sends: 6,
+      bounceRate: 2 / 6,
+      complaintRate: 1 / 6,
+    });
+  });
+
+  test("rates are null when there were no sends", () => {
+    const { sendLog } = setupWithDb();
+
+    const stats = sendLog.getSendStats({ days: 30, now: NOW });
+
+    expect(stats.daily).toEqual([]);
+    expect(stats.rates.last7Days).toEqual({
+      sends: 0,
+      bounceRate: null,
+      complaintRate: null,
+    });
+    expect(stats.rates.last30Days.bounceRate).toBeNull();
+  });
+});

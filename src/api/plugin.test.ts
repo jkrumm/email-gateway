@@ -5,6 +5,9 @@ import { createAccountsRepo } from "../db/accounts";
 import { createMessagesRepo, type MessageEnvelope } from "../db/messages";
 import { createMailSubmissionsRepo } from "../db/mail-submissions";
 import { createSendLogRepo } from "../db/send-log";
+import { createSendBodiesRepo } from "../db/send-bodies";
+import { createSesAccountRepo } from "../db/ses-account";
+import type { SesSuppressions } from "../providers/ses/suppressions";
 import { createTemplatesRepo } from "../db/templates";
 import { createJobQueue } from "../db/jobs";
 import { TEMPLATE_IDS } from "../emails/registry";
@@ -77,10 +80,12 @@ function testApp(
     providerFor,
     configuredProviders,
     agentApi,
+    suppressions,
   }: {
     providerFor?: (accountId: string) => MailProvider | null;
     configuredProviders?: () => MailProvider[];
     agentApi?: AgentApi;
+    suppressions?: SesSuppressions;
   } = {},
 ) {
   const db = openMailDatabase(":memory:");
@@ -89,6 +94,8 @@ function testApp(
   const mailSubmissions = createMailSubmissionsRepo(db);
   const templates = createTemplatesRepo(db);
   const sendLog = createSendLogRepo(db);
+  const sendBodies = createSendBodiesRepo(db);
+  const sesAccount = createSesAccountRepo(db);
   const jobs = createJobQueue({ db, claimedBy: "test:1" });
   accounts.upsertAccount({
     id: ACCOUNT_ID,
@@ -104,13 +111,26 @@ function testApp(
     accounts,
     templates,
     sendLog,
+    sendBodies,
+    sesAccount,
+    ...(suppressions ? { suppressions } : {}),
     jobs,
     providerFor: providerFor ?? (() => null),
     configuredProviders: configuredProviders ?? (() => []),
     agentApi,
   });
 
-  return { app, messages, mailSubmissions, accounts, jobs, templates, sendLog };
+  return {
+    app,
+    messages,
+    mailSubmissions,
+    accounts,
+    jobs,
+    templates,
+    sendLog,
+    sendBodies,
+    sesAccount,
+  };
 }
 
 function authHeaders(key = API_KEY) {
@@ -1241,5 +1261,307 @@ describe("GET /api/send-log", () => {
 
     expect(response.status).toBe(400);
     expect(await json(response)).toEqual({ error: "invalid_cursor" });
+  });
+});
+
+describe("GET /api/sends/stats", () => {
+  test("returns daily buckets and rates, defaulting to 30 days", async () => {
+    const { app, sendLog } = testApp(API_KEY);
+    sendLog.insertSendLog({
+      id: "s1",
+      templateId: "fpp-sender",
+      recipients: ["jane@example.com"],
+      provider: "ses",
+      providerMessageId: "m1",
+      status: "delivered",
+      requestedBy: "route",
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/sends/stats", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await json(response)) as {
+      days: number;
+      daily: { templateId: string; status: string; count: number }[];
+      rates: { last7Days: object };
+    };
+    expect(body.days).toBe(30);
+    expect(body.daily).toEqual([
+      expect.objectContaining({
+        templateId: "fpp-sender",
+        status: "delivered",
+        count: 1,
+      }),
+    ]);
+    expect(body.rates.last7Days).toEqual({
+      sends: 1,
+      bounceRate: 0,
+      complaintRate: 0,
+    });
+  });
+
+  test("honours ?days= and rejects more than 90", async () => {
+    const { app } = testApp(API_KEY);
+    const get = (query: string) =>
+      app.handle(
+        new Request(`http://localhost/api/sends/stats${query}`, {
+          headers: authHeaders(),
+        }),
+      );
+
+    expect(((await json(await get("?days=7"))) as { days: number }).days).toBe(
+      7,
+    );
+    expect((await get("?days=91")).status).toBe(422);
+    expect((await get("?days=0")).status).toBe(422);
+  });
+
+  test("is bearer-protected", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/sends/stats"),
+    );
+
+    expect(response.status).toBe(401);
+  });
+});
+
+describe("GET /api/sends/:id", () => {
+  test("returns the entry with its events and stored body", async () => {
+    const { app, sendLog, sendBodies } = testApp(API_KEY);
+    sendLog.insertSendLog({
+      id: "s1",
+      templateId: "fpp-sender",
+      recipients: ["jane@example.com"],
+      provider: "ses",
+      providerMessageId: "m1",
+      status: "sent",
+      requestedBy: "route",
+    });
+    sendLog.recordProviderEvent("ses", "m1", {
+      eventType: "Bounce",
+      status: "bounced",
+      lastEvent: "bounced:Permanent",
+      occurredAt: "2026-10-14T08:00:03.000Z",
+      bounceType: "Permanent",
+      diagnosticCode: "smtp; 550 5.1.1 user unknown",
+    });
+    sendBodies.save({ sendId: "s1", html: "<p>hi</p>", text: "hi" });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/sends/s1", { headers: authHeaders() }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toMatchObject({
+      id: "s1",
+      status: "bounced",
+      bounceType: "Permanent",
+      diagnosticCode: "smtp; 550 5.1.1 user unknown",
+      events: [{ eventType: "Bounce", occurredAt: "2026-10-14T08:00:03.000Z" }],
+      body: { html: "<p>hi</p>", text: "hi", storedAt: expect.any(String) },
+    });
+  });
+
+  test("body is null when none is stored", async () => {
+    const { app, sendLog } = testApp(API_KEY);
+    sendLog.insertSendLog({
+      id: "s1",
+      recipients: ["jane@example.com"],
+      provider: "ses",
+      requestedBy: "route",
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/sends/s1", { headers: authHeaders() }),
+    );
+
+    expect(await json(response)).toMatchObject({ events: [], body: null });
+  });
+
+  test("404 for an unknown id", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/sends/nope", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await json(response)).toEqual({ error: "not_found" });
+  });
+});
+
+describe("GET /api/ses/account", () => {
+  test("404 until the ses_account job has stored a snapshot", async () => {
+    const { app } = testApp(API_KEY);
+
+    const response = await app.handle(
+      new Request("http://localhost/api/ses/account", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("returns the stored snapshot", async () => {
+    const { app, sesAccount } = testApp(API_KEY);
+    sesAccount.save({
+      sendingEnabled: true,
+      enforcementStatus: "HEALTHY",
+      productionAccess: true,
+      max24HourSend: 50000,
+      maxSendRate: 14,
+      sentLast24Hours: 3,
+      fetchedAt: "2026-10-14T10:00:00.000Z",
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/ses/account", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toMatchObject({
+      enforcementStatus: "HEALTHY",
+      sentLast24Hours: 3,
+    });
+  });
+});
+
+describe("/api/ses/suppressions", () => {
+  function fakeSuppressions(
+    overrides: Partial<SesSuppressions> = {},
+  ): SesSuppressions & { calls: unknown[] } {
+    const calls: unknown[] = [];
+    return {
+      calls,
+      list: async (input) => {
+        calls.push(["list", input]);
+        return {
+          data: [
+            {
+              email: "a@example.com",
+              reason: "BOUNCE",
+              lastUpdate: "2026-10-01T08:00:00.000Z",
+            },
+          ],
+          nextCursor: "next",
+        };
+      },
+      remove: async (email) => {
+        calls.push(["remove", email]);
+      },
+      ...overrides,
+    };
+  }
+
+  test("GET passes reason and cursor through", async () => {
+    const suppressions = fakeSuppressions();
+    const { app } = testApp(API_KEY, { suppressions });
+
+    const response = await app.handle(
+      new Request(
+        "http://localhost/api/ses/suppressions?reason=BOUNCE&cursor=tok",
+        { headers: authHeaders() },
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toMatchObject({ nextCursor: "next" });
+    expect(suppressions.calls).toEqual([
+      ["list", { reason: "BOUNCE", cursor: "tok" }],
+    ]);
+  });
+
+  test("GET rejects an unknown reason", async () => {
+    const { app } = testApp(API_KEY, { suppressions: fakeSuppressions() });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/ses/suppressions?reason=SPAM", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(422);
+  });
+
+  test("GET is a 502 when SES fails", async () => {
+    const { app } = testApp(API_KEY, {
+      suppressions: fakeSuppressions({
+        list: async () => {
+          throw new Error("AccessDenied");
+        },
+      }),
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/ses/suppressions", {
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(502);
+    expect(await json(response)).toEqual({ error: "ses_unavailable" });
+  });
+
+  test("DELETE removes the address", async () => {
+    const suppressions = fakeSuppressions();
+    const { app } = testApp(API_KEY, { suppressions });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/ses/suppressions/a%40example.com", {
+        method: "DELETE",
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toEqual({ ok: true });
+    expect(suppressions.calls).toEqual([["remove", "a@example.com"]]);
+  });
+
+  test("DELETE of an address not on the list is 404", async () => {
+    const notFound = Object.assign(new Error("not on the list"), {
+      name: "NotFoundException",
+    });
+    const { app } = testApp(API_KEY, {
+      suppressions: fakeSuppressions({
+        remove: async () => {
+          throw notFound;
+        },
+      }),
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/ses/suppressions/a%40example.com", {
+        method: "DELETE",
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("DELETE without credentials is 401 and removes nothing", async () => {
+    const suppressions = fakeSuppressions();
+    const { app } = testApp(API_KEY, { suppressions });
+
+    const response = await app.handle(
+      new Request("http://localhost/api/ses/suppressions/a%40example.com", {
+        method: "DELETE",
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(suppressions.calls).toEqual([]);
   });
 });

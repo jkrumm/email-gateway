@@ -19,7 +19,9 @@ const shutterflowBody = t.Object({
 // -> 404 like /api without API_KEY. No spam gate: a user is waiting for the
 // code. The send is synchronous and a provider error is a 502, so Shutterflow
 // can offer a retry. The code is never logged and never reaches send_log
-// (`sensitiveSubject` redacts the subject, which leads with it).
+// (`sensitiveSubject` redacts the subject, which leads with it); the stored
+// copy of the mail has it replaced by `[redacted]` (`templateProps` feeds the
+// template registry's `redact`).
 export function createShutterflowRoutes({
   secretKey,
   fromEmail,
@@ -48,15 +50,17 @@ export function createShutterflowRoutes({
       "/shutterflow",
       async ({ body, set }) => {
         try {
+          const props = {
+            kind: body.kind,
+            code: body.code,
+            expiresInMinutes: body.expiresInMinutes,
+          };
           await send({
             to: body.to,
             ...(fromEmail ? { from: fromEmail } : {}),
             subject: shutterflowCodeSubject(body.kind, body.code),
-            template: ShutterflowCodeMail({
-              kind: body.kind,
-              code: body.code,
-              expiresInMinutes: body.expiresInMinutes,
-            }),
+            template: ShutterflowCodeMail(props),
+            templateProps: props,
             source: TEMPLATE_IDS.shutterflowCode,
             sensitiveSubject: true,
           });

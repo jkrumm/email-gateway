@@ -22,7 +22,7 @@ file is what a dispatched agent needs before touching code.
 
 Bun 1.4 · Elysia 1.4 (`@elysiajs/bearer`) · `bun:sqlite` (WAL, migrations by
 `PRAGMA user_version`, append-only) · imapflow 2 + postal-mime ·
-react-email 6 · `@aws-sdk/client-sesv2` (SES, the only send provider) · AI SDK 7 (`ai` 7.0.137; `@ai-sdk/openai-compatible` for the LLM; the shadow
+react-email 6 · `@aws-sdk/client-sesv2` 3.1149.0 (SES, the only send provider) · AI SDK 7 (`ai` 7.0.137; `@ai-sdk/openai-compatible` for the LLM; the shadow
 lane "Jev" runs `pplx-decider-v1-27b` on IU's native decision API
 (`POST <ue-origin>/decisions/v1/systemone`) through the official
 `@ai-sdk/typesafe-ai` provider and `experimental_decide`, OpenRouter's
@@ -130,7 +130,21 @@ uidValidity:uid)`, never attacker-influenced, so `ON CONFLICT DO UPDATE`ing
   was lost), which can re-send once the claim goes stale — accepted gap.
 - **Migrations are append-only**; `accounts.provider` has a CHECK constraint, so a
   new provider is a migration (it still allows `resend`; migration 5 deleted the
-  Resend account's rows in Wave 15).
+  Resend account's rows in Wave 15). Wave 18 added 7 (`send_log` bounce columns +
+  `send_events`), 8 (`send_bodies`) and 9 (`ses_account`).
+- **Stored mail is redacted, 30-day, never logged** (Wave 18). `send_bodies`
+  holds a dispatched send's html + text, written only through
+  `src/utils/send-body.ts`'s `storeSendBody` (both `sendMail` and the `send`
+  job), fail-open, after the template registry's `redact(props)` secrets
+  (`shutterflow-code`'s auth code) became `[redacted]`; a template that names
+  secrets is not stored without its props (or when `redact` yields no non-empty
+  string). The `prune_send_bodies` job deletes `send_bodies` rows and
+  `send_events` older than 30 days (`SEND_BODY_RETENTION_MS`; `send_events` are
+  pruned with bodies, 30 days). Never log a body or the
+  error of a failed store. `send_events` and the `send_log` bounce columns
+  hold no addresses (diagnostic codes are scrubbed in `ses/events.ts`) beyond
+  the existing `send_log.recipients`; SNS payloads stay unlogged. No open/click
+  tracking and no VDM.
 - **No timeouts on agent-style work** (`rules/agent-limits.md`): the LLM calls
   carry a 30-min hang guard, not a budget.
 - **The mail surface is host-gated and bearer-first.** `/app` and `/api` sit
@@ -225,19 +239,29 @@ tests never need secrets.
   send). SES is the only provider: `src/providers/send-registry.ts` is a lazy
   singleton (`sendProvider()`; `sendProviderByName(name)` returns null for any
   name but `ses`, e.g. an old `send_log` row), built from the four required
-  `SES_*` env vars. `sendMail` records `send_log.provider`/
+  `SES_*` env vars; `sesClient()` is the one shared lazy `SESv2Client` (also
+  used by the `ses_account` job and the suppressions routes). `sendMail`
+  records `send_log.provider`/
   `provider_message_id`; the `send` job uses the provider on its send_log row.
+  Both pass `tags` (`template`, `source`) that become SES `EmailTags`.
   A row's status after sending comes only from SES events via
   `POST /webhooks/ses` — no polling or reconcile job.
   `src/test/fake-send-provider.ts` is the test adapter.
 - `src/providers/ses/` (Wave 12): `send.ts` the SES `SendProvider`
-  (`createSesSendProvider({ client, configurationSetName })`, `SendEmailCommand`,
-  no `status()`; the registry builds it lazily from the required `SES_*` env), `events.ts` the pure SES event → `{providerMessageId,
-status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
+  (`createSesSendProvider({ client, configurationSetName })`, `SendEmailCommand`
+  with `EmailTags` from `SendMessage.tags` via `sanitizeSesTag`, no `status()`;
+  the registry builds it lazily from the required `SES_*` env), `events.ts` the
+  pure SES event → `{providerMessageId, eventType, status | null, lastEvent,
+occurredAt, bounceType?, bounceSubtype?, diagnosticCode?}` mapping (`Send` →
+  status null, timeline only; ignored types → null), `account.ts` (Wave 18)
+  the pure `GetAccount` → `SesAccountSnapshot` mapping + `fetchSesAccount`,
+  `suppressions.ts` the injectable list/delete of the SES account suppression
+  list (`createSesSuppressions`, pages capped at 100), `sns-verify.ts` the pure
   SNS signature verifier (`createSnsVerifier({ region, fetchCert })`,
   `trustedSnsUrl`, v1/v2). `src/routes/ses-webhook.ts`
   (`createSesWebhookRoutes`) is the `POST /webhooks/ses` door and calls
-  `sendLogRepo.recordEventByProviderMessageId` (status never regresses:
+  `sendLogRepo.recordProviderEvent` (status update + `send_events` row in one
+  transaction; status never regresses:
   sent < delivery_delayed < delivered < bounced/complained/rejected/failed);
   `src/test/sns-fixture.ts` signs fake SNS messages with a generated key.
 - `src/emails/` React Email templates + `registry.ts` (Wave 7: `TEMPLATE_IDS`
@@ -246,7 +270,8 @@ status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
   `syncTemplateRegistry()` pushes the registry into the `templates` table on
   every boot); `src/layouts/`; `src/utils/send-mail.ts` (SES send + a
   `send_log` row via `src/db/mail-index.ts`'s `sendLogRepo` — no longer
-  touches the old `emails` table). The registry's preview page was retired
+  touches the old `emails` table — plus the redacted stored body through
+  `src/utils/send-body.ts`). The registry's preview page was retired
   with the SSR admin; the client's Templates page (Wave 7) replaces it, now
   backed by `GET /api/templates(/:id/preview)` and
   `POST /api/templates/:id/test-send`
@@ -274,15 +299,19 @@ status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
   hang guard)
 - `src/db/jobs.ts` + `src/jobs/runner.ts` + `src/jobs/idle-watchdog.ts` +
   `src/jobs/rate-limit.ts`'s `isRateLimitError` (job-queue-owned, not an LLM
-  concept, despite classifying LLM-gateway 429s among other things): the
+  concept, despite classifying LLM-gateway 429s and, by error shape only, SES
+  throttles — `TooManyRequestsException`/`SendingPausedException`/
+  `LimitExceededException`/HTTP 429 — among other things): the
   one job queue every async source now runs on (`docs/architecture.md`
   §Jobs), live against `mail.sqlite` via `src/jobs/queue.ts`'s `jobQueue`
   singleton. `src/jobs/register.ts` is the boot composition root
   (`startJobSystem`): registers `sync_tick`/`classify`/`jev_message`/
-  `jev_submission`/`send`, reaps this host's
+  `jev_submission`/`send`/`prune_send_bodies`/`ses_account` (the last two on
+  daily/hourly timers), reaps this host's
   stale claims once, polls `runner.drain()`, and wires IMAP `watch()`/IDLE to
   kick a debounced `sync_tick`.
-  `src/jobs/classify.ts`, `src/jobs/jev.ts`, `src/jobs/send.ts`
+  `src/jobs/classify.ts`, `src/jobs/jev.ts`, `src/jobs/send.ts`,
+  `src/jobs/prune-send-bodies.ts`, `src/jobs/ses-account.ts`
   are the handler factories (Wave 15 removed `reconcile_send_log`); `runner.ts`'s `runOnce` now classifies a caught
   error via `isRateLimitError` and calls `fail({ rateLimited: true })` so a
   429 parks on `jobs.rate_limits`'s own escalating ladder (1m → 5m → 15m →
@@ -304,16 +333,17 @@ status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
 - `src/db/mail-index.ts` (Wave 4): the `mail.sqlite` repo singletons
   (`accountsRepo`, `messagesRepo`, `mailSubmissionsRepo`, `templatesRepo`,
   `sendLogRepo`, `threadSummariesRepo` — Wave 8's cached LLM thread
-  summaries), each bound to `mailDb` the same way the old-store repos
+  summaries, `sendBodiesRepo`, `sesAccountRepo` — Wave 18), each bound to `mailDb` the same way the old-store repos
   below are bound to `db`. `src/db/mail-migrations.ts`
   - `src/db/mail-client.ts` own the schema (`docs/architecture.md` §Lean
     store) and the `mailDb` singleton, opened alongside — never replacing — the
     untouched `email-gateway.sqlite`/`db` from `src/db/client.ts`; both share
     `src/db/migration-runner.ts`'s generic `applyMigrations`, and
     `mail-client.ts` also calls `ensureJobsSchema` so `jobs` is real there.
-    `src/db/{accounts,messages,mail-submissions,templates,send-log,thread-summaries}.ts`
+    `src/db/{accounts,messages,mail-submissions,templates,send-log,thread-summaries,send-bodies,ses-account}.ts`
     are the domain repos over that schema (same `createXRepo(db)`/`XRepo` shape
-    as the repos below).
+    as the repos below; `send-log.ts` also owns `send_events`:
+    `recordProviderEvent`, `listSendEvents`, `getSendStats`).
 - `src/providers/port.ts` the `MailProvider` interface (capabilities, list,
   read, search, setFlags, move, watch) every mailbox sits behind;
   `src/providers/imap/adapter.ts` grows the old IMAP port with Bridge/Gmail
@@ -361,7 +391,10 @@ status, lastEvent}` mapping (ignored types → null), `sns-verify.ts` the pure
   and `src/api`; `src/host-gate.ts` the `MAIL_HOST` gate (`hostAllowed` +
   `createApp`'s scoped `.guard`) — a mismatching Host 404s `/app`, `/api` and
   `/mcp` while the send routes and `/health` stay on any Host.
-- `src/api/plugin.ts` bearer JSON API; a same-origin request carrying the valid
+- `src/api/plugin.ts` bearer JSON API (Wave 18 added, inside the one route
+  chain so Eden types flow: `GET /api/sends/stats`, `GET /api/sends/:id`,
+  `GET /api/ses/account`, `GET /api/ses/suppressions`,
+  `DELETE /api/ses/suppressions/:email`); a same-origin request carrying the valid
   `/app` session cookie is accepted as an alternative to the bearer (the browser
   client's door) — bearer semantics for agents are unchanged. Wave 8 added
   `GET /api/threads/:key/summary`, `POST /api/drafts`, `POST /api/sends` and

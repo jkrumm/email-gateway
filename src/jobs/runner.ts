@@ -155,6 +155,11 @@ function recordFailOutcome({
   }
 
   if (outcome.rateLimited) {
+    if (error instanceof Error && error.name === "SendingPausedException") {
+      console.warn(
+        `[jobs] SES sending is paused (${error.name}) — ${claim.kind} job ${claim.id} parked`,
+      );
+    }
     const retrySeconds = outcome.nextAttemptAt
       ? Math.max(
           0,

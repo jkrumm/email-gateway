@@ -21,6 +21,11 @@ export interface SendLogEntry {
   requestedBy: string;
   createdAt: string;
   updatedAt: string;
+  // Set by a bounce event (the SES webhook); the diagnostic code never
+  // carries an address.
+  bounceType: string | null;
+  bounceSubtype: string | null;
+  diagnosticCode: string | null;
 }
 
 export interface InsertSendLogInput {
@@ -45,6 +50,65 @@ export interface RecordProviderResultInput {
 export interface RecordEventInput {
   status: string;
   lastEvent: string;
+  bounceType?: string;
+  bounceSubtype?: string;
+  diagnosticCode?: string;
+}
+
+// One provider event as the timeline records it. `status` null is a
+// timeline-only event (SES "Send"): it never touches send_log.
+export interface ProviderEventInput {
+  eventType: string;
+  status: string | null;
+  lastEvent: string;
+  occurredAt: string;
+  bounceType?: string;
+  bounceSubtype?: string;
+  diagnosticCode?: string;
+}
+
+export interface RecordProviderEventOutcome {
+  // A send_log row carries this provider message id.
+  found: boolean;
+  // send_log rows whose status the event advanced (0: stale or timeline-only).
+  changed: number;
+  // A new send_events row was written (false for a redelivered event).
+  recorded: boolean;
+}
+
+export interface SendEvent {
+  id: number;
+  sendId: string;
+  eventType: string;
+  status: string | null;
+  bounceType: string | null;
+  bounceSubtype: string | null;
+  diagnosticCode: string | null;
+  occurredAt: string;
+  receivedAt: string;
+}
+
+export interface SendStatsBucket {
+  // UTC calendar day, YYYY-MM-DD.
+  date: string;
+  templateId: string;
+  status: string;
+  count: number;
+}
+
+export interface SendRates {
+  // Sends that reached the provider (have a provider message id).
+  sends: number;
+  // Null when there were no sends.
+  bounceRate: number | null;
+  complaintRate: number | null;
+}
+
+export interface SendStats {
+  days: number;
+  since: string;
+  daily: SendStatsBucket[];
+  rates: { last7Days: SendRates; last30Days: SendRates };
 }
 
 export interface ListSendLogFilters {
@@ -84,6 +148,37 @@ interface SendLogRow {
   requested_by: string;
   created_at: string;
   updated_at: string;
+  bounce_type: string | null;
+  bounce_subtype: string | null;
+  diagnostic_code: string | null;
+}
+
+interface SendEventRow {
+  id: number;
+  send_id: string;
+  event_type: string;
+  status: string | null;
+  bounce_type: string | null;
+  bounce_subtype: string | null;
+  diagnostic_code: string | null;
+  occurred_at: string;
+  received_at: string;
+}
+
+const DAY_MS = 24 * 60 * 60_000;
+
+function toSendEvent(row: SendEventRow): SendEvent {
+  return {
+    id: row.id,
+    sendId: row.send_id,
+    eventType: row.event_type,
+    status: row.status,
+    bounceType: row.bounce_type,
+    bounceSubtype: row.bounce_subtype,
+    diagnosticCode: row.diagnostic_code,
+    occurredAt: row.occurred_at,
+    receivedAt: row.received_at,
+  };
 }
 
 function toSendLogEntry(row: SendLogRow): SendLogEntry {
@@ -98,6 +193,9 @@ function toSendLogEntry(row: SendLogRow): SendLogEntry {
     requestedBy: row.requested_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    bounceType: row.bounce_type,
+    bounceSubtype: row.bounce_subtype,
+    diagnosticCode: row.diagnostic_code,
   };
 }
 
@@ -167,6 +265,8 @@ export function createSendLogRepo(db: Database) {
   // never regresses: the event applies only when its rank is >= the row's
   // current one, so a late "delivery_delayed" cannot undo "delivered", while
   // an equal-rank event may overwrite (bounce detail after a bounce).
+  // Bounce detail is written only when the event carries it (COALESCE), so a
+  // later non-bounce event of the same rank cannot blank it.
   // Returns rows changed: 0 means no such row or a stale event.
   function recordEventByProviderMessageId(
     provider: string,
@@ -174,18 +274,159 @@ export function createSendLogRepo(db: Database) {
     event: RecordEventInput,
   ): number {
     return db.run(
-      `UPDATE send_log SET status = ?, last_event = ?, updated_at = ?
+      `UPDATE send_log SET status = ?, last_event = ?, updated_at = ?,
+         bounce_type = COALESCE(?, bounce_type),
+         bounce_subtype = COALESCE(?, bounce_subtype),
+         diagnostic_code = COALESCE(?, diagnostic_code)
        WHERE provider = ? AND provider_message_id = ?
          AND ${STATUS_RANK_SQL("?")} >= ${STATUS_RANK_SQL("status")}`,
       [
         event.status,
         event.lastEvent,
         new Date().toISOString(),
+        event.bounceType ?? null,
+        event.bounceSubtype ?? null,
+        event.diagnosticCode ?? null,
         provider,
         providerMessageId,
         event.status,
       ],
     ).changes;
+  }
+
+  // The webhook's one write: the status update (when the event implies one)
+  // and the send_events timeline row, in one transaction. The timeline row is
+  // INSERT OR IGNORE against the (send_id, event_type, occurred_at) unique
+  // index, so an SNS redelivery changes nothing; no send_log row for the
+  // provider message id writes nothing at all.
+  const recordProviderEventTx = db.transaction(
+    (
+      provider: string,
+      providerMessageId: string,
+      event: ProviderEventInput,
+    ): RecordProviderEventOutcome => {
+      const send = db
+        .query<{ id: string }, [string, string]>(
+          "SELECT id FROM send_log WHERE provider = ? AND provider_message_id = ? LIMIT 1",
+        )
+        .get(provider, providerMessageId);
+      if (!send) return { found: false, changed: 0, recorded: false };
+
+      const changed =
+        event.status === null
+          ? 0
+          : recordEventByProviderMessageId(provider, providerMessageId, {
+              ...event,
+              status: event.status,
+            });
+      const recorded =
+        db.run(
+          `INSERT OR IGNORE INTO send_events (send_id, event_type, status, bounce_type, bounce_subtype, diagnostic_code, occurred_at, received_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            send.id,
+            event.eventType,
+            event.status,
+            event.bounceType ?? null,
+            event.bounceSubtype ?? null,
+            event.diagnosticCode ?? null,
+            event.occurredAt,
+            new Date().toISOString(),
+          ],
+        ).changes === 1;
+      return { found: true, changed, recorded };
+    },
+  );
+
+  function recordProviderEvent(
+    provider: string,
+    providerMessageId: string,
+    event: ProviderEventInput,
+  ): RecordProviderEventOutcome {
+    return recordProviderEventTx(provider, providerMessageId, event);
+  }
+
+  // A send's timeline, oldest first.
+  function listSendEvents(sendId: string): SendEvent[] {
+    return db
+      .query<SendEventRow, [string]>(
+        "SELECT * FROM send_events WHERE send_id = ? ORDER BY occurred_at, id",
+      )
+      .all(sendId)
+      .map(toSendEvent);
+  }
+
+  // Deletes every timeline row received before `iso`. Returns how many.
+  function pruneEventsOlderThan(iso: string): number {
+    return db.run("DELETE FROM send_events WHERE received_at < ?", [iso])
+      .changes;
+  }
+
+  function ratesSince(since: string): SendRates {
+    const row = db
+      .query<
+        { sends: number; bounced: number | null; complained: number | null },
+        [string]
+      >(
+        `SELECT COUNT(*) AS sends,
+           SUM(status = 'bounced') AS bounced,
+           SUM(status = 'complained') AS complained
+         FROM send_log
+         WHERE provider_message_id IS NOT NULL AND created_at >= ?`,
+      )
+      .get(since)!;
+    if (row.sends === 0) {
+      return { sends: 0, bounceRate: null, complaintRate: null };
+    }
+    return {
+      sends: row.sends,
+      bounceRate: (row.bounced ?? 0) / row.sends,
+      complaintRate: (row.complained ?? 0) / row.sends,
+    };
+  }
+
+  // Counts per UTC day, template and status over the last `days` days, plus
+  // the bounce/complaint rates SES judges an account by (7 and 30 days).
+  function getSendStats({
+    days,
+    now = new Date(),
+  }: {
+    days: number;
+    now?: Date;
+  }): SendStats {
+    const since = new Date(now.getTime() - days * DAY_MS).toISOString();
+    const daily = db
+      .query<
+        { date: string; template_id: string; status: string; count: number },
+        [string]
+      >(
+        `SELECT substr(created_at, 1, 10) AS date,
+           COALESCE(template_id, 'unknown') AS template_id,
+           COALESCE(status, 'pending') AS status,
+           COUNT(*) AS count
+         FROM send_log WHERE created_at >= ?
+         GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`,
+      )
+      .all(since)
+      .map((row) => ({
+        date: row.date,
+        templateId: row.template_id,
+        status: row.status,
+        count: row.count,
+      }));
+    return {
+      days,
+      since,
+      daily,
+      rates: {
+        last7Days: ratesSince(
+          new Date(now.getTime() - 7 * DAY_MS).toISOString(),
+        ),
+        last30Days: ratesSince(
+          new Date(now.getTime() - 30 * DAY_MS).toISOString(),
+        ),
+      },
+    };
   }
 
   // Atomic claim of a send before calling the provider: marks the row
@@ -275,6 +516,10 @@ export function createSendLogRepo(db: Database) {
     insertSendLog,
     recordProviderResult,
     recordEventByProviderMessageId,
+    recordProviderEvent,
+    listSendEvents,
+    pruneEventsOlderThan,
+    getSendStats,
     claimSend,
     releaseSend,
     listSendLog,

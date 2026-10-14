@@ -55,6 +55,8 @@ describe("POST /shutterflow", () => {
       subject: "482913 is your Shutterflow sign-in code",
       source: TEMPLATE_IDS.shutterflowCode,
       sensitiveSubject: true,
+      // The registry's redact reads the code from these for the stored body.
+      templateProps: expect.objectContaining({ code: "482913" }),
     });
   });
 

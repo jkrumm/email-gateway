@@ -1,6 +1,6 @@
 import { SendEmailCommand } from "@aws-sdk/client-sesv2";
 import { describe, expect, test } from "bun:test";
-import { createSesSendProvider } from "./send";
+import { createSesSendProvider, sanitizeSesTag } from "./send";
 
 const message = {
   from: "Sender <sender@example.com>",
@@ -88,6 +88,56 @@ describe("createSesSendProvider", () => {
     expect(JSON.stringify(fake.commands[0]!.input)).not.toContain("send-42");
   });
 
+  test("send() passes tags as EmailTags", async () => {
+    const fake = fakeClient({ MessageId: "ses-msg-1" });
+    const provider = createSesSendProvider({
+      client: fake.client,
+      configurationSetName: "events",
+    });
+
+    await provider.send({
+      ...message,
+      tags: { template: "fpp-sender", source: "route" },
+    });
+
+    expect(fake.commands[0]!.input.EmailTags).toEqual([
+      { Name: "template", Value: "fpp-sender" },
+      { Name: "source", Value: "route" },
+    ]);
+  });
+
+  test("send() sanitizes tag names and values to what SES accepts", async () => {
+    const fake = fakeClient({ MessageId: "ses-msg-1" });
+    const provider = createSesSendProvider({
+      client: fake.client,
+      configurationSetName: "events",
+    });
+
+    await provider.send({
+      ...message,
+      tags: { "my tag": "a b/c:d" },
+    });
+
+    expect(fake.commands[0]!.input.EmailTags).toEqual([
+      { Name: "my_tag", Value: "a_b_c_d" },
+    ]);
+  });
+
+  test("send() omits EmailTags without tags", async () => {
+    const fake = fakeClient({ MessageId: "ses-msg-1" });
+    const provider = createSesSendProvider({
+      client: fake.client,
+      configurationSetName: "events",
+    });
+
+    await provider.send(message);
+    await provider.send({ ...message, tags: {} });
+
+    for (const command of fake.commands) {
+      expect(command.input).not.toHaveProperty("EmailTags");
+    }
+  });
+
   test("send() throws when SES returns no MessageId", async () => {
     const provider = createSesSendProvider({
       client: fakeClient({}).client,
@@ -108,5 +158,19 @@ describe("createSesSendProvider", () => {
     });
 
     await expect(provider.send(message)).rejects.toThrow("MessageRejected");
+  });
+});
+
+describe("sanitizeSesTag", () => {
+  test("keeps the allowed characters", () => {
+    expect(sanitizeSesTag("Aa09_-.@")).toBe("Aa09_-.@");
+  });
+
+  test("replaces everything else with an underscore", () => {
+    expect(sanitizeSesTag("a b+c/d\u00e9")).toBe("a_b_c_d_");
+  });
+
+  test("caps the length at 256", () => {
+    expect(sanitizeSesTag("x".repeat(300))).toHaveLength(256);
   });
 });

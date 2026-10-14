@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { recordSendLog, sendMail } from "./send-mail";
 import type { InsertSendLogInput, SendLogRepo } from "../db/mail-index";
 import { openMailDatabase } from "../db/mail-client";
+import { createSendBodiesRepo } from "../db/send-bodies";
 import { createSendLogRepo } from "../db/send-log";
 import { createFakeSendProvider } from "../test/fake-send-provider";
 
@@ -175,5 +176,110 @@ describe("sendMail", () => {
     });
 
     expect(receipt.id).toBe("email_7");
+  });
+
+  test("tags the send with its template id and the route source", async () => {
+    const provider = createFakeSendProvider();
+
+    await sendMail({
+      to: "guest@example.com",
+      subject: "Hello",
+      template: TEMPLATE,
+      source: "fpp-sender",
+      provider,
+      sendLog: recordingRepo().sendLog,
+      sendBodies: createSendBodiesRepo(openMailDatabase(":memory:")),
+    });
+    await sendMail({
+      to: "guest@example.com",
+      subject: "Hello",
+      template: TEMPLATE,
+      provider,
+      sendLog: recordingRepo().sendLog,
+      sendBodies: createSendBodiesRepo(openMailDatabase(":memory:")),
+    });
+
+    expect(provider.sent[0]?.tags).toEqual({
+      template: "fpp-sender",
+      source: "route",
+    });
+    expect(provider.sent[1]?.tags).toEqual({ source: "route" });
+  });
+
+  test("keeps the rendered mail under the send_log row id", async () => {
+    const db = openMailDatabase(":memory:");
+    const sendLog = createSendLogRepo(db);
+    const sendBodies = createSendBodiesRepo(db);
+
+    await sendMail({
+      to: "guest@example.com",
+      subject: "Hello",
+      template: TEMPLATE,
+      provider: createFakeSendProvider({ providerMessageId: "m1" }),
+      sendLog,
+      sendBodies,
+    });
+
+    const [row] = sendLog.listSendLog().data;
+    expect(sendBodies.get(row!.id)?.html).toContain("Hello guest");
+    expect(sendBodies.get(row!.id)?.text).toContain("Hello guest");
+  });
+
+  test("redacts a registered template's secrets from the stored body", async () => {
+    const db = openMailDatabase(":memory:");
+    const sendLog = createSendLogRepo(db);
+    const sendBodies = createSendBodiesRepo(db);
+    const code = "482913";
+
+    await sendMail({
+      to: "guest@example.com",
+      subject: `${code} is your code`,
+      template: createElement("p", null, `Code ${code}, again ${code}`),
+      source: "shutterflow-code",
+      templateProps: { kind: "sign-in", code, expiresInMinutes: 10 },
+      sensitiveSubject: true,
+      provider: createFakeSendProvider(),
+      sendLog,
+      sendBodies,
+    });
+
+    const [row] = sendLog.listSendLog().data;
+    const stored = sendBodies.get(row!.id);
+    expect(stored?.html).toContain("Code [redacted], again [redacted]");
+    expect(stored?.html).not.toContain(code);
+    expect(stored?.text).not.toContain(code);
+  });
+
+  test("a throwing body store never fails an already-sent email", async () => {
+    const receipt = await sendMail({
+      to: "guest@example.com",
+      subject: "Hello",
+      template: TEMPLATE,
+      provider: createFakeSendProvider({ providerMessageId: "email_8" }),
+      sendLog: recordingRepo().sendLog,
+      sendBodies: {
+        save: () => {
+          throw new Error("SQLITE_BUSY");
+        },
+      },
+    });
+
+    expect(receipt.id).toBe("email_8");
+  });
+
+  test("a failed send stores no body", async () => {
+    const saved: unknown[] = [];
+
+    await expect(
+      sendMail({
+        to: "guest@example.com",
+        subject: "Hello",
+        template: TEMPLATE,
+        provider: createFakeSendProvider({ sendError: "boom" }),
+        sendLog: recordingRepo().sendLog,
+        sendBodies: { save: (input) => saved.push(input) },
+      }),
+    ).rejects.toThrow("boom");
+    expect(saved).toEqual([]);
   });
 });

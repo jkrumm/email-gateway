@@ -35,7 +35,7 @@ function setup({
     sendLog: failWrites
       ? {
           ...sendLog,
-          recordEventByProviderMessageId: () => {
+          recordProviderEvent: () => {
             throw new Error("SQLITE_BUSY");
           },
         }
@@ -227,6 +227,104 @@ describe("POST /webhooks/ses", () => {
 
     expect(row().status).toBe("bounced");
     expect(row().lastEvent).toBe("bounced:Permanent");
+  });
+
+  test("every mapped event lands in the send_events timeline", async () => {
+    const { postEvent, sendLog } = setup();
+
+    await postEvent("Send", {
+      mail: { messageId: "ses-msg-1", timestamp: "2026-10-14T08:00:00.000Z" },
+    });
+    await postEvent("Delivery", {
+      delivery: { timestamp: "2026-10-14T08:00:02.000Z" },
+    });
+
+    expect(
+      sendLog
+        .listSendEvents("row-1")
+        .map(({ eventType, status, occurredAt }) => ({
+          eventType,
+          status,
+          occurredAt,
+        })),
+    ).toEqual([
+      {
+        eventType: "Send",
+        status: null,
+        occurredAt: "2026-10-14T08:00:00.000Z",
+      },
+      {
+        eventType: "Delivery",
+        status: "delivered",
+        occurredAt: "2026-10-14T08:00:02.000Z",
+      },
+    ]);
+  });
+
+  test("a Send event is timeline-only and never moves the status", async () => {
+    const { postEvent, row, sendLog } = setup();
+
+    await postEvent("Delivery");
+    const response = await postEvent("Send");
+
+    expect(response.status).toBe(200);
+    expect(row().status).toBe("delivered");
+    expect(row().lastEvent).toBe("delivered");
+    expect(sendLog.listSendEvents("row-1")).toHaveLength(2);
+  });
+
+  test("a redelivered notification writes the timeline once", async () => {
+    const { postEvent, sendLog } = setup();
+    const extra = { delivery: { timestamp: "2026-10-14T08:00:02.000Z" } };
+
+    await postEvent("Delivery", extra);
+    expect((await postEvent("Delivery", extra)).status).toBe(200);
+
+    expect(sendLog.listSendEvents("row-1")).toHaveLength(1);
+  });
+
+  test("a Bounce stores type, subtype and diagnostic code but no address", async () => {
+    const { postEvent, row, sendLog } = setup();
+
+    await postEvent("Bounce", {
+      bounce: {
+        bounceType: "Permanent",
+        bounceSubtype: "General",
+        timestamp: "2026-10-14T08:00:03.000Z",
+        bouncedRecipients: [
+          {
+            emailAddress: "guest@example.com",
+            diagnosticCode: "smtp; 550 5.1.1 <guest@example.com> unknown",
+          },
+        ],
+      },
+    });
+
+    expect(row()).toMatchObject({
+      status: "bounced",
+      bounceType: "Permanent",
+      bounceSubtype: "General",
+      diagnosticCode: "smtp; 550 5.1.1 <[address]> unknown",
+    });
+    const [event] = sendLog.listSendEvents("row-1");
+    expect(event).toMatchObject({
+      eventType: "Bounce",
+      bounceType: "Permanent",
+      diagnosticCode: "smtp; 550 5.1.1 <[address]> unknown",
+    });
+    expect(JSON.stringify(event)).not.toContain("guest@");
+  });
+
+  test("an unmatched message id writes no timeline row", async () => {
+    const { post, sendLog } = setup();
+
+    await post(
+      JSON.stringify(
+        notification({ eventType: "Send", mail: { messageId: "unknown" } }),
+      ),
+    );
+
+    expect(sendLog.listSendEvents("row-1")).toEqual([]);
   });
 
   test("a delay after Delivered does not regress the status", async () => {

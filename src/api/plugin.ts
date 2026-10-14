@@ -16,7 +16,9 @@ import {
   mailDb as defaultMailDb,
   messagesRepo as defaultMessages,
   mailSubmissionsRepo as defaultMailSubmissions,
+  sendBodiesRepo as defaultSendBodies,
   sendLogRepo as defaultSendLog,
+  sesAccountRepo as defaultSesAccount,
   templatesRepo as defaultTemplates,
   threadSummariesRepo as defaultThreadSummaries,
 } from "../db/mail-index";
@@ -31,7 +33,9 @@ import type {
   SubmissionSource,
   Verdict,
 } from "../db/mail-submissions";
+import type { SendBodiesRepo } from "../db/send-bodies";
 import type { SendLogRepo } from "../db/send-log";
+import type { SesAccountRepo } from "../db/ses-account";
 import type { TemplatesRepo } from "../db/templates";
 import type { ThreadSummariesRepo } from "../db/thread-summaries";
 import { findTemplateEntry, renderTemplateElement } from "../emails/registry";
@@ -43,6 +47,12 @@ import {
   providerForAccountId as defaultProviderFor,
 } from "../providers/from-env";
 import type { MailProvider, MessageRef } from "../providers/port";
+import { sesClient } from "../providers/send-registry";
+import {
+  createSesSuppressions,
+  isSuppressionNotFound,
+  type SesSuppressions,
+} from "../providers/ses/suppressions";
 import {
   agentErrorStatus,
   createAgentApi,
@@ -170,6 +180,17 @@ const sendLogListQuery = t.Object({
   cursor: t.Optional(t.String()),
 });
 
+const sendStatsQuery = t.Object({
+  days: t.Optional(t.Numeric({ minimum: 1, maximum: 90 })),
+});
+
+const DEFAULT_SEND_STATS_DAYS = 30;
+
+const suppressionsListQuery = t.Object({
+  reason: t.Optional(t.Union([t.Literal("BOUNCE"), t.Literal("COMPLAINT")])),
+  cursor: t.Optional(t.String()),
+});
+
 // `width` is advisory only: the client uses it to frame its own preview, so
 // the server validates it as a number and otherwise ignores it.
 const templatePreviewQuery = t.Object({
@@ -204,6 +225,9 @@ export function createApiRoutes({
   jobs = defaultJobQueue,
   templates = defaultTemplates,
   sendLog = defaultSendLog,
+  sendBodies = defaultSendBodies,
+  sesAccount = defaultSesAccount,
+  suppressions = createSesSuppressions({ client: sesClient() }),
   threadSummaries = defaultThreadSummaries,
   providerFor = defaultProviderFor,
   configuredProviders = defaultConfiguredProviders,
@@ -223,6 +247,9 @@ export function createApiRoutes({
   jobs?: JobQueue;
   templates?: TemplatesRepo;
   sendLog?: SendLogRepo;
+  sendBodies?: SendBodiesRepo;
+  sesAccount?: SesAccountRepo;
+  suppressions?: SesSuppressions;
   threadSummaries?: ThreadSummariesRepo;
   providerFor?: (accountId: string) => MailProvider | null;
   configuredProviders?: () => MailProvider[];
@@ -600,6 +627,84 @@ export function createApiRoutes({
         }
       },
       { query: sendLogListQuery },
+    )
+    .get(
+      "/sends/stats",
+      ({ query }) =>
+        sendLog.getSendStats({ days: query.days ?? DEFAULT_SEND_STATS_DAYS }),
+      { query: sendStatsQuery },
+    )
+    .get(
+      "/sends/:id",
+      ({ params, set }) => {
+        const entry = sendLog.getSendLog(params.id);
+        if (!entry) {
+          set.status = 404;
+          return { error: "not_found" };
+        }
+
+        // Null once the 30-day retention pruned it (or it was never stored).
+        const stored = sendBodies.get(entry.id);
+        return {
+          ...entry,
+          events: sendLog.listSendEvents(entry.id),
+          body: stored
+            ? {
+                html: stored.html,
+                text: stored.text,
+                storedAt: stored.createdAt,
+              }
+            : null,
+        };
+      },
+      { params: t.Object({ id: t.String() }) },
+    )
+    .get("/ses/account", ({ set }) => {
+      const snapshot = sesAccount.get();
+      if (!snapshot) {
+        // The hourly ses_account job has not run yet.
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      return snapshot;
+    })
+    .get(
+      "/ses/suppressions",
+      async ({ query, set }) => {
+        try {
+          return await suppressions.list({
+            reason: query.reason,
+            cursor: query.cursor,
+          });
+        } catch (error) {
+          console.warn("ses suppressions list failed", {
+            reason: error instanceof Error ? error.name : "unknown",
+          });
+          set.status = 502;
+          return { error: "ses_unavailable" };
+        }
+      },
+      { query: suppressionsListQuery },
+    )
+    .delete(
+      "/ses/suppressions/:email",
+      async ({ params, set }) => {
+        try {
+          await suppressions.remove(params.email);
+        } catch (error) {
+          if (isSuppressionNotFound(error)) {
+            set.status = 404;
+            return { error: "not_found" };
+          }
+          console.warn("ses suppression removal failed", {
+            reason: error instanceof Error ? error.name : "unknown",
+          });
+          set.status = 502;
+          return { error: "ses_unavailable" };
+        }
+        return { ok: true };
+      },
+      { params: t.Object({ email: t.String({ format: "email" }) }) },
     )
     .get(
       "/stats",

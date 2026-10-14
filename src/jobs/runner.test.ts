@@ -257,6 +257,44 @@ describe("createJobRunner", () => {
     expect(logs[0]!.meta).toBeUndefined();
   });
 
+  test("SendingPausedException is still parked as rate-limited but warns that SES sending is paused", async () => {
+    const { db, queue } = setup();
+    const id = queue.enqueue({ kind: "send", payload: {}, now: T0 });
+    const logs: string[] = [];
+    const warnings: unknown[][] = [];
+    const runner = createJobRunner({
+      db,
+      claimedBy: CLAIMED_BY,
+      queue,
+      log: (message) => logs.push(message),
+    });
+    const error = new Error("account sending paused");
+    error.name = "SendingPausedException";
+    runner.register("send", async () => {
+      throw error;
+    });
+
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => void warnings.push(args);
+    try {
+      expect(await runner.runOnce(T0)).toBe(true);
+    } finally {
+      console.warn = original;
+    }
+
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0]![0])).toContain("SES sending is paused");
+    expect(String(warnings[0]![0])).toContain("SendingPausedException");
+    expect(logs[0]).toContain("rate-limited");
+    expect(
+      db
+        .query<{ attempts: number }, [string]>(
+          "SELECT attempts FROM jobs WHERE id = ?",
+        )
+        .get(id),
+    ).toEqual({ attempts: 0 });
+  });
+
   test("a non-rate-limit failure still logs the full error object", async () => {
     const { db, queue } = setup();
     const id = queue.enqueue({ kind: "classify", payload: {}, now: T0 });

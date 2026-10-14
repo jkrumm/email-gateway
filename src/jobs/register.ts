@@ -6,6 +6,11 @@ import { createJobRunner } from "./runner";
 import { createClassifyHandler } from "./classify";
 import { createJevMessageHandler, createJevSubmissionHandler } from "./jev";
 import { createSendHandler } from "./send";
+import {
+  createPruneSendBodiesHandler,
+  enqueuePruneSendBodies,
+} from "./prune-send-bodies";
+import { createSesAccountHandler, enqueueSesAccount } from "./ses-account";
 import { discardResendJobs } from "./discard-resend";
 import {
   createSyncTickHandler,
@@ -21,6 +26,10 @@ import type { MailProvider, Unsubscribe } from "../providers/port";
 const SYNC_INTERVAL_MS = 5 * 60_000;
 const FIRST_RUN_DELAY_MS = 5_000;
 const POLL_INTERVAL_MS = 10_000;
+// Housekeeping that needs no tighter cadence: the SES account snapshot every
+// hour, the 30-day send-body retention once a day.
+const SES_ACCOUNT_INTERVAL_MS = 60 * 60_000;
+const PRUNE_SEND_BODIES_INTERVAL_MS = 24 * 60 * 60_000;
 // IDLE can fire several events in a burst (e.g. a multi-message deliver); the
 // job system's own claim already prevents duplicate concurrent ticks, so this
 // only needs to collapse a burst into roughly one enqueue.
@@ -55,6 +64,8 @@ export function startJobSystem(): void {
   runner.register("jev_message", createJevMessageHandler());
   runner.register("jev_submission", createJevSubmissionHandler());
   runner.register("send", createSendHandler());
+  runner.register("prune_send_bodies", createPruneSendBodiesHandler());
+  runner.register("ses_account", createSesAccountHandler());
 
   // Guards against a new poll() tick starting a second drain() while the
   // previous one is still running a long handler (an LLM call or IMAP read,
@@ -85,6 +96,28 @@ export function startJobSystem(): void {
     tick();
     const tickTimer = setInterval(tick, SYNC_INTERVAL_MS);
     tickTimer.unref();
+
+    // Guarded like the runner's own DB writes: an unguarded SQLITE_BUSY
+    // (deploy overlap) would escape the timer and crash the process.
+    const housekeeping: [string, () => void, number][] = [
+      ["ses_account", () => enqueueSesAccount(queue), SES_ACCOUNT_INTERVAL_MS],
+      [
+        "prune_send_bodies",
+        () => enqueuePruneSendBodies(queue),
+        PRUNE_SEND_BODIES_INTERVAL_MS,
+      ],
+    ];
+    for (const [kind, enqueue, intervalMs] of housekeeping) {
+      const guarded = (): void => {
+        try {
+          enqueue();
+        } catch (error) {
+          console.error(`[jobs] failed to enqueue ${kind}`, { error });
+        }
+      };
+      guarded();
+      setInterval(guarded, intervalMs).unref();
+    }
   }, FIRST_RUN_DELAY_MS);
   firstRun.unref();
 

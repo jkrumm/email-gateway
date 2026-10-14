@@ -138,6 +138,16 @@ curl -X POST -H "Authorization: Bearer $API_KEY" \
 # Send history, newest first (optional templateId filter).
 curl -H "Authorization: Bearer $API_KEY" \
   "https://mail.<domain>/api/send-log?templateId=<id>&limit=25"
+
+# Dashboard-facing (Wave 18), same bearer: per-day send stats and bounce rates,
+# one send with its SES event timeline and stored (redacted) body, the SES
+# account snapshot, and the SES suppression list (DELETE removes an address).
+curl -H "Authorization: Bearer $API_KEY" "https://mail.<domain>/api/sends/stats?days=30"
+curl -H "Authorization: Bearer $API_KEY" "https://mail.<domain>/api/sends/<sendLogId>"
+curl -H "Authorization: Bearer $API_KEY" "https://mail.<domain>/api/ses/account"
+curl -H "Authorization: Bearer $API_KEY" "https://mail.<domain>/api/ses/suppressions?reason=BOUNCE"
+curl -X DELETE -H "Authorization: Bearer $API_KEY" \
+  "https://mail.<domain>/api/ses/suppressions/<email>"
 ```
 
 ## MCP `/mcp`

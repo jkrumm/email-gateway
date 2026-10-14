@@ -48,7 +48,7 @@ async function readCappedText(
   return Buffer.concat(chunks).toString("utf-8");
 }
 
-// Amazon SNS -> send_log. SES publishes delivery events to an SNS topic, and
+// Amazon SNS -> send_log (status) and send_events (timeline). SES publishes delivery events to an SNS topic, and
 // SNS POSTs them here (as text/plain). The route is public by necessity: the
 // only authentication is SNS's own message signature (sns-verify.ts), after
 // the TopicArn pin; rate limiting is Traefik's. Raw message delivery must stay
@@ -57,8 +57,9 @@ async function readCappedText(
 // message ids only, never the payload (recipient addresses).
 //
 // A replayed, captured signed Notification is accepted on purpose: the
-// send_log status-rank guard makes it a no-op or an identical re-apply of the
-// same event, so Timestamp freshness is deliberately not enforced.
+// send_log status-rank guard and send_events's unique index make it a no-op
+// or an identical re-apply of the same event, so Timestamp freshness is
+// deliberately not enforced.
 // A DB write failure is likewise left to surface as a 5xx on purpose: SNS
 // retries a non-2xx, and the rank guard makes the retry idempotent.
 export function createSesWebhookRoutes({
@@ -126,14 +127,15 @@ export function createSesWebhookRoutes({
       return;
     }
 
-    const changed = sendLog.recordEventByProviderMessageId(
+    const { providerMessageId, ...patch } = mapped;
+    const outcome = sendLog.recordProviderEvent(
       "ses",
-      mapped.providerMessageId,
-      { status: mapped.status, lastEvent: mapped.lastEvent },
+      providerMessageId,
+      patch,
     );
-    if (changed === 0) {
+    if (!outcome.found || (patch.status !== null && outcome.changed === 0)) {
       console.log(
-        `ses webhook: ${mapped.lastEvent} for ${mapped.providerMessageId} not applied (no such send or stale)`,
+        `ses webhook: ${mapped.lastEvent} for ${providerMessageId} not applied (no such send or stale)`,
       );
     }
   }

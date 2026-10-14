@@ -4,6 +4,8 @@ import { createMessagesRepo } from "./messages";
 import { createMailSubmissionsRepo } from "./mail-submissions";
 import { createTemplatesRepo } from "./templates";
 import { createSendLogRepo } from "./send-log";
+import { createSendBodiesRepo } from "./send-bodies";
+import { createSesAccountRepo } from "./ses-account";
 import { createThreadSummariesRepo } from "./thread-summaries";
 
 // Singletons bound to the lazily-opened mail.sqlite database, for production
@@ -15,6 +17,8 @@ export const messagesRepo = createMessagesRepo(mailDb);
 export const mailSubmissionsRepo = createMailSubmissionsRepo(mailDb);
 export const templatesRepo = createTemplatesRepo(mailDb);
 export const sendLogRepo = createSendLogRepo(mailDb);
+export const sendBodiesRepo = createSendBodiesRepo(mailDb);
+export const sesAccountRepo = createSesAccountRepo(mailDb);
 export const threadSummariesRepo = createThreadSummariesRepo(mailDb);
 
 export { mailDb, openMailDatabase } from "./mail-client";
@@ -23,4 +27,6 @@ export * from "./messages";
 export * from "./mail-submissions";
 export * from "./templates";
 export * from "./send-log";
+export * from "./send-bodies";
+export * from "./ses-account";
 export * from "./thread-summaries";

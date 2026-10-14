@@ -41,6 +41,40 @@ describe("isRateLimitError", () => {
     expect(isRateLimitError(error)).toBe(false);
   });
 
+  test.each([
+    "TooManyRequestsException",
+    "SendingPausedException",
+    "LimitExceededException",
+  ])("recognises the AWS %s by name", (name) => {
+    const error = new Error("SES said no");
+    error.name = name;
+    expect(isRateLimitError(error)).toBe(true);
+  });
+
+  test("recognises an AWS error with HTTP status 429", () => {
+    const error = Object.assign(new Error("Throttled"), {
+      name: "ThrottlingException",
+      $metadata: { httpStatusCode: 429 },
+    });
+    expect(isRateLimitError(error)).toBe(true);
+  });
+
+  test("does not treat AccountSuspendedException as a rate limit", () => {
+    const error = Object.assign(new Error("Account suspended"), {
+      name: "AccountSuspendedException",
+      $metadata: { httpStatusCode: 400 },
+    });
+    expect(isRateLimitError(error)).toBe(false);
+  });
+
+  test("does not treat other AWS statuses as a rate limit", () => {
+    const error = Object.assign(new Error("Server error"), {
+      name: "InternalServiceErrorException",
+      $metadata: { httpStatusCode: 500 },
+    });
+    expect(isRateLimitError(error)).toBe(false);
+  });
+
   test("returns false for an unrelated Error", () => {
     expect(isRateLimitError(new Error("boom"))).toBe(false);
   });

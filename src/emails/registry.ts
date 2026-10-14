@@ -42,6 +42,10 @@ export interface EmailTemplateEntry<Props> {
   name: string;
   component: FunctionComponent<Props>;
   previewProps: Props;
+  // The secret substrings of a send (an auth code) that must not survive in
+  // the stored copy of its rendered mail: src/utils/send-body.ts replaces
+  // every occurrence with "[redacted]" before the body is kept.
+  redact?: (props: Props) => string[];
 }
 
 export const emailRegistry: [
@@ -94,6 +98,7 @@ export const emailRegistry: [
     name: "Shutterflow – auth code",
     component: ShutterflowCodeMail,
     previewProps: ShutterflowCodeMail.PreviewProps,
+    redact: ({ code }) => [code],
   },
 ];
 
@@ -118,4 +123,25 @@ export function renderTemplateElement(
     entry.component as unknown as ComponentType<Record<string, unknown>>,
     props as Record<string, unknown>,
   );
+}
+
+// The secrets an entry's `redact` names for these props; none for an entry
+// without one. Throws if `redact` does (malformed props) or yields anything
+// but non-empty strings — the caller must then not store the body. An empty
+// result for an entry that declares `redact` is the caller's to treat as
+// "cannot redact".
+export function templateSecrets(
+  entry: NonNullable<ReturnType<typeof findTemplateEntry>>,
+  props: unknown,
+): string[] {
+  const redact = entry.redact as ((props: unknown) => string[]) | undefined;
+  if (!redact) return [];
+  const secrets = redact(props);
+  if (
+    !Array.isArray(secrets) ||
+    !secrets.every((s) => typeof s === "string" && s.length > 0)
+  ) {
+    throw new Error("template redact yielded a non-string or empty secret");
+  }
+  return secrets;
 }
