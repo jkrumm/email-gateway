@@ -585,8 +585,13 @@ export function createApiRoutes({
         set.headers["content-security-policy"] = "sandbox";
         // Cloudflare's Email Address Obfuscation rewrites addresses in HTML
         // responses into a script the sandbox blocks, so the preview showed
-        // "[email protected]". `email_off` is its documented opt-out.
-        return `<!--email_off-->${html}<!--/email_off-->`;
+        // "[email protected]". `no-transform` and `email_off` are its
+        // opt-outs; the markers must sit inside <html> (React Email emits no
+        // <body> for these templates), outside it they were ignored.
+        set.headers["cache-control"] = "no-store, no-transform";
+        return html
+          .replace("</head>", "</head><!--email_off-->")
+          .replace(/<\/html>\s*$/i, "<!--/email_off--></html>");
       },
       { params: t.Object({ id: t.String() }), query: templatePreviewQuery },
     )

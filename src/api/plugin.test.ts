@@ -1168,8 +1168,9 @@ describe("GET /api/templates/:id/preview", () => {
     const body = await response.text();
     expect(body.length).toBeGreaterThan(0);
     // Opted out of Cloudflare's Email Address Obfuscation.
-    expect(body.startsWith("<!--email_off-->")).toBe(true);
-    expect(body.endsWith("<!--/email_off-->")).toBe(true);
+    expect(response.headers.get("cache-control")).toContain("no-transform");
+    expect(body).toContain("</head><!--email_off-->");
+    expect(body).toContain("<!--/email_off--></html>");
   });
 });
 
