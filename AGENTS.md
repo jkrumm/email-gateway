@@ -1,7 +1,8 @@
 # email-gateway — Agent Instructions
 
 Bun + Elysia service on the VPS: the one door to the owner's mail. Today it sends
-app mail through Amazon SES (`/fpp`, `/fpp-daily-analytics`, `/sy-serendipity`;
+app mail through Amazon SES (`/fpp`, `/fpp-daily-analytics`, `/sy-serendipity`,
+`/shutterflow`;
 Resend is gone) and syncs two IMAP accounts — Proton `hello@` through Bridge on
 the homelab (tailnet, STARTTLS) and Gmail through its IMAP endpoint (implicit
 TLS, app password) — into SQLite, classifies with an LLM plus Jev in shadow
@@ -72,6 +73,12 @@ build`, built by the Dockerfile's client stage) or the React Email preview
   recipient the caller controls — that would make it an open relay. The
   receiver is `JKRUMM_CONTACT_RECEIVER_EMAIL` (e.g. `hello@<your-domain>`),
   falling back to `RECEIVER_EMAIL`; `JKRUMM_CONTACT_FROM_EMAIL` is the sender.
+- **`POST /shutterflow` carries one-time auth codes.** Own bearer
+  (`SHUTTERFLOW_SECRET_KEY`, never `SECRET_KEY`), no spam gate, synchronous send,
+  502 on a provider error. The subject leads with the code, so `sendMail` is
+  always called with `sensitiveSubject: true` there (logs say `[redacted]`);
+  never log the body or the rendered mail, and `send_log` records only the
+  recipient and template id.
 - **Three live callers, contract frozen.** FPP web (Vercel, 7 s abort),
   fpp-analytics (VPS, 30 s), sy-serendipity (Netlify, 10 s) post to the send
   routes with the shared `SECRET_KEY`. Paths, body schemas, 2xx-on-suppressed
@@ -204,6 +211,10 @@ tests never need secrets.
   `submissions.source`); template `src/emails/jkrumm/contact-receiver-mail.tsx`.
   `/sy-serendipity` also sends the requester's confirmation
   (`src/emails/sy-serendipity/request-confirmation-mail.tsx`, fail-open)
+- `src/routes/shutterflow.ts` — `createShutterflowRoutes`, `POST /shutterflow`
+  (own bearer, 404 when unset); template `src/emails/shutterflow/code-mail.tsx`
+  on `src/layouts/shutterflow.layout.tsx` (Shutterflow's brand shell ported
+  from `apps/share/src/lib/brand`)
 - `src/routes/sy-serendipity-requests.ts` — `GET /sy-serendipity/requests`, the
   read-only admin feed over `mail-submissions.ts`'s `listBySource`; own key
   `SY_SERENDIPITY_READ_KEY` (unset → 404), never `SECRET_KEY`/`API_KEY`, not host-gated

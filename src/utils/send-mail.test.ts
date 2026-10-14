@@ -43,6 +43,29 @@ describe("recordSendLog", () => {
 });
 
 describe("sendMail", () => {
+  test("sensitiveSubject keeps the subject out of the logs", async () => {
+    const { sendLog } = recordingRepo();
+    const provider = createFakeSendProvider({ id: "fake" });
+    const lines: unknown[][] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => void lines.push(args);
+    try {
+      await sendMail({
+        to: "guest@example.com",
+        subject: "482913 is your code",
+        template: TEMPLATE,
+        sensitiveSubject: true,
+        provider,
+        sendLog,
+      });
+    } finally {
+      console.log = original;
+    }
+
+    expect(provider.sent[0]?.subject).toBe("482913 is your code");
+    expect(JSON.stringify(lines)).not.toContain("482913");
+  });
+
   test("happy path: renders, sends through the provider, records the send_log row and returns the provider's id + the resolved from", async () => {
     const { sendLog, rows } = recordingRepo();
     const provider = createFakeSendProvider({

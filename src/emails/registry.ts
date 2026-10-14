@@ -13,6 +13,9 @@ import FppSenderMail, { type FppSenderMailProps } from "./fpp/fpp-sender-mail";
 import JkrummContactReceiverMail, {
   type JkrummContactReceiverProps,
 } from "./jkrumm/contact-receiver-mail";
+import ShutterflowCodeMail, {
+  type ShutterflowCodeProps,
+} from "./shutterflow/code-mail";
 import SySerendipityConfirmationMail, {
   type SySerendipityConfirmationProps,
 } from "./sy-serendipity/request-confirmation-mail";
@@ -31,6 +34,7 @@ export const TEMPLATE_IDS = {
   sySerendipityRequest: "sy-serendipity-request",
   sySerendipityConfirmation: "sy-serendipity-confirmation",
   jkrummContactReceiver: "jkrumm-contact-receiver",
+  shutterflowCode: "shutterflow-code",
 } as const;
 
 export interface EmailTemplateEntry<Props> {
@@ -47,6 +51,7 @@ export const emailRegistry: [
   EmailTemplateEntry<SySerendipityRequestProps>,
   EmailTemplateEntry<SySerendipityConfirmationProps>,
   EmailTemplateEntry<JkrummContactReceiverProps>,
+  EmailTemplateEntry<ShutterflowCodeProps>,
 ] = [
   {
     id: TEMPLATE_IDS.fppSender,
@@ -83,6 +88,12 @@ export const emailRegistry: [
     name: "jkrumm.com – contact message",
     component: JkrummContactReceiverMail,
     previewProps: JkrummContactReceiverMail.PreviewProps,
+  },
+  {
+    id: TEMPLATE_IDS.shutterflowCode,
+    name: "Shutterflow – auth code",
+    component: ShutterflowCodeMail,
+    previewProps: ShutterflowCodeMail.PreviewProps,
   },
 ];
 

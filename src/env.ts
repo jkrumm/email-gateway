@@ -108,6 +108,10 @@ export const envSchema = z
     // admin panel). Opens nothing else: not /api, not the send routes. Unset ->
     // the route 404s.
     SY_SERENDIPITY_READ_KEY: z.string().min(32).optional(),
+    // POST /shutterflow: Shutterflow's auth-code mails. Its own bearer, never
+    // SECRET_KEY; unset -> the route 404s. FROM falls back to the default sender.
+    SHUTTERFLOW_SECRET_KEY: z.string().min(32).optional(),
+    SHUTTERFLOW_FROM_EMAIL: z.string().optional(),
 
     // IMAP ingest (Proton Mail Bridge). Unset host -> IMAP ingest disabled.
     IMAP_HOST: z.string().optional(),

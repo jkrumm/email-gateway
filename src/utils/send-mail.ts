@@ -41,6 +41,7 @@ export async function sendMail({
   subject,
   template,
   source,
+  sensitiveSubject = false,
   provider = sendProvider(),
   sendLog = sendLogRepo,
 }: {
@@ -52,11 +53,14 @@ export async function sendMail({
   // Our template/route id, e.g. "fpp-sender" — stored on the send_log row so
   // the admin API can filter sent mail by what generated it.
   source?: string;
+  // The subject carries a secret (an auth code): logs say "[redacted]".
+  sensitiveSubject?: boolean;
   // Injectable for tests; defaults to the SES provider.
   provider?: SendProvider;
   sendLog?: Pick<SendLogRepo, "insertSendLog">;
 }): Promise<{ id: string; from: string }> {
   const { html, text } = await renderTemplate(template);
+  const loggedSubject = sensitiveSubject ? "[redacted]" : subject;
 
   let providerMessageId: string;
   try {
@@ -75,7 +79,7 @@ export async function sendMail({
       to,
       from,
       replyTo,
-      subject,
+      subject: loggedSubject,
     });
     throw error;
   }
@@ -86,7 +90,7 @@ export async function sendMail({
     to,
     from,
     replyTo,
-    subject,
+    subject: loggedSubject,
   });
 
   recordSendLog(sendLog, {

@@ -12,3 +12,4 @@ process.env.SY_SERENDIPITY_RECEIVER_EMAIL ??= "sy-receiver@example.com";
 process.env.DATA_DIR ??= ":memory:";
 process.env.SY_SERENDIPITY_READ_KEY ??=
   "test-sy-serendipity-read-key-0123456789";
+process.env.SHUTTERFLOW_SECRET_KEY ??= "test-shutterflow-secret-key-0123456789";
