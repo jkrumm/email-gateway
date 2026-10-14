@@ -1,7 +1,7 @@
 # email-gateway maturation
 
 **Goal:** email-gateway is the one door to all of the owner's mail — Proton
-(through Bridge) and Gmail read live through provider ports, Resend for app
+(through Bridge) and Gmail read live through provider ports, Amazon SES for app
 sends — with a lean derived-data store, durable jobs, a React + basalt-ui client
 served by the server, and a typed agent API for Hermes. The architecture it runs
 on was settled with the owner in Wave 1, not assumed.
@@ -1432,9 +1432,145 @@ exactly like `fppSender` in `src/routes/fpp.ts`.
 - `docs/waves/PLAN.md` had a pre-existing prettier flip-flop on a multi-line
   inline code span in this wave's own text; rewritten so `make check` is green.
 
-## Wave 17 — SES-native features <!-- status: active -->
+## Wave 17 — Shutterflow onto the gateway <!-- status: active -->
 
-Shape with the owner first; his direction is quoted in D5's amendment:
-analytics over the send log and SES events, a UI for the SES integration,
-the old paths dropped, and the client/agent API, with "clef-eu" in the loop
-(ask what that means for the API before planning).
+AWS lifted the SES sandbox on 2026-10-13 (case 179180970900151, eu-central-1,
+50k/day, 14/s), so every recipient is reachable. Owner (2026-10-14): move
+Shutterflow over and opt into SES fully. Tracks jkrumm/shutterflow#1.
+
+Shutterflow (private repo `jkrumm/shutterflow`, not checked out on the mini:
+clone it to `~/SourceRoot/shutterflow`) sends three auth-code mails from
+`apps/share/src/modules/auth/emails.ts` (`codeMail`, kinds `sign-in`,
+`email-verification`, `forget-password`, brand shell `apps/share/src/lib/brand`)
+through `apps/share/src/ports/mail.ts`'s `createResendMail` (plain `fetch`, env
+`RESEND_API_KEY` + `MAIL_FROM`; dev adapter `createOutboxMail`).
+
+Decided (orchestrator, owner may override): the templates move into the
+gateway registry so they show in the client like every other template, and
+Shutterflow posts structured data, not HTML.
+
+- [ ] Gateway: `POST /shutterflow` (`src/routes/shutterflow.ts`) with its own
+      bearer `SHUTTERFLOW_SECRET_KEY` (unset → 404; never `SECRET_KEY`), body
+      `{ kind, to, code, expiresInMinutes }` (zod: `kind` the three literals,
+      `to` an email, `code` a short alphanumeric). No spam gate (a user is
+      waiting for the code); synchronous send through `sendMail`, non-2xx on a
+      provider error so Shutterflow can show a retry. The code is never logged
+      and never lands in `send_log`. From `SHUTTERFLOW_FROM_EMAIL`
+      (shutterflow.app is a verified SES identity).
+- [ ] Template `shutterflow-code` in `src/emails/shutterflow/`, ported from
+      Shutterflow's brand shell and `COPY` table (subject leads with the code),
+      registered in `TEMPLATE_IDS`; README + AGENTS.md updated in the same commit.
+- [ ] vps: `SHUTTERFLOW_SECRET_KEY` in 1Password `vps/email-gateway` (via
+      `ask-human.sh`), `.env.tpl`, `SHUTTERFLOW_FROM_EMAIL` literal in compose;
+      `make email-gateway-env ENV=prod`; vps pushed and pulled before the
+      gateway push. Gateway deployed and a test send to the owner's address
+      delivered before Shutterflow switches.
+- [ ] Shutterflow: a `createGatewayMail` adapter (same port, same fake/outbox
+      adapters for tests), env `EMAIL_GATEWAY_URL` + `EMAIL_GATEWAY_SECRET_KEY`
+      replacing `RESEND_API_KEY`; follow that repo's AGENTS.md and gate. Its vps
+      app (`vps/apps/shutterflow`) gets the same key, `SHUTTERFLOW_RESEND_API_KEY`
+      dropped. Deploy, then a real sign-in code to the owner's address arrives.
+- [ ] Close jkrumm/shutterflow#1. Hand back to the owner: deleting the Resend
+      account and its domains is his click (irreversible, external).
+
+**Left behind:**
+
+## Wave 18 — SES fully adopted <!-- status: pending -->
+
+Research (2026-10-14, research-gateway): keep `@aws-sdk/client-sesv2`
+(bare-bones `SESv2Client` + commands; latest 3.1151.0, we pin 3.1148.0), keep
+React Email pre-rendered HTML (no SES templates), stay on shared IPs, skip
+contact lists, tenants and List-Unsubscribe (transactional only). No
+open/click tracking: transactional mail, privacy first. Round 1's "clef-eu in
+the loop" question is moot since the owner dropped residency (decision lane
+round 2).
+
+- [ ] `scripts/ses-provision.ts` (idempotent, prints what it changes): account
+      suppression list on for BOUNCE + COMPLAINT
+      (`PutAccountSuppressionAttributes`); the configuration set's SNS
+      destination subscribes Send, Delivery, Bounce, Complaint, Reject,
+      DeliveryDelay, RenderingFailure. VDM (`PutAccountVdmAttributes`, dashboard
+      on, engagement off) only after confirming it costs nothing extra on the
+      ESSENTIALS plan; any per-message or monthly fee stops at the owner.
+- [ ] Send path: `EmailTags` (`template`, `source`) on every send so SES events
+      and VDM drill down by template; bump `client-sesv2` past bunfig's
+      3-day cooldown; map `TooManyRequestsException`/`SendingPausedException`
+      onto the job queue's rate-limit ladder.
+- [ ] Events: store bounce type/subtype and the diagnostic code (no addresses)
+      on `send_log` (migration), plus the per-event timeline a send detail view
+      needs (`send_events` table).
+- [ ] Rendered mail kept for review: a `send_bodies` table (html + text) with a
+      retention bound (30 days, pruned by a job); a template can mark fields
+      sensitive (`shutterflow-code`'s code) and the stored copy is redacted.
+- [ ] SES account job (`ses_account`, hourly): `GetAccount` quota/usage,
+      enforcement status, sending enabled; stored for the client and the
+      metrics in Wave 19. Suppression list read/delete via `/api` (bearer) for
+      the dashboard.
+- [ ] Analytics API: `/api/sends/stats` (per day, template, status; bounce and
+      complaint rates over 7/30 days), `/api/sends/:id` (events + stored body),
+      `/api/ses/account`, `/api/ses/suppressions`. Eden types flow to the client.
+
+**Left behind:**
+
+## Wave 19 — OpenTelemetry into warden <!-- status: pending -->
+
+The owner's chain (mapped 2026-10-14): ClickStack on the VPS
+(`http://clickstack:4319` on `monitoring-net`, no auth) → HyperDX alert rules
+in `vps/observability/alerts/` post to Slack `#alerts` → warden's
+`scripts/watchdog-poll.py` polls it → `warden/config/triage-policy.json` routes
+`slack_alert:<svc>-*` to the repo → a case. Fully wired reference:
+research-gateway (alerts `vps/observability/alerts/research-gateway-*.json`,
+dashboard `vps/observability/dashboards/research-gateway.json`, warden rule +
+test in `warden/tests/test_triage.py`). Elysia pattern:
+`argo/apps/api/src/telemetry.ts` + `.claude/rules/observability.md`.
+
+- [ ] Instrument: `@elysiajs/opentelemetry` + OTLP proto trace/log/metric
+      exporters per argo-api (versions via `/research`, cooldown respected);
+      `service.name: email-gateway`. Spans: HTTP (skip `/health`), every job
+      run as its own root span `job.<type>`, SES send (manual span —
+      `instrumentation-aws-sdk` under Bun is unverified), IMAP sync per
+      mailbox, every LLM call (classify, enrich, Jev). Trace-linked OTel logs
+      replace bare `console` lines (stdout kept). 5xx → span Error, 4xx Unset.
+- [ ] Metrics: sends by template/status, bounce/complaint rate, job failures
+      and rate-limit parks, sync lag per mailbox, LLM latency/errors, SES quota
+      headroom. Never an address, subject, body or code in any attribute.
+- [ ] vps: compose joins `monitoring-net`, `OTEL_EXPORTER_OTLP_ENDPOINT` +
+      `OTEL_SERVICE_NAME`; dashboard `email-gateway.json`; alerts
+      `email-gateway-*.json` (send failed/bounced, complaint, job error,
+      sync stalled, SES sending paused, LLM lane erroring) to `Slack #alerts`;
+      `make hyperdx-apply ENV=prod`.
+- [ ] warden: `slack_alert:email-gateway-*` → `email-gateway` rule plus a
+      test, in that repo's own flow; AGENTS.md §Verify & Monitor names the
+      `service.name`.
+- [ ] Prove the loop end to end: one controlled alert reaches `#alerts`,
+      warden opens an `email-gateway` item, and it resolves; evidence in Left
+      behind.
+
+**Left behind:**
+
+## Wave 20 — Dashboard on basalt-ui v2 <!-- status: pending -->
+
+Blocked until basalt-ui v2 is released (basalt-ui `docs/waves/PLAN.md`, its
+release-candidate wave); building the new UI on 1.36 would be thrown away.
+The owner reviews this one deeply: great UX, condensed.
+
+- [ ] Upgrade `client/` to basalt-ui v2 (its migration notes), lint + theme
+      guards green.
+- [ ] Overview: one condensed screen: sends today/7d by status, bounce and
+      complaint rate against SES thresholds, quota headroom, sending status,
+      job and sync health, latest submissions with verdicts.
+- [ ] Sends: list with filters (template, status, source), detail with the
+      rendered mail (stored body) and the SES event timeline.
+- [ ] Templates: gallery with live previews of every template, test-send.
+      Suppressions page with delete.
+- [ ] `@verifier` screenshots of every page (light/dark, narrow/wide) against
+      the live build; findings fixed before close-out.
+
+**Left behind:**
+
+## Wave 21 — Reading the owner's mail <!-- status: pending -->
+
+After the outgoing side is done (owner, 2026-10-14): back to reading Proton
+and Gmail (and further addresses) through the existing provider ports. Shape
+with the owner first — what is already ingested (`docs/vps-cutover.md`: Gmail
+app password still missing) and what the client should do with it.
