@@ -1534,7 +1534,7 @@ https://email-gateway.${DOMAIN}` + `EMAIL_GATEWAY_SECRET_KEY`; then on the VPS
   jkrumm/shutterflow#1 closed. Handback: `/tmp/shutterflow-runner-handback.md`.
   Owner's click: delete the Resend account.
 
-## Wave 18 — SES fully adopted <!-- status: active -->
+## Wave 18 — SES fully adopted <!-- status: done -->
 
 Research (2026-10-14, research-gateway): keep `@aws-sdk/client-sesv2`
 (bare-bones `SESv2Client` + commands; latest 3.1151.0, we pin 3.1148.0), keep
@@ -1544,34 +1544,57 @@ open/click tracking: transactional mail, privacy first. Round 1's "clef-eu in
 the loop" question is moot since the owner dropped residency (decision lane
 round 2).
 
-- [ ] `scripts/ses-provision.ts` (idempotent, prints what it changes): account
+- [x] `scripts/ses-provision.ts` (idempotent, prints what it changes): account
       suppression list on for BOUNCE + COMPLAINT
       (`PutAccountSuppressionAttributes`); the configuration set's SNS
       destination subscribes Send, Delivery, Bounce, Complaint, Reject,
       DeliveryDelay, RenderingFailure. VDM (`PutAccountVdmAttributes`, dashboard
       on, engagement off) only after confirming it costs nothing extra on the
       ESSENTIALS plan; any per-message or monthly fee stops at the owner.
-- [ ] Send path: `EmailTags` (`template`, `source`) on every send so SES events
+- [x] Send path: `EmailTags` (`template`, `source`) on every send so SES events
       and VDM drill down by template; bump `client-sesv2` past bunfig's
       3-day cooldown; map `TooManyRequestsException`/`SendingPausedException`
       onto the job queue's rate-limit ladder.
-- [ ] Events: store bounce type/subtype and the diagnostic code (no addresses)
+- [x] Events: store bounce type/subtype and the diagnostic code (no addresses)
       on `send_log` (migration), plus the per-event timeline a send detail view
       needs (`send_events` table).
-- [ ] Rendered mail kept for review: a `send_bodies` table (html + text) with a
+- [x] Rendered mail kept for review: a `send_bodies` table (html + text) with a
       retention bound (30 days, pruned by a job); a template can mark fields
       sensitive (`shutterflow-code`'s code) and the stored copy is redacted.
-- [ ] SES account job (`ses_account`, hourly): `GetAccount` quota/usage,
+- [x] SES account job (`ses_account`, hourly): `GetAccount` quota/usage,
       enforcement status, sending enabled; stored for the client and the
       metrics in Wave 19. Suppression list read/delete via `/api` (bearer) for
       the dashboard.
-- [ ] Analytics API: `/api/sends/stats` (per day, template, status; bounce and
+- [x] Analytics API: `/api/sends/stats` (per day, template, status; bounce and
       complaint rates over 7/30 days), `/api/sends/:id` (events + stored body),
       `/api/ses/account`, `/api/ses/suppressions`. Eden types flow to the client.
 
-**Left behind:**
+**Left behind:** All six steps landed (migrations 7-9, `client-sesv2` 3.1149.0 — 3.1150/3.1151
+are inside the 3-day cooldown). `/check` green: `make check` 761 tests; fallow only
+flags the usual repo-boilerplate clones and function size. Two `/review` angles
+rounds' blockers fixed (IAM policy lacked `GetAccount`/suppression actions; unguarded
+housekeeping `enqueue` in timers; paused-sending now logs distinctly).
+- **VDM not enabled — owner decision.** It bills a per-email fee (~EUR 0.069 per
+  1,000 mails on top of sending, first 5,000 queries/month free); the plan stops
+  at any per-message fee. `ses-provision.ts` deliberately omits it.
+- **Provisioning not applied.** The script now sets the account suppression list
+  and converges the event destination (adds `RENDERING_FAILURE`, the SESv2 enum
+  spelling) and the IAM policy gains `GetAccount`/`ListSuppressedDestinations`/
+  `DeleteSuppressedDestination` — outward-facing AWS changes, so the owner or the
+  delivery lead must run `bun scripts/ses-provision.ts <domains>` (and re-issue
+  nothing else). Until then `ses_account` and `/api/ses/suppressions` return
+  AccessDenied/502 in prod.
+- Delivered: `EmailTags` (`template`,`source`); SES throttling
+  (`TooManyRequests`/`SendingPaused`/`LimitExceeded`) on the job rate-limit ladder;
+  `send_log` bounce columns + `send_events` timeline; `send_bodies` (30 days,
+  redacted for `shutterflow-code`, fail-closed); hourly `ses_account`; routes
+  `/api/sends/stats`, `/api/sends/:id`, `/api/ses/account`,
+  `/api/ses/suppressions`. `send_events` is pruned with the bodies.
+- Accepted: `ses_account` shows no staleness marker on repeated failure;
+  `send-log.ts`/`plugin.ts` size (stats extraction, route sub-plugins); the
+  repo-boilerplate clones; `sesClient()` first-use race (benign).
 
-## Wave 19 — OpenTelemetry into warden <!-- status: pending -->
+## Wave 19 — OpenTelemetry into warden <!-- status: active -->
 
 The owner's chain (mapped 2026-10-14): ClickStack on the VPS
 (`http://clickstack:4319` on `monitoring-net`, no auth) → HyperDX alert rules
