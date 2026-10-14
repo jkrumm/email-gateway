@@ -1607,29 +1607,72 @@ dashboard `vps/observability/dashboards/research-gateway.json`, warden rule +
 test in `warden/tests/test_triage.py`). Elysia pattern:
 `argo/apps/api/src/telemetry.ts` + `.claude/rules/observability.md`.
 
-- [ ] Instrument: `@elysiajs/opentelemetry` + OTLP proto trace/log/metric
+- [x] Instrument: `@elysiajs/opentelemetry` + OTLP proto trace/log/metric
       exporters per argo-api (versions via `/research`, cooldown respected);
       `service.name: email-gateway`. Spans: HTTP (skip `/health`), every job
       run as its own root span `job.<type>`, SES send (manual span —
       `instrumentation-aws-sdk` under Bun is unverified), IMAP sync per
       mailbox, every LLM call (classify, enrich, Jev). Trace-linked OTel logs
       replace bare `console` lines (stdout kept). 5xx → span Error, 4xx Unset.
-- [ ] Metrics: sends by template/status, bounce/complaint rate, job failures
+- [x] Metrics: sends by template/status, bounce/complaint rate, job failures
       and rate-limit parks, sync lag per mailbox, LLM latency/errors, SES quota
       headroom. Never an address, subject, body or code in any attribute.
-- [ ] vps: compose joins `monitoring-net`, `OTEL_EXPORTER_OTLP_ENDPOINT` +
+- [x] vps: compose joins `monitoring-net`, `OTEL_EXPORTER_OTLP_ENDPOINT` +
       `OTEL_SERVICE_NAME`; dashboard `email-gateway.json`; alerts
       `email-gateway-*.json` (send failed/bounced, complaint, job error,
       sync stalled, SES sending paused, LLM lane erroring) to `Slack #alerts`;
       `make hyperdx-apply ENV=prod`.
-- [ ] warden: `slack_alert:email-gateway-*` → `email-gateway` rule plus a
+- [x] warden: `slack_alert:email-gateway-*` → `email-gateway` rule plus a
       test, in that repo's own flow; AGENTS.md §Verify & Monitor names the
       `service.name`.
 - [ ] Prove the loop end to end: one controlled alert reaches `#alerts`,
       warden opens an `email-gateway` item, and it resolves; evidence in Left
       behind.
 
-**Left behind:**
+**Left behind:** Code `37a4c3e`, vps `e3d4563`, warden `config/triage-policy.json`
+rule + `tests/test_triage.py` test (rule-count pin 73 → 74), all pushed. Open:
+the last step is **not** closed (see Proof), so the wave stays `active` for the
+orchestrator's call.
+
+- **Deviations (deliberate):** no `@elysiajs/opentelemetry`/OTel SDK — the SDK-free
+  OTLP/HTTP JSON exporter of research-gateway/audio-gateway is ported into
+  `src/telemetry/` (proven on Bun against the same collector). No metrics
+  exporter: the "metrics" are structured log events (`send.result`, `ses.event`,
+  `job.failed`, `job.rate_limited`, `sync.tick`, `llm.call`, `ses.account`) that
+  dashboard/alert tiles query, as in the sibling gateways. Sync lag is the
+  _absence_ of an ok `sync.tick` (a newest-envelope age cannot tell stalled from
+  quiet). Mailboxes appear by role only; span status/exception carry the error
+  name only; the exporter drops address/subject/body/code/message-id keys.
+- **Review:** one `/review` round (security, backend, architect): 2 blocking
+  (raw error text on job spans; raw mailbox names in span status/logs) fixed with
+  regression tests, plus send.result warn severity, message ids out of webhook log
+  bodies, request span ended in `onError`, monotonic clock. Not done (accepted):
+  `enterWith` never cleared after the request span, denylist-based key redaction,
+  fallow dead exports / clone groups. `make check`: 835 tests green.
+- **vps:** compose joins `monitoring-net` + `OTEL_*`; dashboard `email-gateway`
+  and six `email-gateway-*` alerts applied to prod. The default
+  `hyperdx-apply` also created a previously unapplied
+  `research-gateway-solver-spawn-error` alert (file drift in vps).
+- **Prod check:** spans (`job.*`, `imap.sync`, HTTP) and logs reach ClickStack as
+  `service.name=email-gateway`.
+- **Incident, mine:** `make deploy APP=email-gateway` in vps recreated the
+  container from the stale `:latest` image (2 weeks old, `BEA_*` env) and it
+  crash-looped for ~4 minutes — every send route down — until recreated with
+  `IMAGE_TAG=<current sha>`. Never run `email-gateway-up` without `IMAGE_TAG`;
+  `compose.yml`'s default tag is stale by design (RollHook owns the tag).
+- **Proof:** a synthetic `send.result status=failed` log injected into the
+  collector flipped `email-gateway send failed` to ALERT in HyperDX and it
+  recovered to OK. `sync stalled` also fired once as a false positive (its first
+  1h window predated the deploy) and recovered at the next window; warden ingested
+  that Slack alert as event 1534. The rest of the loop (triage → `email-gateway`
+  repo → resolve) is unobserved: warden's poller is failing with `ledger behind
+this process's schema (v19, expects v20)`, so it ingested nothing after 11:27
+  UTC. That is warden's own migration lag (its loop must run once), not
+  touched here — needs the owner or a warden pass; re-check item 1534.
+- **Noticed, not mine:** `ses_account` job fails with `AccessDeniedException`
+  in prod (the IAM user lacks the account-level `GetAccount` action) — the SES
+  quota/paused signals stay empty until fixed; a `ses.account`-absent alert does
+  not exist.
 
 ## Wave 20 — Dashboard on basalt-ui v2 <!-- status: pending -->
 
