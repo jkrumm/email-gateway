@@ -1674,6 +1674,14 @@ this process's schema (v19, expects v20)`, so it ingested nothing after 11:27
 
 ## Wave 20 — Dashboard on basalt-ui v2 <!-- status: pending -->
 
+Inherited 2026-10-14: VDM stays off (owner: not needed; this dashboard
+covers sends, bounces, complaints, quota and account status). A @verifier
+pass over the current client (`/tmp/eg-ui-verify/`) fixed the inbox date
+crash, template detail routing, narrow tables, favicon, plain-text bodies and
+Cloudflare email obfuscation in previews (`aeea9cd`..`b813e9a`); still open:
+Cloudflare 503s its own speculation prefetches on `/app/*` (harmless) and a
+0.064 CLS on template detail. Every client change ends with a @verifier pass.
+
 Blocked until basalt-ui v2 is released (basalt-ui `docs/waves/PLAN.md`, its
 release-candidate wave); building the new UI on 1.36 would be thrown away.
 The owner reviews this one deeply: great UX, condensed.
