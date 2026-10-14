@@ -5,7 +5,7 @@ import { listTemplates } from "../lib/api";
 import { formatDate } from "../lib/format";
 import { DataTable } from "../components/DataTable";
 
-export const Route = createFileRoute("/templates")({
+export const Route = createFileRoute("/templates/")({
   component: TemplatesPage,
 });
 

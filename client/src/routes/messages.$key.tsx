@@ -196,7 +196,14 @@ function MessageBody({ body }: { body: MessageDetail["body"] }) {
         <Text
           component="pre"
           p="md"
-          style={{ whiteSpace: "pre-wrap", margin: 0 }}
+          ff="monospace"
+          c="var(--mantine-color-text)"
+          size="sm"
+          style={{
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            margin: 0,
+          }}
         >
           {text}
         </Text>

@@ -80,49 +80,51 @@ function AccountsPage() {
         <Group justify="space-between" mb="sm">
           <Title order={4}>Configured accounts</Title>
         </Group>
-        <Table>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Provider</Table.Th>
-              <Table.Th>Address</Table.Th>
-              <Table.Th>Last success</Table.Th>
-              <Table.Th>Last error</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {accounts.map((account) => {
-              const stored = stats?.accounts.find(
-                (entry) => entry.id === account.id,
-              );
-              return (
-                <Table.Tr key={account.id}>
-                  <Table.Td>
-                    <Badge variant="light">{account.provider}</Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="sm">{account.address}</Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="sm">
-                      {formatDate(stored?.lastSuccessAt ?? null)}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>
-                    {stored?.lastError ? (
-                      <Text size="sm" c="red">
-                        {stored.lastError}
+        <Table.ScrollContainer minWidth={560}>
+          <Table>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Provider</Table.Th>
+                <Table.Th>Address</Table.Th>
+                <Table.Th>Last success</Table.Th>
+                <Table.Th>Last error</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {accounts.map((account) => {
+                const stored = stats?.accounts.find(
+                  (entry) => entry.id === account.id,
+                );
+                return (
+                  <Table.Tr key={account.id}>
+                    <Table.Td>
+                      <Badge variant="light">{account.provider}</Badge>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm">{account.address}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm">
+                        {formatDate(stored?.lastSuccessAt ?? null)}
                       </Text>
-                    ) : (
-                      <Text size="sm" c="dimmed">
-                        none
-                      </Text>
-                    )}
-                  </Table.Td>
-                </Table.Tr>
-              );
-            })}
-          </Table.Tbody>
-        </Table>
+                    </Table.Td>
+                    <Table.Td>
+                      {stored?.lastError ? (
+                        <Text size="sm" c="red">
+                          {stored.lastError}
+                        </Text>
+                      ) : (
+                        <Text size="sm" c="dimmed">
+                          none
+                        </Text>
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                );
+              })}
+            </Table.Tbody>
+          </Table>
+        </Table.ScrollContainer>
       </Card>
     </Stack>
   );
