@@ -192,6 +192,17 @@ describe("web static serving", () => {
     expect(response.headers.get("location")).toBe("/app");
   });
 
+  test("/ redirects to /app", async () => {
+    const app = await testWebApp();
+
+    const response = await app.handle(
+      new Request("http://mail.test/", { redirect: "manual" }),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/app");
+  });
+
   test("disabled surface -> /admin 404s with the rest of /app", async () => {
     const app = await testWebApp({ password: undefined });
 

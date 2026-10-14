@@ -105,6 +105,9 @@ export function createWebRoutes({
       // the client so old bookmarks keep working. Registered only while the mail
       // surface is enabled — otherwise /admin 404s like the rest of /app.
       .get("/admin", () => redirect("/app", 302))
+      // The root has nothing of its own (the send routes live beside it), so a
+      // bare host lands in the client.
+      .get("/", () => redirect("/app", 302))
       // `@elysia/static` resolves real files only; index.html is served by the
       // no-store fallback routes below. An empty plugin when client/dist is
       // absent (a source checkout) so a missing build never breaks boot.

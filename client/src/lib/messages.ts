@@ -36,7 +36,15 @@ function needsMeRank(message: MessageRow): number {
   return message.classification?.actionRequired ? 1 : 0;
 }
 
+// Eden Treaty revives ISO date strings into Date objects at runtime, whatever
+// the static type says, so compare timestamps rather than strings.
+function timestamp(value: string | Date | null | undefined): number {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
 export function compareMessages(a: MessageRow, b: MessageRow): number {
   const rankDiff = needsMeRank(b) - needsMeRank(a);
-  return rankDiff !== 0 ? rankDiff : (b.date ?? "").localeCompare(a.date ?? "");
+  return rankDiff !== 0 ? rankDiff : timestamp(b.date) - timestamp(a.date);
 }

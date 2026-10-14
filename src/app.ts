@@ -42,7 +42,6 @@ export function createApp<
     new Elysia()
       // First, so its global hooks span every route below (skips /health).
       .use(httpTelemetry())
-      .get("/", () => "Hello Elysia")
       // Public (no bearer, reachable on the tunnel) for Uptime Kuma's liveness
       // check — never lists accounts here, that's real-address PII. The
       // bearer-guarded GET /api/accounts is where every configured account is
