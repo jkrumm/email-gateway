@@ -1432,7 +1432,7 @@ exactly like `fppSender` in `src/routes/fpp.ts`.
 - `docs/waves/PLAN.md` had a pre-existing prettier flip-flop on a multi-line
   inline code span in this wave's own text; rewritten so `make check` is green.
 
-## Wave 17 — Shutterflow onto the gateway <!-- status: active -->
+## Wave 17 — Shutterflow onto the gateway <!-- status: done -->
 
 AWS lifted the SES sandbox on 2026-10-13 (case 179180970900151, eu-central-1,
 50k/day, 14/s), so every recipient is reachable. Owner (2026-10-14): move
@@ -1465,12 +1465,12 @@ Shutterflow posts structured data, not HTML.
       `make email-gateway-env ENV=prod`; vps pushed and pulled before the
       gateway push. Gateway deployed and a test send to the owner's address
       delivered before Shutterflow switches.
-- [ ] Shutterflow: a `createGatewayMail` adapter (same port, same fake/outbox
+- [x] Shutterflow: a `createGatewayMail` adapter (same port, same fake/outbox
       adapters for tests), env `EMAIL_GATEWAY_URL` + `EMAIL_GATEWAY_SECRET_KEY`
       replacing `RESEND_API_KEY`; follow that repo's AGENTS.md and gate. Its vps
       app (`vps/apps/shutterflow`) gets the same key, `SHUTTERFLOW_RESEND_API_KEY`
       dropped. Deploy, then a real sign-in code to the owner's address arrives.
-- [ ] Close jkrumm/shutterflow#1. Hand back to the owner: deleting the Resend
+- [x] Close jkrumm/shutterflow#1. Hand back to the owner: deleting the Resend
       account and its domains is his click (irreversible, external).
 
 **Left behind:**
@@ -1522,8 +1522,19 @@ https://email-gateway.${DOMAIN}` + `EMAIL_GATEWAY_SECRET_KEY`; then on the VPS
 - Shutterflow's repo-wide `format:check` fails on ~215 generated files in
   `packages/local-api` before this change; `make check-changed` needs the lab
   seed, which the mini lacks. Not touched.
+- **Closed 2026-10-14 (orchestrator):** Actions minutes on the private repo were
+  exhausted (Portability ran on every push), so the owner chose a free
+  self-hosted runner. A vps session registered `vps-shutterflow`
+  (`[self-hosted, vps]`, systemd user `gh-runner`, rootless Docker; vps
+  `092cdbf`, re-apply `597c644`), moved `share-deploy.yml` onto it and made
+  Portability dispatch-only (shutterflow `b23518d`, `7e3159f`, `70bd604`).
+  Deploy 38544930632 green, image `70bd604` live; a real sign-in OTP from
+  shutterflow.app landed `shutterflow-code` `delivered` in `send_log`
+  (2026-10-14T09:36:54Z); `RESEND_API_KEY` is gone from prod;
+  jkrumm/shutterflow#1 closed. Handback: `/tmp/shutterflow-runner-handback.md`.
+  Owner's click: delete the Resend account.
 
-## Wave 18 — SES fully adopted <!-- status: pending -->
+## Wave 18 — SES fully adopted <!-- status: active -->
 
 Research (2026-10-14, research-gateway): keep `@aws-sdk/client-sesv2`
 (bare-bones `SESv2Client` + commands; latest 3.1151.0, we pin 3.1148.0), keep
