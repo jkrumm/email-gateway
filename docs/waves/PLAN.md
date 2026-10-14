@@ -1498,6 +1498,13 @@ Shutterflow posts structured data, not HTML.
   increased" on the private repo's account). Owner decision: fix billing and
   re-run the workflow, or authorise the manual bootstrap path
   (`make shutterflow-bootstrap-image` + `shutterflow-up`).
+- 2026-10-14 retry after the owner reported billing fixed: vps re-applied, the
+  workflow rerun four times over ~5 min, every run still ends with "recent
+  account payments have failed or your spending limit needs to be increased"
+  (test job never starts). The vps change was reverted again (current head
+  reverts the re-apply) so a container restart cannot crash. Check Billing &
+  plans for the account that owns `jkrumm/shutterflow` (private repo Actions
+  minutes), then redo the steps below.
 - The vps change for Shutterflow was reverted (vps `3e53876` then its revert):
   the running image still needs `RESEND_API_KEY` and would crash-loop on a
   restart without it. **Re-apply before the Shutterflow deploy runs** (revert
