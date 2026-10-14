@@ -583,7 +583,10 @@ export function createApiRoutes({
         // "open in new tab" on the raw-HTML link) regardless of how it's
         // reached, not just when embedded through the sandboxed iframe.
         set.headers["content-security-policy"] = "sandbox";
-        return html;
+        // Cloudflare's Email Address Obfuscation rewrites addresses in HTML
+        // responses into a script the sandbox blocks, so the preview showed
+        // "[email protected]". `email_off` is its documented opt-out.
+        return `<!--email_off-->${html}<!--/email_off-->`;
       },
       { params: t.Object({ id: t.String() }), query: templatePreviewQuery },
     )

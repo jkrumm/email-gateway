@@ -1165,7 +1165,11 @@ describe("GET /api/templates/:id/preview", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
-    expect((await response.text()).length).toBeGreaterThan(0);
+    const body = await response.text();
+    expect(body.length).toBeGreaterThan(0);
+    // Opted out of Cloudflare's Email Address Obfuscation.
+    expect(body.startsWith("<!--email_off-->")).toBe(true);
+    expect(body.endsWith("<!--/email_off-->")).toBe(true);
   });
 });
 
