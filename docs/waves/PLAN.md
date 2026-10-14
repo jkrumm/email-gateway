@@ -1595,7 +1595,7 @@ housekeeping `enqueue` in timers; paused-sending now logs distinctly).
   `send-log.ts`/`plugin.ts` size (stats extraction, route sub-plugins); the
   repo-boilerplate clones; `sesClient()` first-use race (benign).
 
-## Wave 19 — OpenTelemetry into warden <!-- status: active -->
+## Wave 19 — OpenTelemetry into warden <!-- status: done -->
 
 The owner's chain (mapped 2026-10-14): ClickStack on the VPS
 (`http://clickstack:4319` on `monitoring-net`, no auth) → HyperDX alert rules
@@ -1625,14 +1625,12 @@ test in `warden/tests/test_triage.py`). Elysia pattern:
 - [x] warden: `slack_alert:email-gateway-*` → `email-gateway` rule plus a
       test, in that repo's own flow; AGENTS.md §Verify & Monitor names the
       `service.name`.
-- [ ] Prove the loop end to end: one controlled alert reaches `#alerts`,
+- [x] Prove the loop end to end: one controlled alert reaches `#alerts`,
       warden opens an `email-gateway` item, and it resolves; evidence in Left
       behind.
 
 **Left behind:** Code `37a4c3e`, vps `e3d4563`, warden `config/triage-policy.json`
-rule + `tests/test_triage.py` test (rule-count pin 73 → 74), all pushed. Open:
-the last step is **not** closed (see Proof), so the wave stays `active` for the
-orchestrator's call.
+rule + `tests/test_triage.py` test (rule-count pin 73 → 74), all pushed.
 
 - **Deviations (deliberate):** no `@elysiajs/opentelemetry`/OTel SDK — the SDK-free
   OTLP/HTTP JSON exporter of research-gateway/audio-gateway is ported into
