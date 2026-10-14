@@ -1449,7 +1449,7 @@ Decided (orchestrator, owner may override): the templates move into the
 gateway registry so they show in the client like every other template, and
 Shutterflow posts structured data, not HTML.
 
-- [ ] Gateway: `POST /shutterflow` (`src/routes/shutterflow.ts`) with its own
+- [x] Gateway: `POST /shutterflow` (`src/routes/shutterflow.ts`) with its own
       bearer `SHUTTERFLOW_SECRET_KEY` (unset → 404; never `SECRET_KEY`), body
       `{ kind, to, code, expiresInMinutes }` (zod: `kind` the three literals,
       `to` an email, `code` a short alphanumeric). No spam gate (a user is
@@ -1457,10 +1457,10 @@ Shutterflow posts structured data, not HTML.
       provider error so Shutterflow can show a retry. The code is never logged
       and never lands in `send_log`. From `SHUTTERFLOW_FROM_EMAIL`
       (shutterflow.app is a verified SES identity).
-- [ ] Template `shutterflow-code` in `src/emails/shutterflow/`, ported from
+- [x] Template `shutterflow-code` in `src/emails/shutterflow/`, ported from
       Shutterflow's brand shell and `COPY` table (subject leads with the code),
       registered in `TEMPLATE_IDS`; README + AGENTS.md updated in the same commit.
-- [ ] vps: `SHUTTERFLOW_SECRET_KEY` in 1Password `vps/email-gateway` (via
+- [x] vps: `SHUTTERFLOW_SECRET_KEY` in 1Password `vps/email-gateway` (via
       `ask-human.sh`), `.env.tpl`, `SHUTTERFLOW_FROM_EMAIL` literal in compose;
       `make email-gateway-env ENV=prod`; vps pushed and pulled before the
       gateway push. Gateway deployed and a test send to the owner's address
@@ -1474,6 +1474,47 @@ Shutterflow posts structured data, not HTML.
       account and its domains is his click (irreversible, external).
 
 **Left behind:**
+
+**Status: blocked on the deploy of Shutterflow (steps 4-5), left `active`.**
+
+- Gateway done and live (`d0cd109`, vps `85f9e18`): `POST /shutterflow`, template
+  `shutterflow-code` (all three kinds, dark mode), `sendMail`'s
+  `sensitiveSubject` redacts the code-led subject from logs.
+  `SHUTTERFLOW_SECRET_KEY` created in 1Password `vps/email-gateway` (via
+  `ask-human.sh`; the first attempt failed on `op` reading stdin, the retry
+  runs it under `script`). `make check` green (663 tests), `/review` blocking
+  finding (registry sweep skipped the new entry) fixed, plus the swallowed-error
+  log, dead colour tokens and a code-mail render test.
+- Verified on prod (curl from the VPS): bad bearer 401, valid body 200, the
+  `send_log` row `shutterflow-code` is `delivered` to the owner, the test code
+  appears nowhere in the container logs (`subject: "[redacted]"`). The owner
+  received one real test mail with code 482913.
+- Shutterflow code is pushed to `jkrumm/shutterflow` master (`f272a45`:
+  `createGatewayMail`, `EMAIL_GATEWAY_URL` + `EMAIL_GATEWAY_SECRET_KEY` replace
+  `RESEND_API_KEY`/`MAIL_FROM`, `MailMessage` gains `kind`/`expiresInMinutes`,
+  docs + 0017 updated; share tests 372 green, typecheck and oxlint clean).
+  **It is NOT deployed:** GitHub refused to start the `Share server deploy` run
+  ("recent account payments have failed or your spending limit needs to be
+  increased" on the private repo's account). Owner decision: fix billing and
+  re-run the workflow, or authorise the manual bootstrap path
+  (`make shutterflow-bootstrap-image` + `shutterflow-up`).
+- The vps change for Shutterflow was reverted (vps `3e53876` then its revert):
+  the running image still needs `RESEND_API_KEY` and would crash-loop on a
+  restart without it. **Re-apply before the Shutterflow deploy runs** (revert
+  the revert): `apps/shutterflow/.env.tpl` gets `DOMAIN` and
+  `SHUTTERFLOW_EMAIL_GATEWAY_SECRET_KEY=op://vps/email-gateway/SHUTTERFLOW_SECRET_KEY`
+  (Resend line dropped), `compose.yml` gets `EMAIL_GATEWAY_URL:
+https://email-gateway.${DOMAIN}` + `EMAIL_GATEWAY_SECRET_KEY`; then on the VPS
+  `git pull && make shutterflow-env ENV=prod`. Then verify a real sign-in code
+  arrives, close jkrumm/shutterflow#1, and hand the Resend account deletion to
+  the owner.
+- Deferred review improvements: a shared own-bearer guard with
+  `sy-serendipity-requests.ts`; template-driven (not flag-driven) redaction so
+  `/api/sends` and `/api/templates/:id/test-send` cannot log a real code (only
+  the owner's API can reach them).
+- Shutterflow's repo-wide `format:check` fails on ~215 generated files in
+  `packages/local-api` before this change; `make check-changed` needs the lab
+  seed, which the mini lacks. Not touched.
 
 ## Wave 18 — SES fully adopted <!-- status: pending -->
 
