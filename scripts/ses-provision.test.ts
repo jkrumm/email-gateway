@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { dnsRecords, sendPolicy, topicPolicy } from "./ses-provision";
+import {
+  EVENT_TYPES,
+  SUPPRESSED_REASONS,
+  dnsRecords,
+  sendPolicy,
+  suppressionArgs,
+  topicPolicy,
+} from "./ses-provision";
 
 describe("ses-provision", () => {
   test("dnsRecords: three DKIM CNAMEs plus MAIL FROM MX and SPF on the ses. subdomain", () => {
@@ -23,11 +30,48 @@ describe("ses-provision", () => {
     ]);
   });
 
+  test("sendPolicy grants the account-level read/suppression actions on *", () => {
+    const p = sendPolicy("123") as any;
+    expect(p.Statement).toHaveLength(2);
+    expect(p.Statement[1]).toEqual({
+      Effect: "Allow",
+      Action: [
+        "ses:GetAccount",
+        "ses:ListSuppressedDestinations",
+        "ses:DeleteSuppressedDestination",
+      ],
+      Resource: "*",
+    });
+  });
+
   test("topicPolicy only lets SES of this account's configuration set publish", () => {
     const p = topicPolicy("arn:aws:sns:eu-central-1:123:t", "123") as any;
     expect(p.Statement[0].Principal.Service).toBe("ses.amazonaws.com");
     expect(p.Statement[0].Condition.StringEquals["AWS:SourceAccount"]).toBe(
       "123",
     );
+  });
+
+  test("EVENT_TYPES are exactly the SESv2 enum values, no tracking events", () => {
+    expect([...EVENT_TYPES]).toEqual([
+      "SEND",
+      "DELIVERY",
+      "BOUNCE",
+      "COMPLAINT",
+      "REJECT",
+      "DELIVERY_DELAY",
+      "RENDERING_FAILURE",
+    ]);
+  });
+
+  test("suppressionArgs enables the account list for BOUNCE and COMPLAINT only", () => {
+    expect([...SUPPRESSED_REASONS]).toEqual(["BOUNCE", "COMPLAINT"]);
+    expect(suppressionArgs()).toEqual([
+      "sesv2",
+      "put-account-suppression-attributes",
+      "--suppressed-reasons",
+      "BOUNCE",
+      "COMPLAINT",
+    ]);
   });
 });

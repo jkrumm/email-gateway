@@ -5,8 +5,9 @@
  *
  * Converges: SES identities (Easy DKIM 2048) with a custom MAIL FROM on
  * `ses.<domain>`, configuration set `email-gateway`, an SNS topic wired as the
- * set's event destination, and an IAM user scoped to SendEmail on exactly those
- * identities + the set. Prints the DNS records to add (never applies them) and
+ * set's event destination (re-runs converge it to EVENT_TYPES), the account-level
+ * suppression list for BOUNCE + COMPLAINT, and an IAM user scoped to SendEmail
+ * on exactly those identities + the set. Prints the DNS records to add (never applies them) and
  * the SNS topic ARN. The access key is created only with `--create-key`, only
  * if the user has none, and printed exactly once on stdout's last block.
  *
@@ -14,12 +15,12 @@
  * `eu-central-1`. Never run against another profile.
  */
 
-export const REGION = process.env.AWS_REGION ?? "eu-central-1";
+const REGION = process.env.AWS_REGION ?? "eu-central-1";
 const PROFILE = process.env.AWS_PROFILE ?? "jk-ses";
-export const CONFIG_SET = "email-gateway";
-export const TOPIC_NAME = "email-gateway-ses";
-export const IAM_USER = "email-gateway-ses";
-export const MAIL_FROM_PREFIX = "ses";
+const CONFIG_SET = "email-gateway";
+const TOPIC_NAME = "email-gateway-ses";
+const IAM_USER = "email-gateway-ses";
+const MAIL_FROM_PREFIX = "ses";
 export const EVENT_TYPES = [
   "SEND",
   "DELIVERY",
@@ -27,7 +28,18 @@ export const EVENT_TYPES = [
   "COMPLAINT",
   "REJECT",
   "DELIVERY_DELAY",
+  "RENDERING_FAILURE",
 ] as const;
+export const SUPPRESSED_REASONS = ["BOUNCE", "COMPLAINT"] as const;
+
+export function suppressionArgs(): string[] {
+  return [
+    "sesv2",
+    "put-account-suppression-attributes",
+    "--suppressed-reasons",
+    ...SUPPRESSED_REASONS,
+  ];
+}
 
 export type DnsRecord = {
   type: "CNAME" | "MX" | "TXT";
@@ -65,6 +77,16 @@ export function sendPolicy(account: string): object {
         Effect: "Allow",
         Action: ["ses:SendEmail", "ses:SendRawEmail"],
         Resource: [arn("identity", "*"), arn("configuration-set", CONFIG_SET)],
+      },
+      // Account-level actions: SES has no resource-level scoping for them.
+      {
+        Effect: "Allow",
+        Action: [
+          "ses:GetAccount",
+          "ses:ListSuppressedDestinations",
+          "ses:DeleteSuppressedDestination",
+        ],
+        Resource: "*",
       },
     ],
   };
@@ -167,7 +189,9 @@ async function ensureIdentity(domain: string): Promise<string[]> {
   return id.DkimAttributes?.Tokens ?? [];
 }
 
-async function ensureConfigSet(topicArn: string): Promise<void> {
+async function ensureConfigSet(
+  topicArn: string,
+): Promise<"created" | "updated"> {
   const exists = await aws([
     "sesv2",
     "get-configuration-set",
@@ -212,6 +236,7 @@ async function ensureConfigSet(topicArn: string): Promise<void> {
     "--event-destination",
     destination,
   ]);
+  return present ? "updated" : "created";
 }
 
 async function ensureIamUser(
@@ -280,9 +305,19 @@ async function main() {
     "--attribute-value",
     JSON.stringify(topicPolicy(topicArn, account)),
   ]);
-  await ensureConfigSet(topicArn);
+  const destinationChange = await ensureConfigSet(topicArn);
 
   console.log(`topic: ${topicArn}`);
+  console.log(
+    `event destination sns: ${destinationChange} (${EVENT_TYPES.join(", ")})`,
+  );
+
+  // VDM (PutAccountVdmAttributes) is deliberately not provisioned: it bills a
+  // per-email fee, which is an owner decision.
+  await awsOk(suppressionArgs());
+  console.log(
+    `account suppression list: ${SUPPRESSED_REASONS.join(" + ")} (set; idempotent)`,
+  );
   for (const domain of domains) {
     const tokens = await ensureIdentity(domain);
     console.log(`\n# ${domain}`);
