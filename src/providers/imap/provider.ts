@@ -711,6 +711,39 @@ function idleReconnectDelayMs(attempt: number, random: () => number): number {
   return base + Math.floor(random() * base * IDLE_RECONNECT_JITTER_RATIO);
 }
 
+// Plain network hang guard (not an agent budget) on one connect() +
+// mailboxOpen() attempt. imapflow carries its own connect/greeting/socket
+// timeouts; this is the backstop that keeps the reconnect loop alive if an
+// attempt ever stalls past all of them — an attempt that never settles would
+// end the loop silently, and the watch with it.
+const IDLE_CONNECT_HANG_GUARD_MS = 2 * 60 * 1000;
+
+// Names, codes and flags only — never the server's response text.
+function watchErrorAttrs(error: unknown): Record<string, string | boolean> {
+  const attrs: Record<string, string | boolean> = { error: errorName(error) };
+  if (typeof error !== "object" || error === null) return attrs;
+  if ("code" in error && typeof error.code === "string") {
+    attrs.code = error.code;
+  }
+  if ("authenticationFailed" in error && error.authenticationFailed === true) {
+    attrs.authenticationFailed = true;
+  }
+  return attrs;
+}
+
+function withHangGuard<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`IMAP watch connect did not settle in ${ms}ms`);
+      Object.assign(error, { code: "WATCH_CONNECT_HANG" });
+      reject(error);
+    }, ms);
+    timer.unref();
+  });
+  return Promise.race([work, guard]).finally(() => clearTimeout(timer));
+}
+
 function defaultIdleReconnectWait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
@@ -729,10 +762,12 @@ async function imapWatch(
     createIdleClient = createIdleClientFromAdapter,
     wait = defaultIdleReconnectWait,
     random = Math.random,
+    connectHangGuardMs = IDLE_CONNECT_HANG_GUARD_MS,
   }: {
     createIdleClient?: (config: ImapConfig) => ImapIdleClient;
     wait?: (ms: number) => Promise<void>;
     random?: () => number;
+    connectHangGuardMs?: number;
   } = {},
 ): Promise<Unsubscribe> {
   let stopped = false;
@@ -804,10 +839,15 @@ async function imapWatch(
       if (client !== current) return;
       log.error("[imap] watch idle loop failed", {
         mailbox: mailboxRole(mailboxPath),
-        error: errorName(error),
+        ...watchErrorAttrs(error),
       });
       handleDrop();
     }
+  }
+
+  async function connectAndOpenMailbox(current: ImapIdleClient): Promise<void> {
+    await current.connect();
+    await current.mailboxOpen(mailboxPath, { readOnly: true });
   }
 
   async function connectAndIdle(): Promise<void> {
@@ -827,8 +867,7 @@ async function imapWatch(
     }
     attachListeners(current);
     try {
-      await current.connect();
-      await current.mailboxOpen(mailboxPath, { readOnly: true });
+      await withHangGuard(connectAndOpenMailbox(current), connectHangGuardMs);
     } catch (error) {
       detachListeners(current);
       if (client === current) client = null;
@@ -839,6 +878,9 @@ async function imapWatch(
       }
       throw error;
     }
+    // Unsubscribed while this attempt was in flight: Unsubscribe already
+    // detached and logged out `current`, so drop it without any bookkeeping.
+    if (stopped) return;
     everConnected = true;
     attempt = 0;
     reconnecting = false;
@@ -858,12 +900,21 @@ async function imapWatch(
     try {
       await connectAndIdle();
     } catch (error) {
+      // Bridge right after a restart answers LOGIN with "no such user" until
+      // it has loaded the account — an auth failure here is transient, so it
+      // backs off and retries like any other failure, never gives up.
       log.error("[imap] watch reconnect failed", {
         mailbox: mailboxRole(mailboxPath),
-        error: errorName(error),
+        ...watchErrorAttrs(error),
       });
       void reconnectLoop();
+      return;
     }
+    if (stopped) return;
+    log.info("[imap] watch reconnected", { mailbox: mailboxRole(mailboxPath) });
+    // IDLE only reports changes from now on: anything that arrived while the
+    // connection was down needs one sync of its own.
+    onChange();
   }
 
   await connectAndIdle();
@@ -890,6 +941,7 @@ export function createImapProvider(
     createIdleClient,
     idleReconnectWait,
     idleReconnectRandom,
+    idleConnectHangGuardMs,
   }: {
     id: ImapProviderId;
     account: string;
@@ -900,6 +952,7 @@ export function createImapProvider(
     createIdleClient?: (config: ImapConfig) => ImapIdleClient;
     idleReconnectWait?: (ms: number) => Promise<void>;
     idleReconnectRandom?: () => number;
+    idleConnectHangGuardMs?: number;
   },
 ): MailProvider {
   const pool = createSessionPool(port, poolIdleMs);
@@ -931,6 +984,7 @@ export function createImapProvider(
         createIdleClient,
         wait: idleReconnectWait,
         random: idleReconnectRandom,
+        connectHangGuardMs: idleConnectHangGuardMs,
       }),
   };
 }

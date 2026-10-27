@@ -950,7 +950,18 @@ function createFakeIdleClient({
   // Shared across multiple fakes so a test can assert relative ordering of
   // calls across the outgoing and incoming client on a reconnect.
   log,
-}: { connectError?: Error; log?: string[] } = {}) {
+  // When true, connect() never settles — simulates an attempt that stalls
+  // past every imapflow timeout.
+  connectHangs,
+  // When set, connect() waits on this promise — lets a test act while a
+  // connect is still in flight.
+  connectGate,
+}: {
+  connectError?: Error;
+  log?: string[];
+  connectHangs?: boolean;
+  connectGate?: Promise<void>;
+} = {}) {
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const calls = { connect: 0, mailboxOpen: 0, logout: 0, idle: 0 };
   const idleWaiters: Array<{
@@ -977,6 +988,8 @@ function createFakeIdleClient({
     connect: async () => {
       calls.connect++;
       log?.push("connect");
+      if (connectHangs) return new Promise<void>(() => undefined);
+      if (connectGate) await connectGate;
       if (connectError) throw connectError;
     },
     mailboxOpen: async () => {
@@ -1232,6 +1245,122 @@ describe("createImapProvider watch()", () => {
 
     expect(attempts).toHaveLength(1);
     expect(attempts[0]!.calls.connect).toBe(1);
+  });
+
+  test("keeps retrying through Bridge's post-restart auth failures, then reconnects and kicks one catch-up sync", async () => {
+    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
+    const authFailure = Object.assign(new Error("no such user"), {
+      authenticationFailed: true,
+    });
+    const provider = createImapProvider(config, {
+      id: "proton",
+      account: "hello@example.com",
+      port: createFakePort().port,
+      createIdleClient: () => {
+        // Boot connects fine; the next three attempts hit a Bridge that has
+        // not loaded the account yet.
+        const failing = instances.length >= 1 && instances.length <= 3;
+        const fake = createFakeIdleClient({
+          connectError: failing ? authFailure : undefined,
+        });
+        instances.push(fake);
+        return fake.client;
+      },
+      idleReconnectWait: immediateWait,
+      idleReconnectRandom: () => 0,
+    });
+    const changes = { count: 0 };
+
+    const unsubscribe = await provider.watch!("INBOX", () => {
+      changes.count++;
+    });
+
+    instances[0]!.emit("close");
+    for (let i = 0; i < 5; i++) await flush();
+
+    expect(instances).toHaveLength(5);
+    expect(instances[4]!.calls.mailboxOpen).toBe(1);
+    expect(instances[4]!.calls.idle).toBe(1);
+    expect(changes.count).toBe(1);
+
+    // The recovered connection still watches.
+    instances[4]!.emit("exists");
+    expect(changes.count).toBe(2);
+
+    unsubscribe();
+  });
+
+  test("a reconnect attempt that never settles is abandoned by the hang guard and retried", async () => {
+    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
+    const provider = createImapProvider(config, {
+      id: "proton",
+      account: "hello@example.com",
+      port: createFakePort().port,
+      createIdleClient: () => {
+        const fake = createFakeIdleClient({
+          connectHangs: instances.length === 1,
+        });
+        instances.push(fake);
+        return fake.client;
+      },
+      idleReconnectWait: immediateWait,
+      idleReconnectRandom: () => 0,
+      idleConnectHangGuardMs: 5,
+    });
+
+    const unsubscribe = await provider.watch!("INBOX", () => undefined);
+
+    instances[0]!.emit("close");
+    for (let i = 0; i < 100 && instances.length < 3; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await flush();
+
+    expect(instances).toHaveLength(3);
+    expect(instances[1]!.listenerCount("close")).toBe(0);
+    expect(instances[2]!.calls.mailboxOpen).toBe(1);
+
+    unsubscribe();
+  });
+
+  test("unsubscribe during an in-flight reconnect drops it without a catch-up sync", async () => {
+    let releaseConnect = () => undefined as void;
+    const connectGate = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
+    const provider = createImapProvider(config, {
+      id: "proton",
+      account: "hello@example.com",
+      port: createFakePort().port,
+      createIdleClient: () => {
+        const fake = createFakeIdleClient({
+          connectGate: instances.length === 1 ? connectGate : undefined,
+        });
+        instances.push(fake);
+        return fake.client;
+      },
+      idleReconnectWait: immediateWait,
+      idleReconnectRandom: () => 0,
+    });
+    const changes = { count: 0 };
+
+    const unsubscribe = await provider.watch!("INBOX", () => {
+      changes.count++;
+    });
+    instances[0]!.emit("close");
+    await flush();
+    expect(instances).toHaveLength(2);
+
+    unsubscribe();
+    releaseConnect();
+    await flush();
+    await flush();
+
+    expect(instances).toHaveLength(2);
+    expect(instances[1]!.calls.logout).toBe(1);
+    expect(instances[1]!.calls.idle).toBe(0);
+    expect(changes.count).toBe(0);
   });
 
   test("a reconnect detaches and closes the outgoing client before the new one ever connects", async () => {
