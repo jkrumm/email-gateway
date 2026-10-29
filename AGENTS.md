@@ -2,7 +2,7 @@
 
 Bun + Elysia service on the VPS: the one door to the owner's mail. Today it sends
 app mail through Amazon SES (`/fpp`, `/fpp-daily-analytics`, `/sy-serendipity`,
-`/shutterflow`;
+`/shutterflow`, `/athena`;
 Resend is gone) and syncs two IMAP accounts — Proton `hello@` through Bridge on
 the homelab (tailnet, STARTTLS) and Gmail through its IMAP endpoint (implicit
 TLS, app password) — into SQLite, classifies with an LLM plus Jev in shadow
@@ -81,6 +81,14 @@ build`, built by the Dockerfile's client stage) or the React Email preview
   always called with `sensitiveSubject: true` there (logs say `[redacted]`);
   never log the body or the rendered mail, and `send_log` records only the
   recipient and template id.
+- **`POST /athena` carries one-time sign-in codes for IU staff.** Same shape as
+  `/shutterflow` (own bearer `ATHENA_SECRET_KEY`, never `SECRET_KEY`; unset → 404;
+  no spam gate; synchronous; 502 on a provider error; `sensitiveSubject: true`),
+  and stricter: `code` is exactly six digits, `expiresInMinutes` ≤ 15, `to` is one
+  `@iu.org` address (anything else is a 422, so a leaked key cannot mail outsiders).
+  The code appears spelled two ways (`482915`, `482 915`); the template's `redact`
+  returns both. Sender and Reply-To come from `ATHENA_FROM_EMAIL` / `ATHENA_REPLY_TO`
+  in the deploy env (the repo is public); never an `@iu.org` From.
 - **Three live callers, contract frozen.** FPP web (Vercel, 7 s abort),
   fpp-analytics (VPS, 30 s), sy-serendipity (Netlify, 10 s) post to the send
   routes with the shared `SECRET_KEY`. Paths, body schemas, 2xx-on-suppressed
@@ -245,6 +253,9 @@ tests never need secrets.
   (own bearer, 404 when unset); template `src/emails/shutterflow/code-mail.tsx`
   on `src/layouts/shutterflow.layout.tsx` (Shutterflow's brand shell ported
   from `apps/share/src/lib/brand`)
+- `src/routes/athena.ts` — `createAthenaRoutes`, `POST /athena` (own bearer, 404
+  when unset, `@iu.org` recipients only); template `src/emails/athena/code-mail.tsx`
+  on `src/layouts/athena.layout.tsx` (Athena's tokens ported as hex)
 - `src/routes/sy-serendipity-requests.ts` — `GET /sy-serendipity/requests`, the
   read-only admin feed over `mail-submissions.ts`'s `listBySource`; own key
   `SY_SERENDIPITY_READ_KEY` (unset → 404), never `SECRET_KEY`/`API_KEY`, not host-gated

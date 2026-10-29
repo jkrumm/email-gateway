@@ -3,6 +3,10 @@ import {
   type ComponentType,
   type FunctionComponent,
 } from "react";
+import AthenaCodeMail, {
+  athenaCodeSecrets,
+  type AthenaCodeProps,
+} from "./athena/code-mail";
 import FppDailyAnalytics, {
   type FppDailyAnalyticsProps,
 } from "./fpp/fpp-daily-analytics";
@@ -35,6 +39,7 @@ export const TEMPLATE_IDS = {
   sySerendipityConfirmation: "sy-serendipity-confirmation",
   jkrummContactReceiver: "jkrumm-contact-receiver",
   shutterflowCode: "shutterflow-code",
+  athenaCode: "athena-code",
 } as const;
 
 export interface EmailTemplateEntry<Props> {
@@ -56,6 +61,7 @@ export const emailRegistry: [
   EmailTemplateEntry<SySerendipityConfirmationProps>,
   EmailTemplateEntry<JkrummContactReceiverProps>,
   EmailTemplateEntry<ShutterflowCodeProps>,
+  EmailTemplateEntry<AthenaCodeProps>,
 ] = [
   {
     id: TEMPLATE_IDS.fppSender,
@@ -99,6 +105,14 @@ export const emailRegistry: [
     component: ShutterflowCodeMail,
     previewProps: ShutterflowCodeMail.PreviewProps,
     redact: ({ code }) => [code],
+  },
+  {
+    id: TEMPLATE_IDS.athenaCode,
+    name: "Athena – sign-in code",
+    component: AthenaCodeMail,
+    previewProps: AthenaCodeMail.PreviewProps,
+    // The code, plain and as the mail shows it ("482 915").
+    redact: ({ code }) => athenaCodeSecrets(code),
   },
 ];
 

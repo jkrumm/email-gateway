@@ -122,6 +122,13 @@ export const envSchema = z
     // SECRET_KEY; unset -> the route 404s. FROM falls back to the default sender.
     SHUTTERFLOW_SECRET_KEY: z.string().min(32).optional(),
     SHUTTERFLOW_FROM_EMAIL: z.string().optional(),
+    // POST /athena: Athena's sign-in code mails (IU staff only). Its own bearer,
+    // never SECRET_KEY; unset -> the route 404s. FROM falls back to the default
+    // sender (never an @iu.org address: iu.org publishes DMARC p=reject);
+    // REPLY_TO is the owner's address. Both come from the deploy env.
+    ATHENA_SECRET_KEY: z.string().min(32).optional(),
+    ATHENA_FROM_EMAIL: z.string().optional(),
+    ATHENA_REPLY_TO: z.string().optional(),
 
     // IMAP ingest (Proton Mail Bridge). Unset host -> IMAP ingest disabled.
     IMAP_HOST: z.string().optional(),

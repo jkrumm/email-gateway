@@ -26,11 +26,14 @@ describe("email registry", () => {
     );
   });
 
-  test("only shutterflow-code names secrets: its auth code", () => {
+  test("only the code mails name secrets: their auth codes", () => {
     const named = emailRegistry
       .filter((entry) => entry.redact)
       .map((entry) => entry.id);
-    expect(named).toEqual([TEMPLATE_IDS.shutterflowCode]);
+    expect(named).toEqual([
+      TEMPLATE_IDS.shutterflowCode,
+      TEMPLATE_IDS.athenaCode,
+    ]);
 
     const entry = findTemplateEntry(TEMPLATE_IDS.shutterflowCode)!;
     expect(
@@ -40,6 +43,13 @@ describe("email registry", () => {
         expiresInMinutes: 10,
       }),
     ).toEqual(["482913"]);
+    expect(
+      templateSecrets(findTemplateEntry(TEMPLATE_IDS.athenaCode)!, {
+        kind: "sign-in",
+        code: "482915",
+        expiresInMinutes: 10,
+      }),
+    ).toEqual(["482915", "482 915"]);
     expect(
       templateSecrets(findTemplateEntry(TEMPLATE_IDS.fppSender)!, {}),
     ).toEqual([]);

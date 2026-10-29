@@ -2,6 +2,7 @@ import { Elysia, type AnyElysia } from "elysia";
 import { fppRoutes } from "./routes/fpp";
 import { jkrummContactRoutes } from "./routes/jkrumm-contact";
 import { sySerendipityRoutes } from "./routes/sy-serendipity";
+import { athenaRoutes } from "./routes/athena";
 import { shutterflowRoutes } from "./routes/shutterflow";
 import { sySerendipityRequestsRoutes } from "./routes/sy-serendipity-requests";
 import { sesWebhookRoutes } from "./routes/ses-webhook";
@@ -57,6 +58,8 @@ export function createApp<
       .use(sySerendipityRequestsRoutes)
       // Shutterflow's auth codes; own bearer (SHUTTERFLOW_SECRET_KEY), unset 404s.
       .use(shutterflowRoutes)
+      // Athena's sign-in codes (IU staff only); own bearer (ATHENA_SECRET_KEY), unset 404s.
+      .use(athenaRoutes)
       // SNS -> send_log delivery events. On the public door like the send
       // routes (SNS cannot reach the MAIL_HOST-gated surface); the SNS
       // signature is its only auth, and unset SES_SNS_TOPIC_ARN 404s it.
