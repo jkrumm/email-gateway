@@ -25,14 +25,6 @@ function mockModelReturning(text: string) {
   });
 }
 
-function mockModelThrowing(message: string) {
-  return new MockLanguageModelV4({
-    doGenerate: async () => {
-      throw new Error(message);
-    },
-  });
-}
-
 const baseEmail = {
   direction: "outbound" as const,
   fromAddress: "guest@example.com",

@@ -3,8 +3,8 @@ dev: ## Run the dev server (secrets-run + bun --watch — see .env.tpl)
 	@bun run dev
 
 .PHONY: check
-check: ## format:check + lint (client check-theme) + typecheck (server + client) + test
-	@bun run format:check && bun run lint && bun run typecheck && bun test
+check: ## frozen install + oxfmt --check + oxlint --type-aware (+ check-theme) + typecheck (server + client) + test
+	@bun install --frozen-lockfile && bun run format:check && bun run lint && bun run typecheck && bun test
 
 .PHONY: build
 build: ## Build the client SPA into client/dist

@@ -559,7 +559,7 @@ export function emitOtelLog(
  */
 export async function flushOtel(): Promise<void> {
   await flush(true);
-  await Promise.allSettled([...inFlight]);
+  await Promise.allSettled(inFlight);
 }
 
 if (ENABLED) {

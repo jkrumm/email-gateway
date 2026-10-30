@@ -7,8 +7,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "pretypecheck": "tsr generate",
-    "typecheck": "tsc --noEmit",
-    "lint": "oxlint && basalt-ui check-theme"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@elysia/eden": "1.4.10",
@@ -32,7 +31,6 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.1",
-    "oxlint": "1.76.0",
     "typescript": "7.0.2",
     "vite": "8.3.1"
   }
