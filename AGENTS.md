@@ -46,7 +46,7 @@ bun test               # bun test, preload src/test/setup.ts (in-memory DB, dumm
 bun run test               # bun test, preload src/test/setup.ts (in-memory DB, dummy env)
 bun run build          # build the client SPA into client/dist (cd client && vite build)
 bun run client:dev     # Vite dev server, proxies /api and the /app session routes
-bun run format:check   # prettier — the gate runs this, run `bun run format` before committing
+bun run format:check   # oxfmt — the gate runs this, run `bun run format` before committing
 bun run lint           # client/: oxlint (basalt preset via .oxlintrc.json) + basalt-ui check-theme
 bun run email          # react-email preview of src/emails
 bun run seed:demo      # fake submissions into the old email-gateway.sqlite (refuses NODE_ENV=production)
@@ -57,8 +57,8 @@ make check             # format:check + lint + typecheck + test in one shot; `ma
 Gate for every change: `/check` (format:check, typecheck, `bun test`, fallow),
 then `/review` on code. `typecheck` now covers both the server and the client
 workspace. `lint` runs both basalt guard lanes over the client:
-oxlint (`client/.oxlintrc.json` extends basalt-ui's shipped preset) and
-`check-theme`; the server has no linter, prettier is the formatter.
+`oxlint --type-aware` over server and client (root `.oxlintrc.json`) and
+`check-theme`; oxfmt is the formatter.
 
 `make check` is exactly `bun run format:check && bun run lint && bun run
 typecheck && bun test`. It does **not** cover the client bundle (`bun run
