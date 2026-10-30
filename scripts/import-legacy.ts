@@ -12,30 +12,27 @@
  * Usage: bun run import-legacy
  *        bun run scripts/import-legacy.ts [oldPath] [newPath]
  */
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { Database } from "bun:sqlite";
-import { env } from "../src/env";
-import {
-  createSubmissionsRepo,
-  type SubmissionRecord,
-} from "../src/db/submissions";
-import { openMailDatabase } from "../src/db/mail-index";
-import { createMailSubmissionsRepo } from "../src/db/mail-submissions";
-import { createJobQueue, type JobQueue } from "../src/db/jobs";
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { Database } from 'bun:sqlite'
+import { env } from '../src/env'
+import { createSubmissionsRepo, type SubmissionRecord } from '../src/db/submissions'
+import { openMailDatabase } from '../src/db/mail-index'
+import { createMailSubmissionsRepo } from '../src/db/mail-submissions'
+import { createJobQueue, type JobQueue } from '../src/db/jobs'
 
 export interface ImportLegacyResult {
-  imported: number;
-  alreadyPresent: number;
+  imported: number
+  alreadyPresent: number
   // INSERT OR IGNORE suppresses ANY constraint violation, not just the id
   // conflict this script expects — a row counted here means IGNORE silently
   // swallowed something else (a CHECK failure), not that it was already
   // imported. Should stay 0 in practice: the new table's CHECK constraints
   // mirror the old one's.
-  rejected: number;
+  rejected: number
 }
 
-type ImportOutcome = "imported" | "alreadyPresent" | "rejected";
+type ImportOutcome = 'imported' | 'alreadyPresent' | 'rejected'
 
 // A direct parameterized INSERT rather than mail-submissions.ts's
 // insertSubmission(), which always mints a fresh id/receivedAt — the whole
@@ -44,12 +41,9 @@ type ImportOutcome = "imported" | "alreadyPresent" | "rejected";
 // a safe no-op for rows already imported — but IGNORE also swallows any other
 // constraint violation, so a `changes === 0` result is disambiguated by a
 // follow-up existence check rather than assumed to mean "already present".
-function importSubmissionRow(
-  newDb: Database,
-  record: SubmissionRecord,
-): ImportOutcome {
-  const jev = record.jev;
-  const hasJev = jev !== null && (jev.verdict !== null || jev.error !== null);
+function importSubmissionRow(newDb: Database, record: SubmissionRecord): ImportOutcome {
+  const jev = record.jev
+  const hasJev = jev !== null && (jev.verdict !== null || jev.error !== null)
 
   const { changes } = newDb.run(
     `INSERT OR IGNORE INTO submissions (
@@ -76,16 +70,14 @@ function importSubmissionRow(
       hasJev ? jev.model : null,
       hasJev ? jev.error : null,
     ],
-  );
+  )
 
-  if (changes > 0) return "imported";
+  if (changes > 0) return 'imported'
 
   const exists = newDb
-    .query<{ found: number }, [string]>(
-      "SELECT 1 AS found FROM submissions WHERE id = ?",
-    )
-    .get(record.id);
-  return exists ? "alreadyPresent" : "rejected";
+    .query<{ found: number }, [string]>('SELECT 1 AS found FROM submissions WHERE id = ?')
+    .get(record.id)
+  return exists ? 'alreadyPresent' : 'rejected'
 }
 
 // Paginates through every row the old store has via the same repo the app
@@ -99,32 +91,32 @@ export function importLegacySubmissions({
     claimedBy: `import-legacy:${process.pid}`,
   }),
 }: {
-  oldDb: Database;
-  newDb: Database;
-  jobs?: JobQueue;
+  oldDb: Database
+  newDb: Database
+  jobs?: JobQueue
 }): ImportLegacyResult {
-  const oldSubmissions = createSubmissionsRepo(oldDb);
-  const newSubmissions = createMailSubmissionsRepo(newDb);
+  const oldSubmissions = createSubmissionsRepo(oldDb)
+  const newSubmissions = createMailSubmissionsRepo(newDb)
 
-  let imported = 0;
-  let alreadyPresent = 0;
-  let rejected = 0;
-  let cursor: string | undefined;
+  let imported = 0
+  let alreadyPresent = 0
+  let rejected = 0
+  let cursor: string | undefined
 
   do {
-    const page = oldSubmissions.listSubmissions({ limit: 100, cursor });
+    const page = oldSubmissions.listSubmissions({ limit: 100, cursor })
     for (const record of page.data) {
-      const outcome = importSubmissionRow(newDb, record);
-      if (outcome === "imported") {
-        imported++;
-      } else if (outcome === "alreadyPresent") {
-        alreadyPresent++;
+      const outcome = importSubmissionRow(newDb, record)
+      if (outcome === 'imported') {
+        imported++
+      } else if (outcome === 'alreadyPresent') {
+        alreadyPresent++
       } else {
-        rejected++;
+        rejected++
         console.warn(
           `[import-legacy] submission ${record.id} was rejected by a constraint check — not counted as imported or already present`,
-        );
-        continue;
+        )
+        continue
       }
 
       // A submission still awaiting Jev's verdict in the old store has no
@@ -153,48 +145,45 @@ export function importLegacySubmissions({
       // `newJev === null` check, stranding it exactly like the crash case
       // above. `newJev.verdict === null` catches that: still pending in the
       // old store, still no real verdict in the new one either.
-      const newJev = newSubmissions.getSubmission(record.id)?.jev ?? null;
-      if (
-        record.jev?.status === "pending" &&
-        (newJev === null || newJev.verdict === null)
-      ) {
+      const newJev = newSubmissions.getSubmission(record.id)?.jev ?? null
+      if (record.jev?.status === 'pending' && (newJev === null || newJev.verdict === null)) {
         jobs.enqueue({
-          kind: "jev_submission",
+          kind: 'jev_submission',
           payload: { id: record.id },
           subjectKey: record.id,
-        });
+        })
       }
     }
-    cursor = page.nextCursor ?? undefined;
-  } while (cursor);
+    cursor = page.nextCursor ?? undefined
+  } while (cursor)
 
-  return { imported, alreadyPresent, rejected };
+  return { imported, alreadyPresent, rejected }
 }
 
 if (import.meta.main) {
-  const oldPath = process.argv[2] ?? join(env.DATA_DIR, "email-gateway.sqlite");
-  const newPath = process.argv[3] ?? join(env.DATA_DIR, "mail.sqlite");
+  const oldPath = process.argv[2] ?? join(env.DATA_DIR, 'email-gateway.sqlite')
+  const newPath = process.argv[3] ?? join(env.DATA_DIR, 'mail.sqlite')
 
   if (!existsSync(oldPath)) {
     throw new Error(
       `[import-legacy] old database not found at ${oldPath} — refusing to create an empty one`,
-    );
+    )
   }
 
   // Read-only: this script's docblock promises to never touch the old file.
   // No migrations run against it — its schema is already whatever it is,
   // and this script only ever reads from it (listSubmissions).
-  const oldDb = new Database(oldPath, { readonly: true });
-  const newDb = openMailDatabase(newPath);
+  const oldDb = new Database(oldPath, { readonly: true })
+  const newDb = openMailDatabase(newPath)
 
   const { imported, alreadyPresent, rejected } = importLegacySubmissions({
     oldDb,
     newDb,
-  });
+  })
 
   console.log(
     `[import-legacy] submissions: imported ${imported}, already present ${alreadyPresent}, rejected ${rejected}`,
-  );
+  )
 
   // `submissions` cannot be rebuilt from the providers (D4) — a partial
   // import silently looking like a complete one is a real data-loss risk.
@@ -202,6 +191,6 @@ if (import.meta.main) {
   if (rejected > 0) {
     throw new Error(
       `[import-legacy] ${rejected} submission(s) were rejected by a constraint check — see the warnings above`,
-    );
+    )
   }
 }

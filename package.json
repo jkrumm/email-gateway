@@ -1,11 +1,10 @@
 {
   "name": "email-gateway",
-  "module": "src/index.ts",
-  "type": "module",
-  "packageManager": "bun@1.4.3",
   "workspaces": [
     "client"
   ],
+  "type": "module",
+  "module": "src/index.ts",
   "scripts": {
     "start": "secrets-run run --env-file=.env.tpl -- bun run src/index.ts",
     "dev": "secrets-run run --env-file=.env.tpl -- bun run --watch src/index.ts",
@@ -20,16 +19,6 @@
     "client:dev": "cd client && bun run dev",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check ."
-  },
-  "devDependencies": {
-    "@ai-sdk/provider": "4.0.26",
-    "@types/bun": "1.4.2",
-    "@types/react": "19.3.0",
-    "@types/react-dom": "19.3.0",
-    "oxfmt": "0.72.0",
-    "oxlint": "1.87.0",
-    "oxlint-tsgolint": "7.0.2005",
-    "typescript": "7.0.2"
   },
   "dependencies": {
     "@ai-sdk/gateway": "4.0.87",
@@ -50,5 +39,16 @@
     "react-dom": "19.3.0",
     "react-email": "6.9.5",
     "zod": "4.6.5"
-  }
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "4.0.26",
+    "@types/bun": "1.4.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "oxlint-tsgolint": "7.0.2005",
+    "typescript": "7.0.2"
+  },
+  "packageManager": "bun@1.4.3"
 }

@@ -1,18 +1,15 @@
-import type { MessagesRepo } from "../db/messages";
-import { messagesRepo as defaultMessages } from "../db/mail-index";
-import { providerForAccountId as defaultProviderFor } from "../providers/from-env";
-import {
-  enrichEmail as defaultEnrichEmail,
-  type EmailForEnrichment,
-} from "../enrich/enrich-email";
-import { getLlmConfig } from "../llm/model";
-import { getJevConfig } from "../llm/jev";
-import type { MailProvider, MessageRef } from "../providers/port";
-import type { JobHandler } from "./runner";
-import { log } from "../telemetry/log";
+import type { MessagesRepo } from '../db/messages'
+import { messagesRepo as defaultMessages } from '../db/mail-index'
+import { providerForAccountId as defaultProviderFor } from '../providers/from-env'
+import { enrichEmail as defaultEnrichEmail, type EmailForEnrichment } from '../enrich/enrich-email'
+import { getLlmConfig } from '../llm/model'
+import { getJevConfig } from '../llm/jev'
+import type { MailProvider, MessageRef } from '../providers/port'
+import type { JobHandler } from './runner'
+import { log } from '../telemetry/log'
 
 export interface ClassifyJobPayload {
-  key: string;
+  key: string
 }
 
 // The `classify` job (docs/architecture.md §Jobs): reads a message's body
@@ -27,20 +24,20 @@ export function createClassifyHandler({
   isJevConfigured = () => getJevConfig() !== null,
   enqueueJevMessage = () => {},
 }: {
-  messages?: Pick<MessagesRepo, "getMessage" | "saveBody" | "saveEnrichment">;
-  providerFor?: (accountId: string) => MailProvider | null;
-  enrichEmail?: typeof defaultEnrichEmail;
-  isLlmConfigured?: () => boolean;
-  isJevConfigured?: () => boolean;
-  enqueueJevMessage?: (key: string) => void;
+  messages?: Pick<MessagesRepo, 'getMessage' | 'saveBody' | 'saveEnrichment'>
+  providerFor?: (accountId: string) => MailProvider | null
+  enrichEmail?: typeof defaultEnrichEmail
+  isLlmConfigured?: () => boolean
+  isJevConfigured?: () => boolean
+  enqueueJevMessage?: (key: string) => void
 } = {}): JobHandler {
   return async (payload) => {
-    const { key } = payload as ClassifyJobPayload;
+    const { key } = payload as ClassifyJobPayload
 
-    const message = messages.getMessage(key);
+    const message = messages.getMessage(key)
     if (!message) {
-      log.info(`[classify] message ${key} not found — skipping`);
-      return;
+      log.info(`[classify] message ${key} not found — skipping`)
+      return
     }
 
     // Mirrors the old enrichment worker's early return (src/enrich/worker.ts):
@@ -48,42 +45,40 @@ export function createClassifyHandler({
     // instead of burning through the job's attempt budget with no operator
     // signal beyond logs.
     if (!isLlmConfigured()) {
-      log.info("[classify] LLM not configured — skipping");
-      return;
+      log.info('[classify] LLM not configured — skipping')
+      return
     }
 
-    const location = message.locations[0];
+    const location = message.locations[0]
     if (!location) {
-      throw new Error(`classify: message ${key} has no location to read from`);
+      throw new Error(`classify: message ${key} has no location to read from`)
     }
 
-    const provider = providerFor(message.account);
+    const provider = providerFor(message.account)
     if (!provider) {
-      throw new Error(
-        `classify: no configured provider for account "${message.account}"`,
-      );
+      throw new Error(`classify: no configured provider for account "${message.account}"`)
     }
 
-    const full = await provider.read(location.providerRef as MessageRef);
-    messages.saveBody(key, { html: full.html, text: full.text });
+    const full = await provider.read(location.providerRef as MessageRef)
+    messages.saveBody(key, { html: full.html, text: full.text })
 
     const forEnrichment: EmailForEnrichment = {
       direction: message.direction,
-      fromAddress: message.fromAddress ?? "",
+      fromAddress: message.fromAddress ?? '',
       toAddresses: message.toAddresses,
-      subject: message.subject ?? "",
+      subject: message.subject ?? '',
       text: full.text,
       html: full.html,
-    };
+    }
 
-    const outcome = await enrichEmail({ email: forEnrichment });
+    const outcome = await enrichEmail({ email: forEnrichment })
     if (!outcome.ok) {
       // A thrown error is the job runner's retry signal here — unlike the
       // old src/enrich/re-enrich.ts's applyEnrichmentOutcome, which stored
       // the error on the row for a manual re-enrich button. Jobs now own
       // retry/backoff, so storing an "error" classification would hide a
       // retryable failure behind a row that looks terminal.
-      throw new Error(outcome.error);
+      throw new Error(outcome.error)
     }
 
     messages.saveEnrichment(key, {
@@ -96,14 +91,14 @@ export function createClassifyHandler({
       facts: outcome.result.facts,
       model: outcome.result.model,
       error: null,
-    });
+    })
 
     // Jev only judges inbound emails already enriched: src/db/emails.ts sets
     // jev_status='pending' only for inbound rows at insert time — replicate
     // that same direction filter at this enqueue point.
-    if (message.direction === "inbound" && isJevConfigured()) {
+    if (message.direction === 'inbound' && isJevConfigured()) {
       try {
-        enqueueJevMessage(key);
+        enqueueJevMessage(key)
       } catch (error) {
         // The classification itself already landed (line above) — a jobs-
         // table write failure here must not re-run the live IMAP read and
@@ -111,8 +106,8 @@ export function createClassifyHandler({
         // gate.ts's equivalent enqueue call is wrapped the same way.
         log.error(`[classify] failed to enqueue jev_message for ${key}`, {
           error,
-        });
+        })
       }
     }
-  };
+  }
 }

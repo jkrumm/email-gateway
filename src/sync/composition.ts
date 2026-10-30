@@ -1,20 +1,14 @@
-import {
-  accountsRepo as defaultAccounts,
-  messagesRepo as defaultMessages,
-} from "../db/mail-index";
-import type { AccountsRepo } from "../db/accounts";
-import type { MessagesRepo } from "../db/messages";
-import { configuredProviders as defaultConfiguredProviders } from "../providers/from-env";
-import {
-  gmailImapConfigFromEnv,
-  imapConfigFromEnv,
-} from "../providers/imap/config";
-import { accountIdFor, ingestMailbox } from "./ingest";
-import type { ImapConfig } from "../providers/imap/adapter";
-import type { MailProvider } from "../providers/port";
-import type { JobHandler } from "../jobs/runner";
-import { log } from "../telemetry/log";
-import { errorName } from "../telemetry/otel-format";
+import { accountsRepo as defaultAccounts, messagesRepo as defaultMessages } from '../db/mail-index'
+import type { AccountsRepo } from '../db/accounts'
+import type { MessagesRepo } from '../db/messages'
+import { configuredProviders as defaultConfiguredProviders } from '../providers/from-env'
+import { gmailImapConfigFromEnv, imapConfigFromEnv } from '../providers/imap/config'
+import { accountIdFor, ingestMailbox } from './ingest'
+import type { ImapConfig } from '../providers/imap/adapter'
+import type { MailProvider } from '../providers/port'
+import type { JobHandler } from '../jobs/runner'
+import { log } from '../telemetry/log'
+import { errorName } from '../telemetry/otel-format'
 
 // The mailboxes each configured provider ingests, keyed by provider — one
 // account's mailbox list must never be applied to the other. Proton ingests
@@ -29,14 +23,14 @@ export function defaultMailboxesFor(
     gmail: gmailImapConfigFromEnv(),
   },
 ): string[] {
-  if (provider.id === "proton") return configs.proton?.mailboxes ?? [];
-  if (provider.id === "gmail") return configs.gmail?.mailboxes ?? [];
-  return [];
+  if (provider.id === 'proton') return configs.proton?.mailboxes ?? []
+  if (provider.id === 'gmail') return configs.gmail?.mailboxes ?? []
+  return []
 }
 
 export interface SyncTickResult {
-  new: number;
-  errors: string[];
+  new: number
+  errors: string[]
 }
 
 // Composition root for one sync tick, replacing src/sync/index.ts's
@@ -51,14 +45,14 @@ export async function runSyncTick({
   mailboxesFor = defaultMailboxesFor,
   enqueueClassify = () => {},
 }: {
-  accounts?: AccountsRepo;
-  messages?: MessagesRepo;
-  providers?: MailProvider[];
-  mailboxesFor?: (provider: MailProvider) => string[];
-  enqueueClassify?: (key: string) => void;
+  accounts?: AccountsRepo
+  messages?: MessagesRepo
+  providers?: MailProvider[]
+  mailboxesFor?: (provider: MailProvider) => string[]
+  enqueueClassify?: (key: string) => void
 } = {}): Promise<SyncTickResult> {
-  let newCount = 0;
-  const errors: string[] = [];
+  let newCount = 0
+  const errors: string[] = []
 
   for (const provider of providers) {
     // Own try/catch per provider: ingestMailbox only isolates failures
@@ -76,21 +70,21 @@ export async function runSyncTick({
           accounts,
           messages,
           enqueueClassify,
-        });
-        newCount += result.new;
-        errors.push(...result.errors);
+        })
+        newCount += result.new
+        errors.push(...result.errors)
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push(`${accountIdFor(provider)}: ${message}`);
-      log.error("[sync] provider failed", {
+      const message = error instanceof Error ? error.message : String(error)
+      errors.push(`${accountIdFor(provider)}: ${message}`)
+      log.error('[sync] provider failed', {
         provider: provider.id,
         error: errorName(error),
-      });
+      })
     }
   }
 
-  return { new: newCount, errors };
+  return { new: newCount, errors }
 }
 
 // The `sync_tick` job handler (docs/architecture.md §Jobs): the job's own
@@ -102,14 +96,14 @@ export async function runSyncTick({
 export function createSyncTickHandler({
   enqueueClassify,
 }: {
-  enqueueClassify?: (key: string) => void;
+  enqueueClassify?: (key: string) => void
 } = {}): JobHandler {
   return async () => {
-    const result = await runSyncTick({ enqueueClassify });
+    const result = await runSyncTick({ enqueueClassify })
     // Count only: the error strings embed folder paths and account ids. The
     // per-mailbox detail is the role-based imap.sync span / sync.tick event.
     if (result.errors.length > 0) {
-      log.error(`sync_tick completed with ${result.errors.length} error(s)`);
+      log.error(`sync_tick completed with ${result.errors.length} error(s)`)
     }
-  };
+  }
 }

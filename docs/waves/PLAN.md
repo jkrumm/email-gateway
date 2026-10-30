@@ -376,7 +376,7 @@ needed; do this once the cooldown has actually lifted, not before.
       pattern risking a permanent non-terminal retry loop on an unrelated
       error. Round 3 (8 more, smaller/subtler): the JSON-path fix still broke
       on a literal backslash — replaced with `json_patch(cursors,
-json_object(?, ?))`, no hand-built path string at all, verified against
+  json_object(?, ?))`, no hand-built path string at all, verified against
       `.`/`[`/`]`/`"`/`\`; a same-mailbox move deleting the location it just
       wrote; a null-provider-date message drifting to "now" on every re-sight
       forever (fixed via `COALESCE`/`CASE` in the upsert SQL, not a JS-level
@@ -698,7 +698,7 @@ the second Traefik router and publishing the hostname stay Wave 9
       template; README §Endpoints/§Templates; `AGENTS.md` file map.
       **Left behind:** A priority fix landed first, as its own commit
       (`00ca5b4`, before this wave's own diff): a clean `cd client && bun run
-build` failed because basalt-ui 1.30.2 imports `motion/react` eagerly
+  build` failed because basalt-ui 1.30.2 imports `motion/react` eagerly
       (its own bundled docs: "motion is required, not optional") while
       `client/package.json` never declared it as a dependency — it only built
       in the Wave 6 checkout by accident (a stale local `node_modules`).
@@ -831,7 +831,7 @@ exactly as `research-gateway/src/routes/mcp.ts`.
       `db.transaction()`-wrapped, also adopted by the pre-existing
       `POST /api/templates/:id/test-send`); `getThreadSummary` fetched
       thread rows with a fixed `limit: 100` and cached on `messageCount ===
-rows.length`, so a thread past 100 messages could never invalidate its
+  rows.length`, so a thread past 100 messages could never invalidate its
       cache again (fixed in round 3, see below — round 1 only raised it).
       Round 2 (after `/mcp` landed, 5 blocking) — MCP tool errors forwarded
       raw upstream LLM/provider error text where REST sanitized it through
@@ -920,7 +920,7 @@ itself already shipped in Wave 6; this wave is what makes it live.
       **Left behind:** `.env.tpl` + `Makefile` (`dev`/`check`/`build`/`help`)
       replace Doppler; `package.json`'s `start`/`dev` now run through
       `secrets-run --env-file=.env.tpl`, reading the same `op://vps/
-email-gateway/*` vault the VPS deploy does (solo project, no separate
+  email-gateway/*` vault the VPS deploy does (solo project, no separate
       dev secret set). Proton IMAP stays deliberately unreachable from local
       dev — the tailnet ACL only grants VPS → homelab, not the mini — so
       `.env.tpl` leaves `IMAP_HOST` unset and documents verifying
@@ -1511,7 +1511,7 @@ Shutterflow posts structured data, not HTML.
   the revert): `apps/shutterflow/.env.tpl` gets `DOMAIN` and
   `SHUTTERFLOW_EMAIL_GATEWAY_SECRET_KEY=op://vps/email-gateway/SHUTTERFLOW_SECRET_KEY`
   (Resend line dropped), `compose.yml` gets `EMAIL_GATEWAY_URL:
-https://email-gateway.${DOMAIN}` + `EMAIL_GATEWAY_SECRET_KEY`; then on the VPS
+  https://email-gateway.${DOMAIN}` + `EMAIL_GATEWAY_SECRET_KEY`; then on the VPS
   `git pull && make shutterflow-env ENV=prod`. Then verify a real sign-in code
   arrives, close jkrumm/shutterflow#1, and hand the Resend account deletion to
   the owner.
@@ -1664,7 +1664,7 @@ rule + `tests/test_triage.py` test (rule-count pin 73 → 74), all pushed.
   1h window predated the deploy) and recovered at the next window; warden ingested
   that Slack alert as event 1534. The rest of the loop (triage → `email-gateway`
   repo → resolve) is unobserved: warden's poller is failing with `ledger behind
-this process's schema (v19, expects v20)`, so it ingested nothing after 11:27
+  this process's schema (v19, expects v20)`, so it ingested nothing after 11:27
   UTC. That is warden's own migration lag (its loop must run once), not
   touched here — needs the owner or a warden pass; re-check item 1534.
 - **Noticed, not mine:** `ses_account` job fails with `AccessDeniedException`

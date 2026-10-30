@@ -1,19 +1,14 @@
-import { Heading, Text, Section, Button } from "react-email";
-import FppLayout from "../../layouts/fpp.layout";
+import { Heading, Text, Section, Button } from 'react-email'
+import FppLayout from '../../layouts/fpp.layout'
 
 export interface FppSenderMailProps {
-  name: string | null;
-  email: string;
-  subject: string | null;
-  message: string | null;
+  name: string | null
+  email: string
+  subject: string | null
+  message: string | null
 }
 
-export default function FppSenderMail({
-  name,
-  email,
-  subject,
-  message,
-}: FppSenderMailProps) {
+export default function FppSenderMail({ name, email, subject, message }: FppSenderMailProps) {
   return (
     <FppLayout>
       <Section>
@@ -24,12 +19,12 @@ export default function FppSenderMail({
           style={{
             marginTop: 20,
             marginBottom: 50,
-            backgroundColor: "#1971C2",
-            color: "#ffffff",
-            padding: "15px 30px",
+            backgroundColor: '#1971C2',
+            color: '#ffffff',
+            padding: '15px 30px',
             borderRadius: 3,
-            textDecoration: "none",
-            display: "inline-block",
+            textDecoration: 'none',
+            display: 'inline-block',
           }}
           target="_blank"
         >
@@ -56,12 +51,12 @@ export default function FppSenderMail({
         <Text>{message}</Text>
       </Section>
     </FppLayout>
-  );
+  )
 }
 
 FppSenderMail.PreviewProps = {
-  name: "John Doe",
-  email: "john.doe@gmail.com",
-  subject: "Hello World!",
-  message: "Hello, I am interested in your product",
-} satisfies FppSenderMailProps;
+  name: 'John Doe',
+  email: 'john.doe@gmail.com',
+  subject: 'Hello World!',
+  message: 'Hello, I am interested in your product',
+} satisfies FppSenderMailProps

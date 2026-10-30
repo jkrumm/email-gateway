@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from 'bun:sqlite'
 
 // Repo for the new `submissions` table in mail.sqlite (docs/architecture.md
 // §Lean store) — distinct from the old src/db/submissions.ts, which stays
@@ -8,113 +8,113 @@ import type { Database } from "bun:sqlite";
 // `jobs` (kind `jev_submission`, subject_key = submission id), owned by a
 // later brief.
 
-export type SubmissionSource = "fpp" | "sy-serendipity" | "jkrumm-contact";
-export type Verdict = "legit" | "spam" | "marketing";
+export type SubmissionSource = 'fpp' | 'sy-serendipity' | 'jkrumm-contact'
+export type Verdict = 'legit' | 'spam' | 'marketing'
 
 // The Jev columns as stored; null when Jev hasn't recorded anything yet for
 // this submission (no verdict and no error).
 export interface MailSubmissionJevResult {
-  verdict: Verdict | null;
-  confidence: number | null;
-  probabilities: Record<string, number> | null;
-  latencyMs: number | null;
-  model: string | null;
-  error: string | null;
+  verdict: Verdict | null
+  confidence: number | null
+  probabilities: Record<string, number> | null
+  latencyMs: number | null
+  model: string | null
+  error: string | null
 }
 
 export interface SubmissionRecord {
-  id: string;
-  receivedAt: string;
-  source: SubmissionSource;
-  verdict: Verdict;
-  confidence: number;
-  reason: string;
-  model: string | null;
-  delivered: boolean;
-  submission: Record<string, string | number | null>;
-  llmLatencyMs: number | null;
-  jev: MailSubmissionJevResult | null;
+  id: string
+  receivedAt: string
+  source: SubmissionSource
+  verdict: Verdict
+  confidence: number
+  reason: string
+  model: string | null
+  delivered: boolean
+  submission: Record<string, string | number | null>
+  llmLatencyMs: number | null
+  jev: MailSubmissionJevResult | null
 }
 
 export interface InsertSubmissionInput {
-  source: SubmissionSource;
-  verdict: Verdict;
-  confidence: number;
-  reason: string;
-  model: string | null;
-  delivered: boolean;
-  submission: Record<string, string | number | null>;
-  llmLatencyMs?: number | null;
+  source: SubmissionSource
+  verdict: Verdict
+  confidence: number
+  reason: string
+  model: string | null
+  delivered: boolean
+  submission: Record<string, string | number | null>
+  llmLatencyMs?: number | null
 }
 
 export type SaveJevResultInput =
   | {
-      verdict: Verdict;
-      confidence: number;
-      probabilities: Record<string, number> | null;
-      latencyMs: number;
-      model: string;
+      verdict: Verdict
+      confidence: number
+      probabilities: Record<string, number> | null
+      latencyMs: number
+      model: string
     }
-  | { error: string; model?: string };
+  | { error: string; model?: string }
 
 export interface ListSubmissionsFilters {
-  verdict?: Verdict;
-  source?: SubmissionSource;
-  delivered?: boolean;
-  limit?: number;
-  cursor?: string;
+  verdict?: Verdict
+  source?: SubmissionSource
+  delivered?: boolean
+  limit?: number
+  cursor?: string
 }
 
 export interface ListSubmissionsResult {
-  data: SubmissionRecord[];
-  nextCursor: string | null;
+  data: SubmissionRecord[]
+  nextCursor: string | null
 }
 
 export interface ListBySourceInput {
-  source: SubmissionSource;
+  source: SubmissionSource
   // Inclusive lower bound on received_at (UTC ISO string, same format as stored).
-  since?: string;
-  limit: number;
+  since?: string
+  limit: number
 }
 
 export interface ListBySourceResult {
-  data: SubmissionRecord[];
+  data: SubmissionRecord[]
   // Rows matching source + since, before `limit` is applied.
-  total: number;
+  total: number
 }
 
 export interface JevComparison {
-  compared: number;
-  agreed: number;
-  agreementRate: number | null;
-  llmMedianLatencyMs: number | null;
-  jevMedianLatencyMs: number | null;
+  compared: number
+  agreed: number
+  agreementRate: number | null
+  llmMedianLatencyMs: number | null
+  jevMedianLatencyMs: number | null
 }
 
-const DEFAULT_LIST_LIMIT = 25;
-const MAX_LIST_LIMIT = 100;
+const DEFAULT_LIST_LIMIT = 25
+const MAX_LIST_LIMIT = 100
 
 interface SubmissionRow {
-  id: string;
-  received_at: string;
-  source: SubmissionSource;
-  verdict: Verdict;
-  confidence: number;
-  reason: string;
-  model: string | null;
-  delivered: number;
-  submission: string;
-  llm_latency_ms: number | null;
-  jev_verdict: Verdict | null;
-  jev_confidence: number | null;
-  jev_probabilities: string | null;
-  jev_latency_ms: number | null;
-  jev_model: string | null;
-  jev_error: string | null;
+  id: string
+  received_at: string
+  source: SubmissionSource
+  verdict: Verdict
+  confidence: number
+  reason: string
+  model: string | null
+  delivered: number
+  submission: string
+  llm_latency_ms: number | null
+  jev_verdict: Verdict | null
+  jev_confidence: number | null
+  jev_probabilities: string | null
+  jev_latency_ms: number | null
+  jev_model: string | null
+  jev_error: string | null
 }
 
 function toSubmissionRecord(row: SubmissionRow): SubmissionRecord {
-  const hasJev = row.jev_verdict !== null || row.jev_error !== null;
+  const hasJev = row.jev_verdict !== null || row.jev_error !== null
   return {
     id: row.id,
     receivedAt: row.received_at,
@@ -130,46 +130,42 @@ function toSubmissionRecord(row: SubmissionRow): SubmissionRecord {
       ? {
           verdict: row.jev_verdict,
           confidence: row.jev_confidence,
-          probabilities: row.jev_probabilities
-            ? JSON.parse(row.jev_probabilities)
-            : null,
+          probabilities: row.jev_probabilities ? JSON.parse(row.jev_probabilities) : null,
           latencyMs: row.jev_latency_ms,
           model: row.jev_model,
           error: row.jev_error,
         }
       : null,
-  };
+  }
 }
 
 function encodeCursor(receivedAt: string, id: string): string {
-  return Buffer.from(`${receivedAt}|${id}`, "utf-8").toString("base64url");
+  return Buffer.from(`${receivedAt}|${id}`, 'utf-8').toString('base64url')
 }
 
 function decodeCursor(cursor: string): { receivedAt: string; id: string } {
-  const decoded = Buffer.from(cursor, "base64url").toString("utf-8");
-  const separatorIndex = decoded.lastIndexOf("|");
+  const decoded = Buffer.from(cursor, 'base64url').toString('utf-8')
+  const separatorIndex = decoded.lastIndexOf('|')
   if (separatorIndex === -1) {
-    throw new Error("Invalid cursor");
+    throw new Error('Invalid cursor')
   }
   return {
     receivedAt: decoded.slice(0, separatorIndex),
     id: decoded.slice(separatorIndex + 1),
-  };
+  }
 }
 
 function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1
-    ? sorted[mid]!
-    : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2
 }
 
 export function createMailSubmissionsRepo(db: Database) {
   function insertSubmission(input: InsertSubmissionInput): SubmissionRecord {
-    const id = crypto.randomUUID();
-    const receivedAt = new Date().toISOString();
+    const id = crypto.randomUUID()
+    const receivedAt = new Date().toISOString()
 
     db.run(
       `INSERT INTO submissions (
@@ -188,7 +184,7 @@ export function createMailSubmissionsRepo(db: Database) {
         JSON.stringify(input.submission),
         input.llmLatencyMs ?? null,
       ],
-    );
+    )
 
     return {
       id,
@@ -202,21 +198,19 @@ export function createMailSubmissionsRepo(db: Database) {
       submission: input.submission,
       llmLatencyMs: input.llmLatencyMs ?? null,
       jev: null,
-    };
+    }
   }
 
   function getSubmission(id: string): SubmissionRecord | null {
-    const row = db
-      .query<SubmissionRow, [string]>("SELECT * FROM submissions WHERE id = ?")
-      .get(id);
-    return row ? toSubmissionRecord(row) : null;
+    const row = db.query<SubmissionRow, [string]>('SELECT * FROM submissions WHERE id = ?').get(id)
+    return row ? toSubmissionRecord(row) : null
   }
 
   // Plain column write — no claim/token logic, the job (kind `jev_submission`)
   // owns the retry/backoff state. Called by the job handler once Jev decides,
   // or on terminal failure.
   function saveJevResult(id: string, result: SaveJevResultInput): void {
-    if ("error" in result) {
+    if ('error' in result) {
       db.run(
         `UPDATE submissions SET
            jev_verdict = NULL,
@@ -227,8 +221,8 @@ export function createMailSubmissionsRepo(db: Database) {
            jev_error = ?
          WHERE id = ?`,
         [result.model ?? null, result.error, id],
-      );
-      return;
+      )
+      return
     }
 
     db.run(
@@ -248,40 +242,34 @@ export function createMailSubmissionsRepo(db: Database) {
         result.model,
         id,
       ],
-    );
+    )
   }
 
-  function listSubmissions(
-    filters: ListSubmissionsFilters = {},
-  ): ListSubmissionsResult {
-    const limit = Math.min(
-      Math.max(filters.limit ?? DEFAULT_LIST_LIMIT, 1),
-      MAX_LIST_LIMIT,
-    );
+  function listSubmissions(filters: ListSubmissionsFilters = {}): ListSubmissionsResult {
+    const limit = Math.min(Math.max(filters.limit ?? DEFAULT_LIST_LIMIT, 1), MAX_LIST_LIMIT)
 
-    const conditions: string[] = [];
-    const params: (string | number)[] = [];
+    const conditions: string[] = []
+    const params: (string | number)[] = []
 
     if (filters.verdict) {
-      conditions.push("verdict = ?");
-      params.push(filters.verdict);
+      conditions.push('verdict = ?')
+      params.push(filters.verdict)
     }
     if (filters.source) {
-      conditions.push("source = ?");
-      params.push(filters.source);
+      conditions.push('source = ?')
+      params.push(filters.source)
     }
     if (filters.delivered !== undefined) {
-      conditions.push("delivered = ?");
-      params.push(filters.delivered ? 1 : 0);
+      conditions.push('delivered = ?')
+      params.push(filters.delivered ? 1 : 0)
     }
     if (filters.cursor) {
-      const { receivedAt, id } = decodeCursor(filters.cursor);
-      conditions.push("(received_at < ? OR (received_at = ? AND id < ?))");
-      params.push(receivedAt, receivedAt, id);
+      const { receivedAt, id } = decodeCursor(filters.cursor)
+      conditions.push('(received_at < ? OR (received_at = ? AND id < ?))')
+      params.push(receivedAt, receivedAt, id)
     }
 
-    const where =
-      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
     const rows = db
       .query<SubmissionRow, (string | number)[]>(
@@ -290,30 +278,23 @@ export function createMailSubmissionsRepo(db: Database) {
          ORDER BY received_at DESC, id DESC
          LIMIT ?`,
       )
-      .all(...params, limit + 1);
+      .all(...params, limit + 1)
 
-    const hasMore = rows.length > limit;
-    const page = hasMore ? rows.slice(0, limit) : rows;
-    const data = page.map(toSubmissionRecord);
+    const hasMore = rows.length > limit
+    const page = hasMore ? rows.slice(0, limit) : rows
+    const data = page.map(toSubmissionRecord)
 
-    const last = data[data.length - 1];
-    const nextCursor =
-      hasMore && last ? encodeCursor(last.receivedAt, last.id) : null;
+    const last = data[data.length - 1]
+    const nextCursor = hasMore && last ? encodeCursor(last.receivedAt, last.id) : null
 
-    return { data, nextCursor };
+    return { data, nextCursor }
   }
 
   // Newest-first window over one source, all verdicts. Offset-free: callers
   // narrow with `since`, not pages.
-  function listBySource({
-    source,
-    since,
-    limit,
-  }: ListBySourceInput): ListBySourceResult {
-    const where = since
-      ? "WHERE source = ? AND received_at >= ?"
-      : "WHERE source = ?";
-    const params = since ? [source, since] : [source];
+  function listBySource({ source, since, limit }: ListBySourceInput): ListBySourceResult {
+    const where = since ? 'WHERE source = ? AND received_at >= ?' : 'WHERE source = ?'
+    const params = since ? [source, since] : [source]
 
     const rows = db
       .query<SubmissionRow, (string | number)[]>(
@@ -322,15 +303,13 @@ export function createMailSubmissionsRepo(db: Database) {
          ORDER BY received_at DESC, id DESC
          LIMIT ?`,
       )
-      .all(...params, limit);
+      .all(...params, limit)
 
     const { total } = db
-      .query<{ total: number }, string[]>(
-        `SELECT COUNT(*) AS total FROM submissions ${where}`,
-      )
-      .get(...params)!;
+      .query<{ total: number }, string[]>(`SELECT COUNT(*) AS total FROM submissions ${where}`)
+      .get(...params)!
 
-    return { data: rows.map(toSubmissionRecord), total };
+    return { data: rows.map(toSubmissionRecord), total }
   }
 
   // LLM<->Jev agreement plus median latencies over submissions Jev has
@@ -343,30 +322,25 @@ export function createMailSubmissionsRepo(db: Database) {
          FROM submissions
          WHERE received_at >= ? AND jev_verdict IS NOT NULL`,
       )
-      .get(since)!;
+      .get(since)!
 
     const latencies = db
-      .query<
-        { llm_latency_ms: number | null; jev_latency_ms: number },
-        [string]
-      >(
+      .query<{ llm_latency_ms: number | null; jev_latency_ms: number }, [string]>(
         `SELECT llm_latency_ms, jev_latency_ms
          FROM submissions
          WHERE received_at >= ? AND jev_latency_ms IS NOT NULL`,
       )
-      .all(since);
+      .all(since)
 
     return {
       compared,
       agreed: agreed ?? 0,
       agreementRate: compared > 0 ? (agreed ?? 0) / compared : null,
       llmMedianLatencyMs: median(
-        latencies.flatMap((row) =>
-          row.llm_latency_ms === null ? [] : [row.llm_latency_ms],
-        ),
+        latencies.flatMap((row) => (row.llm_latency_ms === null ? [] : [row.llm_latency_ms])),
       ),
       jevMedianLatencyMs: median(latencies.map((row) => row.jev_latency_ms)),
-    };
+    }
   }
 
   return {
@@ -376,7 +350,7 @@ export function createMailSubmissionsRepo(db: Database) {
     listSubmissions,
     listBySource,
     getJevComparison,
-  };
+  }
 }
 
-export type MailSubmissionsRepo = ReturnType<typeof createMailSubmissionsRepo>;
+export type MailSubmissionsRepo = ReturnType<typeof createMailSubmissionsRepo>

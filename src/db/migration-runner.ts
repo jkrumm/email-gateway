@@ -1,8 +1,8 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from 'bun:sqlite'
 
 export interface Migration {
-  version: number;
-  up: string;
+  version: number
+  up: string
 }
 
 // Generic runner shared by every migrated schema (src/db/migrations.ts today,
@@ -16,27 +16,23 @@ export function applyMigrations(
   { targetVersion = Infinity }: { targetVersion?: number } = {},
 ): void {
   const { user_version: currentVersion } = db
-    .query<{ user_version: number }, []>("PRAGMA user_version")
-    .get()!;
+    .query<{ user_version: number }, []>('PRAGMA user_version')
+    .get()!
 
   const pending = migrations
-    .filter(
-      (migration) =>
-        migration.version > currentVersion &&
-        migration.version <= targetVersion,
-    )
-    .sort((a, b) => a.version - b.version);
+    .filter((migration) => migration.version > currentVersion && migration.version <= targetVersion)
+    .sort((a, b) => a.version - b.version)
 
-  if (pending.length === 0) return;
+  if (pending.length === 0) return
 
   const applyPending = db.transaction(() => {
     for (const migration of pending) {
-      db.run(migration.up);
+      db.run(migration.up)
       // PRAGMA doesn't accept bound parameters; the version is our own
       // integer literal, never user input.
-      db.run(`PRAGMA user_version = ${migration.version}`);
+      db.run(`PRAGMA user_version = ${migration.version}`)
     }
-  });
+  })
 
-  applyPending();
+  applyPending()
 }

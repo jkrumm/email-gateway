@@ -1,234 +1,217 @@
-import { describe, expect, test } from "bun:test";
-import { envSchema, parseEnv } from "./env";
-import { CERT_A } from "./test/certs";
+import { describe, expect, test } from 'bun:test'
+import { envSchema, parseEnv } from './env'
+import { CERT_A } from './test/certs'
 
 const base = {
-  SECRET_KEY: "0123456789",
-  RECEIVER_EMAIL: "me@example.com",
-  SES_REGION: "eu-central-1",
-  SES_ACCESS_KEY_ID: "id",
-  SES_SECRET_ACCESS_KEY: "secret",
-  SES_CONFIGURATION_SET: "events",
-  SY_SERENDIPITY_RECEIVER_EMAIL: "sy@example.com",
-};
+  SECRET_KEY: '0123456789',
+  RECEIVER_EMAIL: 'me@example.com',
+  SES_REGION: 'eu-central-1',
+  SES_ACCESS_KEY_ID: 'id',
+  SES_SECRET_ACCESS_KEY: 'secret',
+  SES_CONFIGURATION_SET: 'events',
+  SY_SERENDIPITY_RECEIVER_EMAIL: 'sy@example.com',
+}
 
-describe("IMAP env validation", () => {
-  test("no host: IMAP is off and defaults apply", () => {
-    const parsed = envSchema.parse(base);
-    expect(parsed.IMAP_HOST).toBeUndefined();
-    expect(parsed.IMAP_PORT).toBe(1143);
-    expect(parsed.IMAP_MAILBOXES).toBe("INBOX,Spam");
-    expect(parsed.IMAP_TLS_INSECURE).toBe(false);
-  });
+describe('IMAP env validation', () => {
+  test('no host: IMAP is off and defaults apply', () => {
+    const parsed = envSchema.parse(base)
+    expect(parsed.IMAP_HOST).toBeUndefined()
+    expect(parsed.IMAP_PORT).toBe(1143)
+    expect(parsed.IMAP_MAILBOXES).toBe('INBOX,Spam')
+    expect(parsed.IMAP_TLS_INSECURE).toBe(false)
+  })
 
-  test("host without user/password fails fast, naming the missing keys", () => {
-    const result = envSchema.safeParse({ ...base, IMAP_HOST: "bridge" });
+  test('host without user/password fails fast, naming the missing keys', () => {
+    const result = envSchema.safeParse({ ...base, IMAP_HOST: 'bridge' })
 
-    expect(result.success).toBe(false);
-    expect(result.error?.issues.map((issue) => issue.path.join("."))).toEqual([
-      "IMAP_USER",
-      "IMAP_PASSWORD",
-    ]);
-  });
+    expect(result.success).toBe(false)
+    expect(result.error?.issues.map((issue) => issue.path.join('.'))).toEqual([
+      'IMAP_USER',
+      'IMAP_PASSWORD',
+    ])
+  })
 
-  test("host with credentials parses; empty mailbox list is rejected", () => {
+  test('host with credentials parses; empty mailbox list is rejected', () => {
     const ok = {
       ...base,
-      IMAP_HOST: "bridge",
-      IMAP_USER: "u",
-      IMAP_PASSWORD: "p",
-      IMAP_TLS_INSECURE: "true",
-    };
-    expect(envSchema.parse(ok).IMAP_TLS_INSECURE).toBe(true);
+      IMAP_HOST: 'bridge',
+      IMAP_USER: 'u',
+      IMAP_PASSWORD: 'p',
+      IMAP_TLS_INSECURE: 'true',
+    }
+    expect(envSchema.parse(ok).IMAP_TLS_INSECURE).toBe(true)
 
-    const empty = envSchema.safeParse({ ...ok, IMAP_MAILBOXES: " , " });
-    expect(empty.success).toBe(false);
-  });
+    const empty = envSchema.safeParse({ ...ok, IMAP_MAILBOXES: ' , ' })
+    expect(empty.success).toBe(false)
+  })
 
-  test("IMAP_TLS_CERT must be a valid PEM (escaped newlines accepted)", () => {
+  test('IMAP_TLS_CERT must be a valid PEM (escaped newlines accepted)', () => {
     const ok = {
       ...base,
-      IMAP_HOST: "bridge",
-      IMAP_USER: "u",
-      IMAP_PASSWORD: "p",
-    };
+      IMAP_HOST: 'bridge',
+      IMAP_USER: 'u',
+      IMAP_PASSWORD: 'p',
+    }
 
-    expect(envSchema.safeParse({ ...ok, IMAP_TLS_CERT: CERT_A }).success).toBe(
-      true,
-    );
+    expect(envSchema.safeParse({ ...ok, IMAP_TLS_CERT: CERT_A }).success).toBe(true)
     expect(
       envSchema.safeParse({
         ...ok,
-        IMAP_TLS_CERT: CERT_A.replace(/\n/g, "\\n"),
+        IMAP_TLS_CERT: CERT_A.replace(/\n/g, '\\n'),
       }).success,
-    ).toBe(true);
+    ).toBe(true)
 
-    const bad = envSchema.safeParse({ ...ok, IMAP_TLS_CERT: "not a cert" });
-    expect(bad.success).toBe(false);
-    expect(bad.error?.issues.map((issue) => issue.path.join("."))).toEqual([
-      "IMAP_TLS_CERT",
-    ]);
-  });
+    const bad = envSchema.safeParse({ ...ok, IMAP_TLS_CERT: 'not a cert' })
+    expect(bad.success).toBe(false)
+    expect(bad.error?.issues.map((issue) => issue.path.join('.'))).toEqual(['IMAP_TLS_CERT'])
+  })
 
-  test("IMAP_PORT must be an integer in 1..65535", () => {
-    for (const port of ["0", "65536", "11.5", "abc"]) {
-      expect(envSchema.safeParse({ ...base, IMAP_PORT: port }).success).toBe(
-        false,
-      );
+  test('IMAP_PORT must be an integer in 1..65535', () => {
+    for (const port of ['0', '65536', '11.5', 'abc']) {
+      expect(envSchema.safeParse({ ...base, IMAP_PORT: port }).success).toBe(false)
     }
-    expect(envSchema.parse({ ...base, IMAP_PORT: "993" }).IMAP_PORT).toBe(993);
-  });
-});
+    expect(envSchema.parse({ ...base, IMAP_PORT: '993' }).IMAP_PORT).toBe(993)
+  })
+})
 
-describe("MAIL_HOST validation", () => {
-  test("unset is allowed, but an empty string is not", () => {
-    expect(envSchema.safeParse(base).success).toBe(true);
+describe('MAIL_HOST validation', () => {
+  test('unset is allowed, but an empty string is not', () => {
+    expect(envSchema.safeParse(base).success).toBe(true)
 
-    const empty = envSchema.safeParse({ ...base, MAIL_HOST: "" });
-    expect(empty.success).toBe(false);
-    expect(empty.error?.issues.map((issue) => issue.path.join("."))).toEqual([
-      "MAIL_HOST",
-    ]);
-  });
+    const empty = envSchema.safeParse({ ...base, MAIL_HOST: '' })
+    expect(empty.success).toBe(false)
+    expect(empty.error?.issues.map((issue) => issue.path.join('.'))).toEqual(['MAIL_HOST'])
+  })
 
-  test("parseEnv fails a present-but-empty MAIL_HOST, yet an absent one is unset", () => {
+  test('parseEnv fails a present-but-empty MAIL_HOST, yet an absent one is unset', () => {
     // The schema's min(1) alone is not enough: parseEnv strips "" to unset
     // before parsing, so this is the guard that actually fires on the raw env.
-    expect(() => parseEnv({ ...base, MAIL_HOST: "" })).toThrow(
-      "MAIL_HOST must not be empty",
-    );
-    expect(parseEnv(base).MAIL_HOST).toBeUndefined();
-  });
-});
+    expect(() => parseEnv({ ...base, MAIL_HOST: '' })).toThrow('MAIL_HOST must not be empty')
+    expect(parseEnv(base).MAIL_HOST).toBeUndefined()
+  })
+})
 
-describe("Gmail IMAP env validation", () => {
-  test("unset user: Gmail is off and the mailbox default applies", () => {
-    const parsed = envSchema.parse(base);
-    expect(parsed.GMAIL_IMAP_USER).toBeUndefined();
-    expect(parsed.GMAIL_IMAP_APP_PASSWORD).toBeUndefined();
-    expect(parsed.GMAIL_IMAP_MAILBOXES).toBe("INBOX");
-  });
+describe('Gmail IMAP env validation', () => {
+  test('unset user: Gmail is off and the mailbox default applies', () => {
+    const parsed = envSchema.parse(base)
+    expect(parsed.GMAIL_IMAP_USER).toBeUndefined()
+    expect(parsed.GMAIL_IMAP_APP_PASSWORD).toBeUndefined()
+    expect(parsed.GMAIL_IMAP_MAILBOXES).toBe('INBOX')
+  })
 
-  test("user without an app password (or vice versa) fails fast, naming the missing key", () => {
+  test('user without an app password (or vice versa) fails fast, naming the missing key', () => {
     const noPassword = envSchema.safeParse({
       ...base,
-      GMAIL_IMAP_USER: "me@gmail.com",
-    });
-    expect(noPassword.success).toBe(false);
-    expect(
-      noPassword.error?.issues.map((issue) => issue.path.join(".")),
-    ).toEqual(["GMAIL_IMAP_APP_PASSWORD"]);
+      GMAIL_IMAP_USER: 'me@gmail.com',
+    })
+    expect(noPassword.success).toBe(false)
+    expect(noPassword.error?.issues.map((issue) => issue.path.join('.'))).toEqual([
+      'GMAIL_IMAP_APP_PASSWORD',
+    ])
 
     const noUser = envSchema.safeParse({
       ...base,
-      GMAIL_IMAP_APP_PASSWORD: "p",
-    });
-    expect(noUser.success).toBe(false);
-    expect(noUser.error?.issues.map((issue) => issue.path.join("."))).toEqual([
-      "GMAIL_IMAP_USER",
-    ]);
-  });
+      GMAIL_IMAP_APP_PASSWORD: 'p',
+    })
+    expect(noUser.success).toBe(false)
+    expect(noUser.error?.issues.map((issue) => issue.path.join('.'))).toEqual(['GMAIL_IMAP_USER'])
+  })
 
-  test("user with an app password parses; an empty mailbox list is rejected", () => {
+  test('user with an app password parses; an empty mailbox list is rejected', () => {
     const ok = {
       ...base,
-      GMAIL_IMAP_USER: "me@gmail.com",
-      GMAIL_IMAP_APP_PASSWORD: "p",
-    };
-    expect(envSchema.safeParse(ok).success).toBe(true);
+      GMAIL_IMAP_USER: 'me@gmail.com',
+      GMAIL_IMAP_APP_PASSWORD: 'p',
+    }
+    expect(envSchema.safeParse(ok).success).toBe(true)
 
     const empty = envSchema.safeParse({
       ...ok,
-      GMAIL_IMAP_MAILBOXES: " , ",
-    });
-    expect(empty.success).toBe(false);
-    expect(empty.error?.issues.map((issue) => issue.path.join("."))).toEqual([
-      "GMAIL_IMAP_MAILBOXES",
-    ]);
-  });
-});
+      GMAIL_IMAP_MAILBOXES: ' , ',
+    })
+    expect(empty.success).toBe(false)
+    expect(empty.error?.issues.map((issue) => issue.path.join('.'))).toEqual([
+      'GMAIL_IMAP_MAILBOXES',
+    ])
+  })
+})
 
-describe("SY_SERENDIPITY_READ_KEY", () => {
-  test("is optional, but must be at least 32 chars when set", () => {
-    expect(envSchema.parse(base).SY_SERENDIPITY_READ_KEY).toBeUndefined();
-    expect(
-      envSchema.safeParse({ ...base, SY_SERENDIPITY_READ_KEY: "short" })
-        .success,
-    ).toBe(false);
-    expect(
-      envSchema.safeParse({ ...base, SY_SERENDIPITY_READ_KEY: "k".repeat(32) })
-        .success,
-    ).toBe(true);
-  });
-});
+describe('SY_SERENDIPITY_READ_KEY', () => {
+  test('is optional, but must be at least 32 chars when set', () => {
+    expect(envSchema.parse(base).SY_SERENDIPITY_READ_KEY).toBeUndefined()
+    expect(envSchema.safeParse({ ...base, SY_SERENDIPITY_READ_KEY: 'short' }).success).toBe(false)
+    expect(envSchema.safeParse({ ...base, SY_SERENDIPITY_READ_KEY: 'k'.repeat(32) }).success).toBe(
+      true,
+    )
+  })
+})
 
-describe("SES env validation", () => {
-  test("region, both keys and the configuration set are required", () => {
+describe('SES env validation', () => {
+  test('region, both keys and the configuration set are required', () => {
     for (const key of [
-      "SES_REGION",
-      "SES_ACCESS_KEY_ID",
-      "SES_SECRET_ACCESS_KEY",
-      "SES_CONFIGURATION_SET",
+      'SES_REGION',
+      'SES_ACCESS_KEY_ID',
+      'SES_SECRET_ACCESS_KEY',
+      'SES_CONFIGURATION_SET',
     ] as const) {
-      const result = envSchema.safeParse({ ...base, [key]: undefined });
+      const result = envSchema.safeParse({ ...base, [key]: undefined })
 
-      expect(result.success).toBe(false);
-      expect(result.error?.issues[0]?.path).toEqual([key]);
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0]?.path).toEqual([key])
     }
-    expect(() => parseEnv({ ...base, SES_REGION: "" })).toThrow("SES_REGION");
-  });
+    expect(() => parseEnv({ ...base, SES_REGION: '' })).toThrow('SES_REGION')
+  })
 
-  test("the topic ARN is optional", () => {
-    expect(envSchema.parse(base).SES_SNS_TOPIC_ARN).toBeUndefined();
-  });
+  test('the topic ARN is optional', () => {
+    expect(envSchema.parse(base).SES_SNS_TOPIC_ARN).toBeUndefined()
+  })
 
-  test("a topic ARN in SES_REGION parses", () => {
+  test('a topic ARN in SES_REGION parses', () => {
     expect(
       envSchema.safeParse({
         ...base,
-        SES_SNS_TOPIC_ARN: "arn:aws:sns:eu-central-1:111122223333:ses-events",
+        SES_SNS_TOPIC_ARN: 'arn:aws:sns:eu-central-1:111122223333:ses-events',
       }).success,
-    ).toBe(true);
-  });
+    ).toBe(true)
+  })
 
-  test("a topic ARN in another region than SES_REGION fails startup", () => {
+  test('a topic ARN in another region than SES_REGION fails startup', () => {
     const result = envSchema.safeParse({
       ...base,
-      SES_SNS_TOPIC_ARN: "arn:aws:sns:us-east-1:111122223333:ses-events",
-    });
+      SES_SNS_TOPIC_ARN: 'arn:aws:sns:us-east-1:111122223333:ses-events',
+    })
 
-    expect(result.success).toBe(false);
-    expect(result.error?.issues[0]?.path).toEqual(["SES_SNS_TOPIC_ARN"]);
-  });
-});
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0]?.path).toEqual(['SES_SNS_TOPIC_ARN'])
+  })
+})
 
-describe("OTEL env validation", () => {
-  test("unset: the exporter is off and the service name defaults", () => {
-    const parsed = envSchema.parse(base);
-    expect(parsed.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
-    expect(parsed.OTEL_SERVICE_NAME).toBe("email-gateway");
-  });
+describe('OTEL env validation', () => {
+  test('unset: the exporter is off and the service name defaults', () => {
+    const parsed = envSchema.parse(base)
+    expect(parsed.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined()
+    expect(parsed.OTEL_SERVICE_NAME).toBe('email-gateway')
+  })
 
-  test("the endpoint must be a URL", () => {
+  test('the endpoint must be a URL', () => {
     expect(
       envSchema.parse({
         ...base,
-        OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4319",
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector:4319',
       }).OTEL_EXPORTER_OTLP_ENDPOINT,
-    ).toBe("http://collector:4319");
-    expect(
-      envSchema.safeParse({ ...base, OTEL_EXPORTER_OTLP_ENDPOINT: "nope" })
-        .success,
-    ).toBe(false);
-  });
+    ).toBe('http://collector:4319')
+    expect(envSchema.safeParse({ ...base, OTEL_EXPORTER_OTLP_ENDPOINT: 'nope' }).success).toBe(
+      false,
+    )
+  })
 
-  test("an empty compose-interpolated value reads as unset", () => {
+  test('an empty compose-interpolated value reads as unset', () => {
     const parsed = parseEnv({
       ...base,
-      OTEL_EXPORTER_OTLP_ENDPOINT: "",
-      OTEL_SERVICE_NAME: "",
-    });
-    expect(parsed.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
-    expect(parsed.OTEL_SERVICE_NAME).toBe("email-gateway");
-  });
-});
+      OTEL_EXPORTER_OTLP_ENDPOINT: '',
+      OTEL_SERVICE_NAME: '',
+    })
+    expect(parsed.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined()
+    expect(parsed.OTEL_SERVICE_NAME).toBe('email-gateway')
+  })
+})

@@ -1,129 +1,129 @@
-import type { Database } from "bun:sqlite";
-import { JOB_STALE_CLAIM_MS } from "./jobs";
+import type { Database } from 'bun:sqlite'
+import { JOB_STALE_CLAIM_MS } from './jobs'
 
 // Status of a row whose send a worker has claimed (claimSend) but not yet
 // recorded. Never a provider-reported status; ranks 0 like "sent".
-const SENDING_STATUS = "sending";
+const SENDING_STATUS = 'sending'
 
 // How long a 'sending' claim is honoured before another worker may take it
 // over as a crashed worker's. Its own knob, tied to the job-claim window only
 // for now.
-export const SEND_CLAIM_STALE_MS = JOB_STALE_CLAIM_MS;
+export const SEND_CLAIM_STALE_MS = JOB_STALE_CLAIM_MS
 
 export interface SendLogEntry {
-  id: string;
-  templateId: string | null;
-  recipients: string[];
-  provider: string;
-  providerMessageId: string | null;
-  status: string | null;
-  lastEvent: string | null;
-  requestedBy: string;
-  createdAt: string;
-  updatedAt: string;
+  id: string
+  templateId: string | null
+  recipients: string[]
+  provider: string
+  providerMessageId: string | null
+  status: string | null
+  lastEvent: string | null
+  requestedBy: string
+  createdAt: string
+  updatedAt: string
   // Set by a bounce event (the SES webhook); the diagnostic code never
   // carries an address.
-  bounceType: string | null;
-  bounceSubtype: string | null;
-  diagnosticCode: string | null;
+  bounceType: string | null
+  bounceSubtype: string | null
+  diagnosticCode: string | null
 }
 
 export interface InsertSendLogInput {
-  id: string;
-  templateId?: string | null;
-  recipients: string[];
-  provider: string;
+  id: string
+  templateId?: string | null
+  recipients: string[]
+  provider: string
   // Set when the row is written after the provider already accepted the
   // message (the synchronous route sends); the send job records them later
   // via recordProviderResult instead.
-  providerMessageId?: string | null;
-  status?: string | null;
-  requestedBy: string;
+  providerMessageId?: string | null
+  status?: string | null
+  requestedBy: string
 }
 
 export interface RecordProviderResultInput {
-  providerMessageId?: string | null;
-  status?: string | null;
-  lastEvent?: string | null;
+  providerMessageId?: string | null
+  status?: string | null
+  lastEvent?: string | null
 }
 
 export interface RecordEventInput {
-  status: string;
-  lastEvent: string;
-  bounceType?: string;
-  bounceSubtype?: string;
-  diagnosticCode?: string;
+  status: string
+  lastEvent: string
+  bounceType?: string
+  bounceSubtype?: string
+  diagnosticCode?: string
 }
 
 // One provider event as the timeline records it. `status` null is a
 // timeline-only event (SES "Send"): it never touches send_log.
 export interface ProviderEventInput {
-  eventType: string;
-  status: string | null;
-  lastEvent: string;
-  occurredAt: string;
-  bounceType?: string;
-  bounceSubtype?: string;
-  diagnosticCode?: string;
+  eventType: string
+  status: string | null
+  lastEvent: string
+  occurredAt: string
+  bounceType?: string
+  bounceSubtype?: string
+  diagnosticCode?: string
 }
 
 export interface RecordProviderEventOutcome {
   // A send_log row carries this provider message id.
-  found: boolean;
+  found: boolean
   // send_log rows whose status the event advanced (0: stale or timeline-only).
-  changed: number;
+  changed: number
   // A new send_events row was written (false for a redelivered event).
-  recorded: boolean;
+  recorded: boolean
 }
 
 export interface SendEvent {
-  id: number;
-  sendId: string;
-  eventType: string;
-  status: string | null;
-  bounceType: string | null;
-  bounceSubtype: string | null;
-  diagnosticCode: string | null;
-  occurredAt: string;
-  receivedAt: string;
+  id: number
+  sendId: string
+  eventType: string
+  status: string | null
+  bounceType: string | null
+  bounceSubtype: string | null
+  diagnosticCode: string | null
+  occurredAt: string
+  receivedAt: string
 }
 
 export interface SendStatsBucket {
   // UTC calendar day, YYYY-MM-DD.
-  date: string;
-  templateId: string;
-  status: string;
-  count: number;
+  date: string
+  templateId: string
+  status: string
+  count: number
 }
 
 export interface SendRates {
   // Sends that reached the provider (have a provider message id).
-  sends: number;
+  sends: number
   // Null when there were no sends.
-  bounceRate: number | null;
-  complaintRate: number | null;
+  bounceRate: number | null
+  complaintRate: number | null
 }
 
 export interface SendStats {
-  days: number;
-  since: string;
-  daily: SendStatsBucket[];
-  rates: { last7Days: SendRates; last30Days: SendRates };
+  days: number
+  since: string
+  daily: SendStatsBucket[]
+  rates: { last7Days: SendRates; last30Days: SendRates }
 }
 
 export interface ListSendLogFilters {
-  templateId?: string;
-  limit?: number;
-  cursor?: string;
+  templateId?: string
+  limit?: number
+  cursor?: string
 }
 
 export interface ListSendLogResult {
-  data: SendLogEntry[];
-  nextCursor: string | null;
+  data: SendLogEntry[]
+  nextCursor: string | null
 }
 
-const DEFAULT_LIST_LIMIT = 25;
-const MAX_LIST_LIMIT = 100;
+const DEFAULT_LIST_LIMIT = 25
+const MAX_LIST_LIMIT = 100
 
 // How far along a delivery a status is, for provider events that can arrive
 // out of order: sent/null/anything unranked (0) < delivery_delayed (1) <
@@ -135,37 +135,37 @@ const STATUS_RANK_SQL = (column: string) => `CASE ${column}
   WHEN 'delivered' THEN 2
   WHEN 'bounced' THEN 3 WHEN 'complained' THEN 3
   WHEN 'rejected' THEN 3 WHEN 'failed' THEN 3
-  ELSE 0 END`;
+  ELSE 0 END`
 
 interface SendLogRow {
-  id: string;
-  template_id: string | null;
-  recipients: string;
-  provider: string;
-  provider_message_id: string | null;
-  status: string | null;
-  last_event: string | null;
-  requested_by: string;
-  created_at: string;
-  updated_at: string;
-  bounce_type: string | null;
-  bounce_subtype: string | null;
-  diagnostic_code: string | null;
+  id: string
+  template_id: string | null
+  recipients: string
+  provider: string
+  provider_message_id: string | null
+  status: string | null
+  last_event: string | null
+  requested_by: string
+  created_at: string
+  updated_at: string
+  bounce_type: string | null
+  bounce_subtype: string | null
+  diagnostic_code: string | null
 }
 
 interface SendEventRow {
-  id: number;
-  send_id: string;
-  event_type: string;
-  status: string | null;
-  bounce_type: string | null;
-  bounce_subtype: string | null;
-  diagnostic_code: string | null;
-  occurred_at: string;
-  received_at: string;
+  id: number
+  send_id: string
+  event_type: string
+  status: string | null
+  bounce_type: string | null
+  bounce_subtype: string | null
+  diagnostic_code: string | null
+  occurred_at: string
+  received_at: string
 }
 
-const DAY_MS = 24 * 60 * 60_000;
+const DAY_MS = 24 * 60 * 60_000
 
 function toSendEvent(row: SendEventRow): SendEvent {
   return {
@@ -178,7 +178,7 @@ function toSendEvent(row: SendEventRow): SendEvent {
     diagnosticCode: row.diagnostic_code,
     occurredAt: row.occurred_at,
     receivedAt: row.received_at,
-  };
+  }
 }
 
 function toSendLogEntry(row: SendLogRow): SendLogEntry {
@@ -196,23 +196,23 @@ function toSendLogEntry(row: SendLogRow): SendLogEntry {
     bounceType: row.bounce_type,
     bounceSubtype: row.bounce_subtype,
     diagnosticCode: row.diagnostic_code,
-  };
+  }
 }
 
 function encodeCursor(createdAt: string, id: string): string {
-  return Buffer.from(`${createdAt}|${id}`, "utf-8").toString("base64url");
+  return Buffer.from(`${createdAt}|${id}`, 'utf-8').toString('base64url')
 }
 
 function decodeCursor(cursor: string): { createdAt: string; id: string } {
-  const decoded = Buffer.from(cursor, "base64url").toString("utf-8");
-  const separatorIndex = decoded.lastIndexOf("|");
+  const decoded = Buffer.from(cursor, 'base64url').toString('utf-8')
+  const separatorIndex = decoded.lastIndexOf('|')
   if (separatorIndex === -1) {
-    throw new Error("Invalid cursor");
+    throw new Error('Invalid cursor')
   }
   return {
     createdAt: decoded.slice(0, separatorIndex),
     id: decoded.slice(separatorIndex + 1),
-  };
+  }
 }
 
 export function createSendLogRepo(db: Database) {
@@ -222,7 +222,7 @@ export function createSendLogRepo(db: Database) {
   // under the documented two-container deploy overlap — a retried insert of
   // the same row must be a safe no-op, not a UNIQUE constraint error.
   function insertSendLog(input: InsertSendLogInput): void {
-    const now = new Date().toISOString();
+    const now = new Date().toISOString()
     db.run(
       `INSERT OR IGNORE INTO send_log (id, template_id, recipients, provider, provider_message_id, status, requested_by, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -237,13 +237,10 @@ export function createSendLogRepo(db: Database) {
         now,
         now,
       ],
-    );
+    )
   }
 
-  function recordProviderResult(
-    id: string,
-    patch: RecordProviderResultInput,
-  ): void {
+  function recordProviderResult(id: string, patch: RecordProviderResultInput): void {
     db.run(
       `UPDATE send_log SET
          provider_message_id = COALESCE(?, provider_message_id),
@@ -258,7 +255,7 @@ export function createSendLogRepo(db: Database) {
         new Date().toISOString(),
         id,
       ],
-    );
+    )
   }
 
   // A provider event (the SES webhook) for the row it belongs to. The status
@@ -279,7 +276,7 @@ export function createSendLogRepo(db: Database) {
          bounce_subtype = COALESCE(?, bounce_subtype),
          diagnostic_code = COALESCE(?, diagnostic_code)
        WHERE provider = ? AND provider_message_id = ?
-         AND ${STATUS_RANK_SQL("?")} >= ${STATUS_RANK_SQL("status")}`,
+         AND ${STATUS_RANK_SQL('?')} >= ${STATUS_RANK_SQL('status')}`,
       [
         event.status,
         event.lastEvent,
@@ -291,7 +288,7 @@ export function createSendLogRepo(db: Database) {
         providerMessageId,
         event.status,
       ],
-    ).changes;
+    ).changes
   }
 
   // The webhook's one write: the status update (when the event implies one)
@@ -307,10 +304,10 @@ export function createSendLogRepo(db: Database) {
     ): RecordProviderEventOutcome => {
       const send = db
         .query<{ id: string }, [string, string]>(
-          "SELECT id FROM send_log WHERE provider = ? AND provider_message_id = ? LIMIT 1",
+          'SELECT id FROM send_log WHERE provider = ? AND provider_message_id = ? LIMIT 1',
         )
-        .get(provider, providerMessageId);
-      if (!send) return { found: false, changed: 0, recorded: false };
+        .get(provider, providerMessageId)
+      if (!send) return { found: false, changed: 0, recorded: false }
 
       const changed =
         event.status === null
@@ -318,7 +315,7 @@ export function createSendLogRepo(db: Database) {
           : recordEventByProviderMessageId(provider, providerMessageId, {
               ...event,
               status: event.status,
-            });
+            })
       const recorded =
         db.run(
           `INSERT OR IGNORE INTO send_events (send_id, event_type, status, bounce_type, bounce_subtype, diagnostic_code, occurred_at, received_at)
@@ -333,73 +330,60 @@ export function createSendLogRepo(db: Database) {
             event.occurredAt,
             new Date().toISOString(),
           ],
-        ).changes === 1;
-      return { found: true, changed, recorded };
+        ).changes === 1
+      return { found: true, changed, recorded }
     },
-  );
+  )
 
   function recordProviderEvent(
     provider: string,
     providerMessageId: string,
     event: ProviderEventInput,
   ): RecordProviderEventOutcome {
-    return recordProviderEventTx(provider, providerMessageId, event);
+    return recordProviderEventTx(provider, providerMessageId, event)
   }
 
   // A send's timeline, oldest first.
   function listSendEvents(sendId: string): SendEvent[] {
     return db
       .query<SendEventRow, [string]>(
-        "SELECT * FROM send_events WHERE send_id = ? ORDER BY occurred_at, id",
+        'SELECT * FROM send_events WHERE send_id = ? ORDER BY occurred_at, id',
       )
       .all(sendId)
-      .map(toSendEvent);
+      .map(toSendEvent)
   }
 
   // Deletes every timeline row received before `iso`. Returns how many.
   function pruneEventsOlderThan(iso: string): number {
-    return db.run("DELETE FROM send_events WHERE received_at < ?", [iso])
-      .changes;
+    return db.run('DELETE FROM send_events WHERE received_at < ?', [iso]).changes
   }
 
   function ratesSince(since: string): SendRates {
     const row = db
-      .query<
-        { sends: number; bounced: number | null; complained: number | null },
-        [string]
-      >(
+      .query<{ sends: number; bounced: number | null; complained: number | null }, [string]>(
         `SELECT COUNT(*) AS sends,
            SUM(status = 'bounced') AS bounced,
            SUM(status = 'complained') AS complained
          FROM send_log
          WHERE provider_message_id IS NOT NULL AND created_at >= ?`,
       )
-      .get(since)!;
+      .get(since)!
     if (row.sends === 0) {
-      return { sends: 0, bounceRate: null, complaintRate: null };
+      return { sends: 0, bounceRate: null, complaintRate: null }
     }
     return {
       sends: row.sends,
       bounceRate: (row.bounced ?? 0) / row.sends,
       complaintRate: (row.complained ?? 0) / row.sends,
-    };
+    }
   }
 
   // Counts per UTC day, template and status over the last `days` days, plus
   // the bounce/complaint rates SES judges an account by (7 and 30 days).
-  function getSendStats({
-    days,
-    now = new Date(),
-  }: {
-    days: number;
-    now?: Date;
-  }): SendStats {
-    const since = new Date(now.getTime() - days * DAY_MS).toISOString();
+  function getSendStats({ days, now = new Date() }: { days: number; now?: Date }): SendStats {
+    const since = new Date(now.getTime() - days * DAY_MS).toISOString()
     const daily = db
-      .query<
-        { date: string; template_id: string; status: string; count: number },
-        [string]
-      >(
+      .query<{ date: string; template_id: string; status: string; count: number }, [string]>(
         `SELECT substr(created_at, 1, 10) AS date,
            COALESCE(template_id, 'unknown') AS template_id,
            COALESCE(status, 'pending') AS status,
@@ -413,20 +397,16 @@ export function createSendLogRepo(db: Database) {
         templateId: row.template_id,
         status: row.status,
         count: row.count,
-      }));
+      }))
     return {
       days,
       since,
       daily,
       rates: {
-        last7Days: ratesSince(
-          new Date(now.getTime() - 7 * DAY_MS).toISOString(),
-        ),
-        last30Days: ratesSince(
-          new Date(now.getTime() - 30 * DAY_MS).toISOString(),
-        ),
+        last7Days: ratesSince(new Date(now.getTime() - 7 * DAY_MS).toISOString()),
+        last30Days: ratesSince(new Date(now.getTime() - 30 * DAY_MS).toISOString()),
       },
-    };
+    }
   }
 
   // Atomic claim of a send before calling the provider: marks the row
@@ -436,14 +416,14 @@ export function createSendLogRepo(db: Database) {
   // sharing the SQLite file cannot both win. Returns the `updated_at` stamp it
   // wrote — the claim holder's token for releaseSend — or null when not claimed.
   function claimSend(id: string, staleBefore: string): string | null {
-    const stamp = new Date().toISOString();
+    const stamp = new Date().toISOString()
     const changed = db.run(
       `UPDATE send_log SET status = '${SENDING_STATUS}', updated_at = ?
        WHERE id = ? AND provider_message_id IS NULL
          AND (status IS NULL OR status != '${SENDING_STATUS}' OR updated_at < ?)`,
       [stamp, id, staleBefore],
-    ).changes;
-    return changed === 1 ? stamp : null;
+    ).changes
+    return changed === 1 ? stamp : null
   }
 
   // Gives a failed send's claim back so the retry can claim again. Scoped to
@@ -456,7 +436,7 @@ export function createSendLogRepo(db: Database) {
        WHERE id = ? AND status = '${SENDING_STATUS}'
          AND provider_message_id IS NULL AND updated_at = ?`,
       [new Date().toISOString(), id, stamp],
-    );
+    )
   }
 
   // Point lookup by id — used by src/jobs/send.ts's idempotency guard so a
@@ -464,33 +444,27 @@ export function createSendLogRepo(db: Database) {
   // SQLITE_BUSY, per the two-container deploy overlap) can detect an
   // already-sent row and skip calling the provider a second time.
   function getSendLog(id: string): SendLogEntry | null {
-    const row = db
-      .query<SendLogRow, [string]>("SELECT * FROM send_log WHERE id = ?")
-      .get(id);
-    return row ? toSendLogEntry(row) : null;
+    const row = db.query<SendLogRow, [string]>('SELECT * FROM send_log WHERE id = ?').get(id)
+    return row ? toSendLogEntry(row) : null
   }
 
   function listSendLog(filters: ListSendLogFilters = {}): ListSendLogResult {
-    const limit = Math.min(
-      Math.max(filters.limit ?? DEFAULT_LIST_LIMIT, 1),
-      MAX_LIST_LIMIT,
-    );
+    const limit = Math.min(Math.max(filters.limit ?? DEFAULT_LIST_LIMIT, 1), MAX_LIST_LIMIT)
 
-    const conditions: string[] = [];
-    const params: (string | number)[] = [];
+    const conditions: string[] = []
+    const params: (string | number)[] = []
 
     if (filters.templateId) {
-      conditions.push("template_id = ?");
-      params.push(filters.templateId);
+      conditions.push('template_id = ?')
+      params.push(filters.templateId)
     }
     if (filters.cursor) {
-      const { createdAt, id } = decodeCursor(filters.cursor);
-      conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
-      params.push(createdAt, createdAt, id);
+      const { createdAt, id } = decodeCursor(filters.cursor)
+      conditions.push('(created_at < ? OR (created_at = ? AND id < ?))')
+      params.push(createdAt, createdAt, id)
     }
 
-    const where =
-      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
     const rows = db
       .query<SendLogRow, (string | number)[]>(
@@ -499,17 +473,16 @@ export function createSendLogRepo(db: Database) {
          ORDER BY created_at DESC, id DESC
          LIMIT ?`,
       )
-      .all(...params, limit + 1);
+      .all(...params, limit + 1)
 
-    const hasMore = rows.length > limit;
-    const page = hasMore ? rows.slice(0, limit) : rows;
-    const data = page.map(toSendLogEntry);
+    const hasMore = rows.length > limit
+    const page = hasMore ? rows.slice(0, limit) : rows
+    const data = page.map(toSendLogEntry)
 
-    const last = data[data.length - 1];
-    const nextCursor =
-      hasMore && last ? encodeCursor(last.createdAt, last.id) : null;
+    const last = data[data.length - 1]
+    const nextCursor = hasMore && last ? encodeCursor(last.createdAt, last.id) : null
 
-    return { data, nextCursor };
+    return { data, nextCursor }
   }
 
   return {
@@ -524,7 +497,7 @@ export function createSendLogRepo(db: Database) {
     releaseSend,
     listSendLog,
     getSendLog,
-  };
+  }
 }
 
-export type SendLogRepo = ReturnType<typeof createSendLogRepo>;
+export type SendLogRepo = ReturnType<typeof createSendLogRepo>

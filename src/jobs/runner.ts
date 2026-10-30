@@ -1,46 +1,46 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from 'bun:sqlite'
 import {
   createJobQueue,
   JOB_STALE_CLAIM_MS,
   type JobClaim,
   type JobFailOutcome,
   type JobQueue,
-} from "../db/jobs";
-import { log as logger } from "../telemetry/log";
-import { traceIdFromJobId, withRootSpan } from "../telemetry/otel";
-import { errorName } from "../telemetry/otel-format";
-import { errorMessage } from "../utils/error";
-import { isRateLimitError } from "./rate-limit";
+} from '../db/jobs'
+import { log as logger } from '../telemetry/log'
+import { traceIdFromJobId, withRootSpan } from '../telemetry/otel'
+import { errorName } from '../telemetry/otel-format'
+import { errorMessage } from '../utils/error'
+import { isRateLimitError } from './rate-limit'
 
 // A handler may be re-run in full for a job it already completed if the
 // completion write itself fails (DB busy during the RollHook deploy
 // overlap) or if its claim is stolen mid-run — both are no-ops that leave
 // the job claimed-but-pending rather than surfacing an error. Every handler
 // must therefore be safe to run more than once for the same payload.
-export type JobHandler = (payload: unknown) => Promise<void>;
+export type JobHandler = (payload: unknown) => Promise<void>
 
 export interface JobRunner {
-  register(kind: string, handler: JobHandler): void;
+  register(kind: string, handler: JobHandler): void
   // Releases this host's dead-process claims. Call once at boot, before the
   // runner starts claiming.
-  reapOwnStaleClaims(): number;
+  reapOwnStaleClaims(): number
   // Claims and runs one due job among the registered kinds. Returns whether
   // a job ran. No timeout on the handler call itself — a slow handler is not
   // a stuck one (rules/agent-limits.md); handlers that call an LLM use
   // src/jobs/idle-watchdog.ts for their own liveness check. The claim is
   // renewed periodically while the handler runs, so a call outliving
   // JOB_STALE_CLAIM_MS keeps its claim instead of being taken over mid-run.
-  runOnce(now?: Date): Promise<boolean>;
+  runOnce(now?: Date): Promise<boolean>
   // Runs registered jobs until none are due. Returns how many ran. Re-reads
   // the clock for every iteration (unless `now` is fixed by the caller, as
   // tests do) so a job failing late in a long drain still gets its backoff
   // computed against the current time, not a stale start time.
-  drain(now?: Date): Promise<number>;
+  drain(now?: Date): Promise<number>
 }
 
 // Comfortably inside JOB_STALE_CLAIM_MS so a renewal always lands well before
 // the claim would otherwise go stale.
-const DEFAULT_RENEW_INTERVAL_MS = Math.floor(JOB_STALE_CLAIM_MS / 3);
+const DEFAULT_RENEW_INTERVAL_MS = Math.floor(JOB_STALE_CLAIM_MS / 3)
 
 // Keeps a claim alive for as long as its handler runs, by periodically
 // re-writing claimed_at. Every write here (and every other DB write this
@@ -53,30 +53,27 @@ function startClaimRenewal({
   claim,
   intervalMs,
 }: {
-  queue: JobQueue;
-  claim: JobClaim;
-  intervalMs: number;
+  queue: JobQueue
+  claim: JobClaim
+  intervalMs: number
 }): { currentToken: () => string; stop: () => void } {
-  let claimToken = claim.claimToken;
+  let claimToken = claim.claimToken
   const timer = setInterval(() => {
     try {
-      const renewed = queue.renewClaim({ id: claim.id, claimToken });
+      const renewed = queue.renewClaim({ id: claim.id, claimToken })
       if (renewed) {
-        claimToken = renewed;
+        claimToken = renewed
       } else {
         // Claim already lost (stale takeover) — nothing left to renew.
-        clearInterval(timer);
+        clearInterval(timer)
       }
     } catch (error) {
-      logger.error(
-        `[jobs] failed to renew claim for ${claim.kind} job ${claim.id}`,
-        { error },
-      );
+      logger.error(`[jobs] failed to renew claim for ${claim.kind} job ${claim.id}`, { error })
     }
-  }, intervalMs);
-  if (typeof timer.unref === "function") timer.unref();
+  }, intervalMs)
+  if (typeof timer.unref === 'function') timer.unref()
 
-  return { currentToken: () => claimToken, stop: () => clearInterval(timer) };
+  return { currentToken: () => claimToken, stop: () => clearInterval(timer) }
 }
 
 // Records the handler's outcome. A DB error here must not abort the rest of
@@ -92,28 +89,25 @@ function recordOutcome({
   claim,
   verb,
 }: {
-  write: () => boolean;
-  claim: JobClaim;
-  verb: "done" | "failed";
+  write: () => boolean
+  claim: JobClaim
+  verb: 'done' | 'failed'
 }): void {
   try {
     if (!write()) {
       logger.error(
         `[jobs] ${claim.kind} job ${claim.id} ${verb}, but its claim was already lost — may run again elsewhere`,
-      );
+      )
     }
   } catch (error) {
-    logger.error(
-      `[jobs] failed to record ${claim.kind} job ${claim.id} as ${verb}`,
-      { error },
-    );
+    logger.error(`[jobs] failed to record ${claim.kind} job ${claim.id} as ${verb}`, { error })
   }
 }
 
 // How a failed run ended, as the job span's `outcome`: parked on the rate-limit
 // ladder, scheduled for another attempt, or out of attempts (or its failure
 // could not be recorded).
-type FailedJobOutcome = "rate_limited" | "retry" | "error";
+type FailedJobOutcome = 'rate_limited' | 'retry' | 'error'
 
 // Records a failed handler's outcome. Rate-limited failures are common and
 // expected under a sustained upstream 429 — logging the full error object
@@ -129,15 +123,15 @@ function recordFailOutcome({
   error,
   log,
 }: {
-  queue: JobQueue;
-  claim: JobClaim;
-  renewal: { currentToken: () => string };
-  error: unknown;
-  log: (message: string, meta?: unknown) => void;
+  queue: JobQueue
+  claim: JobClaim
+  renewal: { currentToken: () => string }
+  error: unknown
+  log: (message: string, meta?: unknown) => void
 }): FailedJobOutcome {
-  const rateLimited = isRateLimitError(error);
-  const failNow = new Date();
-  let outcome: JobFailOutcome;
+  const rateLimited = isRateLimitError(error)
+  const failNow = new Date()
+  let outcome: JobFailOutcome
   try {
     outcome = queue.fail({
       id: claim.id,
@@ -145,57 +139,54 @@ function recordFailOutcome({
       error: errorMessage(error),
       now: failNow,
       rateLimited,
-    });
+    })
   } catch (writeError) {
     // Same reasoning as recordOutcome: a DB error here must not abort the
     // rest of drain()'s loop — log and move on.
     log(`[jobs] failed to record ${claim.kind} job ${claim.id} as failed`, {
       error: writeError,
-    });
-    return "error";
+    })
+    return 'error'
   }
 
   if (!outcome.ok) {
     log(
       `[jobs] ${claim.kind} job ${claim.id} failed, but its claim was already lost — may run again elsewhere`,
-    );
-    return "error";
+    )
+    return 'error'
   }
 
   if (outcome.rateLimited) {
-    if (error instanceof Error && error.name === "SendingPausedException") {
+    if (error instanceof Error && error.name === 'SendingPausedException') {
       logger.warn(
         `[jobs] SES sending is paused (${error.name}) — ${claim.kind} job ${claim.id} parked`,
-      );
+      )
     }
     const retrySeconds = outcome.nextAttemptAt
       ? Math.max(
           0,
-          Math.round(
-            (new Date(outcome.nextAttemptAt).getTime() - failNow.getTime()) /
-              1000,
-          ),
+          Math.round((new Date(outcome.nextAttemptAt).getTime() - failNow.getTime()) / 1000),
         )
-      : 0;
+      : 0
     log(
       `[jobs] ${claim.kind} ${claim.id} rate-limited, retry in ${retrySeconds}s (rate_limits=${outcome.rateLimits})`,
-    );
-    logger.event("job.rate_limited", {
+    )
+    logger.event('job.rate_limited', {
       kind: claim.kind,
       rate_limits: outcome.rateLimits,
-    });
-    return "rate_limited";
+    })
+    return 'rate_limited'
   }
 
-  log(`[jobs] ${claim.kind} job ${claim.id} failed`, { error });
+  log(`[jobs] ${claim.kind} job ${claim.id} failed`, { error })
   // No next attempt means the job is out of attempts and now terminally failed.
-  const failure = outcome.nextAttemptAt ? "retry" : "error";
-  logger.event("job.failed", {
+  const failure = outcome.nextAttemptAt ? 'retry' : 'error'
+  logger.event('job.failed', {
     kind: claim.kind,
     outcome: failure,
     attempt: claim.attempts + 1,
-  });
-  return failure;
+  })
+  return failure
 }
 
 export function createJobRunner({
@@ -205,49 +196,49 @@ export function createJobRunner({
   renewIntervalMs = DEFAULT_RENEW_INTERVAL_MS,
   log = logger.error,
 }: {
-  db: Database;
-  claimedBy: string;
-  queue?: JobQueue;
-  renewIntervalMs?: number;
+  db: Database
+  claimedBy: string
+  queue?: JobQueue
+  renewIntervalMs?: number
   // Injectable so a test can assert on the exact log line without spyOn
   // (repo convention) — defaults to the telemetry logger's error in production.
-  log?: (message: string, meta?: unknown) => void;
+  log?: (message: string, meta?: unknown) => void
 }): JobRunner {
   if (renewIntervalMs >= JOB_STALE_CLAIM_MS) {
     throw new Error(
       `renewIntervalMs (${renewIntervalMs}ms) must be below JOB_STALE_CLAIM_MS (${JOB_STALE_CLAIM_MS}ms), or a claim would go stale before it is ever renewed`,
-    );
+    )
   }
 
-  const handlers = new Map<string, JobHandler>();
+  const handlers = new Map<string, JobHandler>()
 
   function register(kind: string, handler: JobHandler): void {
     if (handlers.has(kind)) {
-      throw new Error(`a handler is already registered for job kind "${kind}"`);
+      throw new Error(`a handler is already registered for job kind "${kind}"`)
     }
-    handlers.set(kind, handler);
+    handlers.set(kind, handler)
   }
 
   function claimForHandlers(kinds: string[], now: Date): JobClaim | null {
     try {
-      return queue.claimNext({ kinds, now });
+      return queue.claimNext({ kinds, now })
     } catch (error) {
       // Same reasoning as recordOutcome: a DB error here (SQLITE_BUSY during
       // the deploy overlap) must not abort drain()'s loop — report no job
       // ran this pass and let the next scheduled pass retry.
-      logger.error(`[jobs] failed to claim a job`, { error });
-      return null;
+      logger.error(`[jobs] failed to claim a job`, { error })
+      return null
     }
   }
 
   async function runOnce(now = new Date()): Promise<boolean> {
-    const kinds = [...handlers.keys()];
-    if (kinds.length === 0) return false;
+    const kinds = [...handlers.keys()]
+    if (kinds.length === 0) return false
 
-    const claim = claimForHandlers(kinds, now);
-    if (!claim) return false;
+    const claim = claimForHandlers(kinds, now)
+    if (!claim) return false
 
-    const handler = handlers.get(claim.kind)!;
+    const handler = handlers.get(claim.kind)!
 
     // Each run is its own root span: a job is not a continuation of whatever
     // enqueued it, and the trace id derives from the job id.
@@ -255,54 +246,54 @@ export function createJobRunner({
       {
         traceId: traceIdFromJobId(claim.id),
         name: `job.${claim.kind}`,
-        attrs: { "job.kind": claim.kind, "job.attempt": claim.attempts + 1 },
+        attrs: { 'job.kind': claim.kind, 'job.attempt': claim.attempts + 1 },
       },
       async (span) => {
         const renewal = startClaimRenewal({
           queue,
           claim,
           intervalMs: renewIntervalMs,
-        });
+        })
 
         try {
-          await handler(claim.payload);
+          await handler(claim.payload)
         } catch (error) {
-          renewal.stop();
+          renewal.stop()
           const outcome = recordFailOutcome({
             queue,
             claim,
             renewal,
             error,
             log,
-          });
-          span.setAttributes({ outcome });
+          })
+          span.setAttributes({ outcome })
           // Name only: the message can echo the mail the handler was working on.
-          span.setStatus("error", errorName(error));
-          span.recordException(error);
-          return true;
+          span.setStatus('error', errorName(error))
+          span.recordException(error)
+          return true
         }
 
-        renewal.stop();
+        renewal.stop()
         recordOutcome({
           claim,
-          verb: "done",
+          verb: 'done',
           write: () =>
             queue.complete({
               id: claim.id,
               claimToken: renewal.currentToken(),
               now: new Date(),
             }),
-        });
-        span.setAttributes({ outcome: "ok" });
-        return true;
+        })
+        span.setAttributes({ outcome: 'ok' })
+        return true
       },
-    );
+    )
   }
 
   async function drain(now?: Date): Promise<number> {
-    let count = 0;
-    while (await runOnce(now)) count++;
-    return count;
+    let count = 0
+    while (await runOnce(now)) count++
+    return count
   }
 
   return {
@@ -310,5 +301,5 @@ export function createJobRunner({
     reapOwnStaleClaims: () => queue.reapOwnStaleClaims(),
     runOnce,
     drain,
-  };
+  }
 }

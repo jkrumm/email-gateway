@@ -1,4 +1,4 @@
-import type { SendMessage, SendProvider } from "../providers/send-port";
+import type { SendMessage, SendProvider } from '../providers/send-port'
 
 // An in-memory SendProvider for tests of the send paths (sendMail, the send
 // job). Like a real provider it dedupes on the
@@ -6,39 +6,39 @@ import type { SendMessage, SendProvider } from "../providers/send-port";
 // message id without recording a second send, which is what lets a test
 // prove the key actually closes the duplicate-send gap.
 export interface FakeSendProviderOptions {
-  id?: string;
+  id?: string
   // Message id for each send; a fresh sequential one when omitted.
-  providerMessageId?: string;
+  providerMessageId?: string
   // Make send() throw this message.
-  sendError?: string;
+  sendError?: string
 }
 
 export interface FakeSendProvider extends SendProvider {
-  readonly sent: SendMessage[];
+  readonly sent: SendMessage[]
 }
 
 export function createFakeSendProvider({
-  id = "fake",
+  id = 'fake',
   providerMessageId,
   sendError,
 }: FakeSendProviderOptions = {}): FakeSendProvider {
-  const sent: SendMessage[] = [];
-  const idsByKey = new Map<string, string>();
+  const sent: SendMessage[] = []
+  const idsByKey = new Map<string, string>()
 
   return {
     id,
     sent,
     async send(message) {
-      if (sendError) throw new Error(sendError);
+      if (sendError) throw new Error(sendError)
 
-      const key = message.idempotencyKey;
-      const existing = key ? idsByKey.get(key) : undefined;
-      if (existing) return { providerMessageId: existing };
+      const key = message.idempotencyKey
+      const existing = key ? idsByKey.get(key) : undefined
+      if (existing) return { providerMessageId: existing }
 
-      const messageId = providerMessageId ?? `${id}_msg_${sent.length + 1}`;
-      sent.push(message);
-      if (key) idsByKey.set(key, messageId);
-      return { providerMessageId: messageId };
+      const messageId = providerMessageId ?? `${id}_msg_${sent.length + 1}`
+      sent.push(message)
+      if (key) idsByKey.set(key, messageId)
+      return { providerMessageId: messageId }
     },
-  };
+  }
 }

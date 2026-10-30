@@ -6,7 +6,7 @@ import type {
   Message,
   MessageRef,
   Page,
-} from "../providers/port";
+} from '../providers/port'
 
 // An in-memory MailProvider for tests that exercise the sync/classification
 // wiring without live IMAP. It carries the Gmail-shape *data* a provider can
@@ -19,20 +19,20 @@ import type {
 // own inline fake specifically to exercise the skipFastPath contract.
 // Injected through the existing factory params; no module is mocked.
 export interface FakeMailProviderOptions {
-  id: MailProvider["id"];
-  account: string;
+  id: MailProvider['id']
+  account: string
   // Defaults to a full-capability list adapter (list/read/search/flag/move).
-  capabilities?: Partial<Capabilities>;
-  mailboxes?: Mailbox[];
+  capabilities?: Partial<Capabilities>
+  mailboxes?: Mailbox[]
   // Mailbox path -> successive pages of envelopes. The cursor is the page
   // index, so a second call with the returned cursor genuinely continues.
-  pages?: Record<string, Envelope[][]>;
+  pages?: Record<string, Envelope[][]>
   // Mailbox path -> uid -> the body read() returns for that message.
-  bodies?: Record<string, Record<number, Message>>;
+  bodies?: Record<string, Record<number, Message>>
 }
 
 export interface FakeMailProvider extends MailProvider {
-  readonly listCalls: { mailbox: string; cursor: string | undefined }[];
+  readonly listCalls: { mailbox: string; cursor: string | undefined }[]
 }
 
 function defaultCapabilities(): Capabilities {
@@ -43,7 +43,7 @@ function defaultCapabilities(): Capabilities {
     flag: true,
     move: true,
     idle: true,
-  };
+  }
 }
 
 export function createFakeMailProvider({
@@ -54,8 +54,8 @@ export function createFakeMailProvider({
   pages = {},
   bodies = {},
 }: FakeMailProviderOptions): FakeMailProvider {
-  const caps = { ...defaultCapabilities(), ...capabilities };
-  const listCalls: { mailbox: string; cursor: string | undefined }[] = [];
+  const caps = { ...defaultCapabilities(), ...capabilities }
+  const listCalls: { mailbox: string; cursor: string | undefined }[] = []
 
   return {
     id,
@@ -64,27 +64,27 @@ export function createFakeMailProvider({
     capabilities: async () => ({ ...caps }),
     listMailboxes: async () => mailboxes,
     async list(mailbox, cursor): Promise<Page<Envelope>> {
-      listCalls.push({ mailbox, cursor });
-      const mailboxPages = pages[mailbox] ?? [];
-      const index = cursor ? Number(cursor) : 0;
+      listCalls.push({ mailbox, cursor })
+      const mailboxPages = pages[mailbox] ?? []
+      const index = cursor ? Number(cursor) : 0
       if (!Number.isInteger(index) || index < 0) {
-        throw new Error(`fake: invalid list() cursor "${cursor}"`);
+        throw new Error(`fake: invalid list() cursor "${cursor}"`)
       }
-      const items = mailboxPages[index] ?? [];
-      const hasMore = index + 1 < mailboxPages.length;
-      return { items, cursor: hasMore ? String(index + 1) : undefined };
+      const items = mailboxPages[index] ?? []
+      const hasMore = index + 1 < mailboxPages.length
+      return { items, cursor: hasMore ? String(index + 1) : undefined }
     },
     async read(ref: MessageRef): Promise<Message> {
-      const body = bodies[ref.mailbox]?.[ref.uid];
-      if (!body) throw new Error(`fake: no body for ${ref.mailbox}:${ref.uid}`);
-      return body;
+      const body = bodies[ref.mailbox]?.[ref.uid]
+      if (!body) throw new Error(`fake: no body for ${ref.mailbox}:${ref.uid}`)
+      return body
     },
     async search() {
-      return [];
+      return []
     },
     async setFlags() {},
     async move(ref) {
-      return ref;
+      return ref
     },
-  };
+  }
 }

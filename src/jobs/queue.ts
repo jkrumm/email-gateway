@@ -1,7 +1,7 @@
-import { hostname } from "node:os";
-import { createJobQueue, defaultClaimedBy } from "../db/jobs";
-import { mailDb } from "../db/mail-index";
-import type { JobQueue } from "../db/jobs";
+import { hostname } from 'node:os'
+import { createJobQueue, defaultClaimedBy } from '../db/jobs'
+import { mailDb } from '../db/mail-index'
+import type { JobQueue } from '../db/jobs'
 
 // The one production JobQueue singleton, shared by every enqueue call site
 // (src/spam/gate.ts, the classify/jev handlers' injected enqueue callbacks)
@@ -16,21 +16,21 @@ import type { JobQueue } from "../db/jobs";
 // migrations) the moment this module is merely imported by
 // src/api/plugin.ts, src/admin/plugin.tsx or src/spam/gate.ts, defeating
 // `mailDb`'s whole "importing never touches the filesystem" contract.
-let jobQueueInstance: JobQueue | null = null;
+let jobQueueInstance: JobQueue | null = null
 function getJobQueue(): JobQueue {
   return (jobQueueInstance ??= createJobQueue({
     db: mailDb,
     claimedBy: defaultClaimedBy(hostname(), process.pid),
-  }));
+  }))
 }
 
 export const jobQueue: JobQueue = new Proxy({} as JobQueue, {
   get(_target, prop, _receiver) {
-    const instance = getJobQueue();
-    const value = Reflect.get(instance, prop, instance);
-    return typeof value === "function" ? value.bind(instance) : value;
+    const instance = getJobQueue()
+    const value = Reflect.get(instance, prop, instance)
+    return typeof value === 'function' ? value.bind(instance) : value
   },
-});
+})
 
 // The literal `{ kind: "sync_tick", payload: {}, subjectKey: "tick" }` is
 // duplicated across src/jobs/register.ts's periodic timer and the API
@@ -39,5 +39,5 @@ export const jobQueue: JobQueue = new Proxy({} as JobQueue, {
 // sync_tick ever pending" invariant) — one shared helper keeps every call
 // site from drifting.
 export function enqueueSyncTick(queue: JobQueue): void {
-  queue.enqueue({ kind: "sync_tick", payload: {}, subjectKey: "tick" });
+  queue.enqueue({ kind: 'sync_tick', payload: {}, subjectKey: 'tick' })
 }

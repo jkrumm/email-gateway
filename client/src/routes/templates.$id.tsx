@@ -1,51 +1,35 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-  type UseQueryResult,
-} from "@tanstack/react-query";
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  Group,
-  Loader,
-  Stack,
-  Table,
-  Text,
-  Title,
-} from "@mantine/core";
-import { createLocalStore, WidgetHeader } from "basalt-ui";
-import { ViewTabs } from "basalt-ui/controls";
-import { field } from "basalt-ui/state";
-import { listSendLog, listTemplates, testSendTemplate } from "../lib/api";
-import { formatDate } from "../lib/format";
-import { DataTable } from "../components/DataTable";
-import type { SendLogEntry, Template } from "../lib/types";
+import { createFileRoute, Link } from '@tanstack/react-router'
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
+import { Alert, Badge, Button, Card, Group, Loader, Stack, Table, Text, Title } from '@mantine/core'
+import { createLocalStore, WidgetHeader } from 'basalt-ui'
+import { ViewTabs } from 'basalt-ui/controls'
+import { field } from 'basalt-ui/state'
+import { listSendLog, listTemplates, testSendTemplate } from '../lib/api'
+import { formatDate } from '../lib/format'
+import { DataTable } from '../components/DataTable'
+import type { SendLogEntry, Template } from '../lib/types'
 
-export const Route = createFileRoute("/templates/$id")({
+export const Route = createFileRoute('/templates/$id')({
   component: TemplatePage,
-});
+})
 
 function statusColor(status: string | null): string {
-  if (status === "delivered") return "green";
-  if (status === "bounced" || status === "complained") return "red";
-  if (status === "sent") return "blue";
-  return "gray";
+  if (status === 'delivered') return 'green'
+  if (status === 'bounced' || status === 'complained') return 'red'
+  if (status === 'sent') return 'blue'
+  return 'gray'
 }
 
 // Memory lane: the preview width never needs to be linkable or survive a reload.
 const previewStore = createLocalStore({
-  key: "email-gateway:template-preview",
+  key: 'email-gateway:template-preview',
   fields: {
-    width: field.enum(["375", "600"], "600", { persist: false }),
+    width: field.enum(['375', '600'], '600', { persist: false }),
   },
-});
+})
 
 function templatePreviewPath(id: string, width: string): string {
-  return `/api/templates/${encodeURIComponent(id)}/preview?width=${encodeURIComponent(width)}`;
+  return `/api/templates/${encodeURIComponent(id)}/preview?width=${encodeURIComponent(width)}`
 }
 
 function TemplatePreviewCard({
@@ -56,18 +40,18 @@ function TemplatePreviewCard({
   testSendError,
   testSendSucceeded,
 }: {
-  id: string;
-  template: Template;
-  onTestSend: () => void;
-  testSendPending: boolean;
-  testSendError: Error | null;
-  testSendSucceeded: boolean;
+  id: string
+  template: Template
+  onTestSend: () => void
+  testSendPending: boolean
+  testSendError: Error | null
+  testSendSucceeded: boolean
 }) {
-  const [width] = previewStore.field.width.use();
+  const [width] = previewStore.field.width.use()
 
-  const previewUrl = templatePreviewPath(id, width);
+  const previewUrl = templatePreviewPath(id, width)
   const previewQuery = useQuery({
-    queryKey: ["template-preview", id, width],
+    queryKey: ['template-preview', id, width],
     queryFn: async () => {
       // Fetched client-side (not a direct iframe src=) so the HTML can be
       // rendered via srcDoc with sandbox="" — same-origin-with-full-cookie
@@ -75,11 +59,11 @@ function TemplatePreviewCard({
       // untrusted mail bodies, and while today's preview props are static
       // registry data, there is no reason this endpoint should run with more
       // privilege than that pattern already established.
-      const response = await fetch(previewUrl, { credentials: "same-origin" });
-      if (!response.ok) throw new Error(`preview failed: ${response.status}`);
-      return response.text();
+      const response = await fetch(previewUrl, { credentials: 'same-origin' })
+      if (!response.ok) throw new Error(`preview failed: ${response.status}`)
+      return response.text()
     },
-  });
+  })
 
   return (
     <Card py="xs" px="sm">
@@ -88,9 +72,7 @@ function TemplatePreviewCard({
           tier="widget"
           title={template.name}
           subtitle={template.id}
-          actions={
-            <ViewTabs field={previewStore.field.width} label="Preview width" />
-          }
+          actions={<ViewTabs field={previewStore.field.width} label="Preview width" />}
         />
 
         <Group gap="xs" align="center">
@@ -124,25 +106,18 @@ function TemplatePreviewCard({
 
         <details>
           <summary>Preview props</summary>
-          <Text component="pre" size="sm" style={{ whiteSpace: "pre-wrap" }}>
+          <Text component="pre" size="sm" style={{ whiteSpace: 'pre-wrap' }}>
             {JSON.stringify(template.previewProps, null, 2)}
           </Text>
         </details>
       </Stack>
     </Card>
-  );
+  )
 }
 
-function PreviewFrame({
-  width,
-  query,
-}: {
-  width: string;
-  query: UseQueryResult<string>;
-}) {
-  if (query.isLoading) return <Loader />;
-  if (query.isError)
-    return <Alert color="red">Could not load the preview.</Alert>;
+function PreviewFrame({ width, query }: { width: string; query: UseQueryResult<string> }) {
+  if (query.isLoading) return <Loader />
+  if (query.isError) return <Alert color="red">Could not load the preview.</Alert>
   return (
     <iframe
       title="template preview"
@@ -150,29 +125,23 @@ function PreviewFrame({
       srcDoc={query.data}
       style={{
         width: Number(width),
-        height: "70vh",
-        border: "1px solid var(--mantine-color-default-border)",
+        height: '70vh',
+        border: '1px solid var(--mantine-color-default-border)',
       }}
     />
-  );
+  )
 }
 
-function TemplateSendLogCard({
-  rows,
-  hasMore,
-}: {
-  rows: SendLogEntry[];
-  hasMore: boolean;
-}) {
+function TemplateSendLogCard({ rows, hasMore }: { rows: SendLogEntry[]; hasMore: boolean }) {
   return (
-    <Card py="xs" px="sm" style={{ overflowX: "auto" }}>
+    <Card py="xs" px="sm" style={{ overflowX: 'auto' }}>
       <Title order={4} mb="sm">
         Send log
       </Title>
       <DataTable
         isEmpty={rows.length === 0}
         emptyText="No sends recorded for this template."
-        headers={["Sent", "Recipients", "Status", "Requested by"]}
+        headers={['Sent', 'Recipients', 'Status', 'Requested by']}
       >
         {rows.map((entry) => (
           <Table.Tr key={entry.id}>
@@ -180,11 +149,11 @@ function TemplateSendLogCard({
               <Text size="sm">{formatDate(entry.createdAt)}</Text>
             </Table.Td>
             <Table.Td>
-              <Text size="sm">{entry.recipients.join(", ") || "—"}</Text>
+              <Text size="sm">{entry.recipients.join(', ') || '—'}</Text>
             </Table.Td>
             <Table.Td>
               <Badge variant="light" color={statusColor(entry.status)}>
-                {entry.status ?? "queued"}
+                {entry.status ?? 'queued'}
               </Badge>
             </Table.Td>
             <Table.Td>
@@ -199,55 +168,50 @@ function TemplateSendLogCard({
         </Text>
       ) : null}
     </Card>
-  );
+  )
 }
 
 function SendLogSection({
   query,
 }: {
-  query: UseQueryResult<{ data: SendLogEntry[]; nextCursor: string | null }>;
+  query: UseQueryResult<{ data: SendLogEntry[]; nextCursor: string | null }>
 }) {
-  if (query.isError)
-    return <Alert color="red">Could not load the send log.</Alert>;
-  if (query.isLoading) return <Loader />;
+  if (query.isError) return <Alert color="red">Could not load the send log.</Alert>
+  if (query.isLoading) return <Loader />
   return (
-    <TemplateSendLogCard
-      rows={query.data?.data ?? []}
-      hasMore={query.data?.nextCursor != null}
-    />
-  );
+    <TemplateSendLogCard rows={query.data?.data ?? []} hasMore={query.data?.nextCursor != null} />
+  )
 }
 
 function TemplatePage() {
-  const { id } = Route.useParams();
-  const queryClient = useQueryClient();
+  const { id } = Route.useParams()
+  const queryClient = useQueryClient()
 
   const templatesQuery = useQuery({
-    queryKey: ["templates"],
+    queryKey: ['templates'],
     queryFn: listTemplates,
-  });
+  })
 
   const sendLogQuery = useQuery({
-    queryKey: ["send-log", id],
+    queryKey: ['send-log', id],
     queryFn: () => listSendLog({ templateId: id }),
-  });
+  })
 
   const testSendMutation = useMutation({
     mutationFn: () => testSendTemplate(id),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["templates"] }),
-        queryClient.invalidateQueries({ queryKey: ["send-log", id] }),
-      ]);
+        queryClient.invalidateQueries({ queryKey: ['templates'] }),
+        queryClient.invalidateQueries({ queryKey: ['send-log', id] }),
+      ])
     },
-  });
+  })
 
-  if (templatesQuery.isError)
-    return <Alert color="red">Could not load templates.</Alert>;
-  if (templatesQuery.isLoading) return <Loader />;
+  if (templatesQuery.isError) return <Alert color="red">Could not load templates.</Alert>
+  if (templatesQuery.isLoading) return <Loader />
 
-  const template = templatesQuery.data?.find((entry) => entry.id === id);
-  if (!template) return <Alert color="red">No template with id {id}.</Alert>;
+  const template = templatesQuery.data?.find((entry) => entry.id === id)
+  if (!template) return <Alert color="red">No template with id {id}.</Alert>
 
   return (
     <Stack>
@@ -268,5 +232,5 @@ function TemplatePage() {
 
       <SendLogSection query={sendLogQuery} />
     </Stack>
-  );
+  )
 }

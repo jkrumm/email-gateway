@@ -1,31 +1,31 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from 'bun:sqlite'
 
 export interface ThreadSummary {
-  threadKey: string;
-  summary: string;
-  model: string | null;
+  threadKey: string
+  summary: string
+  model: string | null
   // Display metadata only — never the cache-invalidation source (see
   // latestKey). message_count cannot notice an arrival in a thread longer
   // than one page, since the page length stops changing at the cap.
-  messageCount: number;
-  latestKey: string | null;
-  updatedAt: string;
+  messageCount: number
+  latestKey: string | null
+  updatedAt: string
 }
 
 export interface SaveThreadSummaryInput {
-  summary: string;
-  model?: string | null;
-  messageCount: number;
-  latestKey: string | null;
+  summary: string
+  model?: string | null
+  messageCount: number
+  latestKey: string | null
 }
 
 interface ThreadSummaryRow {
-  thread_key: string;
-  summary: string;
-  model: string | null;
-  message_count: number;
-  latest_key: string | null;
-  updated_at: string;
+  thread_key: string
+  summary: string
+  model: string | null
+  message_count: number
+  latest_key: string | null
+  updated_at: string
 }
 
 function toThreadSummary(row: ThreadSummaryRow): ThreadSummary {
@@ -36,7 +36,7 @@ function toThreadSummary(row: ThreadSummaryRow): ThreadSummary {
     messageCount: row.message_count,
     latestKey: row.latest_key,
     updatedAt: row.updated_at,
-  };
+  }
 }
 
 // Cache of LLM thread summaries (Wave 8) — src/services/agent-api.ts's
@@ -46,11 +46,9 @@ function toThreadSummary(row: ThreadSummaryRow): ThreadSummary {
 export function createThreadSummariesRepo(db: Database) {
   function getSummary(threadKey: string): ThreadSummary | null {
     const row = db
-      .query<ThreadSummaryRow, [string]>(
-        "SELECT * FROM thread_summaries WHERE thread_key = ?",
-      )
-      .get(threadKey);
-    return row ? toThreadSummary(row) : null;
+      .query<ThreadSummaryRow, [string]>('SELECT * FROM thread_summaries WHERE thread_key = ?')
+      .get(threadKey)
+    return row ? toThreadSummary(row) : null
   }
 
   function saveSummary(threadKey: string, input: SaveThreadSummaryInput): void {
@@ -71,10 +69,10 @@ export function createThreadSummariesRepo(db: Database) {
         input.latestKey,
         new Date().toISOString(),
       ],
-    );
+    )
   }
 
-  return { getSummary, saveSummary };
+  return { getSummary, saveSummary }
 }
 
-export type ThreadSummariesRepo = ReturnType<typeof createThreadSummariesRepo>;
+export type ThreadSummariesRepo = ReturnType<typeof createThreadSummariesRepo>

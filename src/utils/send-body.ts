@@ -1,21 +1,21 @@
-import type { SendBodiesRepo } from "../db/send-bodies";
-import { findTemplateEntry, templateSecrets } from "../emails/registry";
-import { log } from "../telemetry/log";
+import type { SendBodiesRepo } from '../db/send-bodies'
+import { findTemplateEntry, templateSecrets } from '../emails/registry'
+import { log } from '../telemetry/log'
 
-const REDACTED = "[redacted]";
+const REDACTED = '[redacted]'
 
 // Replaces every occurrence of every secret in the rendered mail.
 export function redactRendered(
   rendered: { html: string; text: string },
   secrets: string[],
 ): { html: string; text: string } {
-  let { html, text } = rendered;
+  let { html, text } = rendered
   for (const secret of secrets) {
-    if (!secret) continue;
-    html = html.replaceAll(secret, REDACTED);
-    text = text.replaceAll(secret, REDACTED);
+    if (!secret) continue
+    html = html.replaceAll(secret, REDACTED)
+    text = text.replaceAll(secret, REDACTED)
   }
-  return { html, text };
+  return { html, text }
 }
 
 /**
@@ -35,30 +35,30 @@ export function storeSendBody({
   templateId,
   templateProps,
 }: {
-  sendBodies: Pick<SendBodiesRepo, "save">;
-  sendId: string;
-  rendered: { html: string; text: string };
+  sendBodies: Pick<SendBodiesRepo, 'save'>
+  sendId: string
+  rendered: { html: string; text: string }
   // The registry id; absent for an unregistered send (nothing to redact).
-  templateId?: string | null;
-  templateProps?: unknown;
+  templateId?: string | null
+  templateProps?: unknown
 }): void {
   try {
-    const entry = templateId ? findTemplateEntry(templateId) : null;
-    const secrets = entry ? templateSecrets(entry, templateProps) : [];
+    const entry = templateId ? findTemplateEntry(templateId) : null
+    const secrets = entry ? templateSecrets(entry, templateProps) : []
     // Fail closed: a template that names secrets but yields none (props
     // missing or unreadable) cannot be redacted, so it is not stored.
     if (entry?.redact && secrets.length === 0) {
-      log.error("Skipped storing send body: no secrets to redact", {
+      log.error('Skipped storing send body: no secrets to redact', {
         id: sendId,
         templateId,
-      });
-      return;
+      })
+      return
     }
-    sendBodies.save({ sendId, ...redactRendered(rendered, secrets) });
+    sendBodies.save({ sendId, ...redactRendered(rendered, secrets) })
   } catch (error) {
-    log.error("Failed to store send body", {
+    log.error('Failed to store send body', {
       id: sendId,
-      reason: error instanceof Error ? error.name : "unknown",
-    });
+      reason: error instanceof Error ? error.name : 'unknown',
+    })
   }
 }

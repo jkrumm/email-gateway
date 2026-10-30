@@ -1,6 +1,6 @@
-import type { Database } from "bun:sqlite";
-import { errorMessage } from "../utils/error";
-import { log } from "../telemetry/log";
+import type { Database } from 'bun:sqlite'
+import { errorMessage } from '../utils/error'
+import { log } from '../telemetry/log'
 
 // Generalises src/db/jev-queue.ts's claim/backoff/stale-takeover semantics
 // into one table for every async kind (classify, jev_message, jev_submission,
@@ -14,15 +14,15 @@ import { log } from "../telemetry/log";
 // it is proven against an in-memory database only (see jobs.test.ts);
 // nothing calls it in production yet.
 
-export type JobStatus = "pending" | "done" | "failed";
+export type JobStatus = 'pending' | 'done' | 'failed'
 
 // Longer than any LLM call's own 30-min hang guard, so a claim is never
 // treated as stale while a call could still be running. Also covers
 // RollHook briefly running two containers on the same SQLite file.
-export const JOB_STALE_CLAIM_MS = 35 * 60_000;
+export const JOB_STALE_CLAIM_MS = 35 * 60_000
 
-const MINUTE_MS = 60_000;
-const HOUR_MS = 60 * MINUTE_MS;
+const MINUTE_MS = 60_000
+const HOUR_MS = 60 * MINUTE_MS
 
 // Wait after the Nth consecutive failure (index N-1). The last failure has no
 // wait — it is terminal. Identical ladder to src/db/jev-queue.ts.
@@ -35,25 +35,25 @@ const JOB_BACKOFF_MS = [
   6 * HOUR_MS,
   12 * HOUR_MS,
   24 * HOUR_MS,
-] as const;
+] as const
 
-export const JOB_MAX_ATTEMPTS = JOB_BACKOFF_MS.length + 1;
+export const JOB_MAX_ATTEMPTS = JOB_BACKOFF_MS.length + 1
 
 // Applied to every scheduled backoff so a burst of jobs failing at the same
 // instant doesn't re-batch onto the exact same next_attempt_at and retry in
 // lockstep (2026-09-28 Jev 429 incident: identical offsets kept re-triggering
 // the same burst). Always additive — a job never gets a shorter wait than the
 // ladder says, only a longer one.
-const BACKOFF_JITTER_RATIO = 0.2;
+const BACKOFF_JITTER_RATIO = 0.2
 
 function jitteredDelayMs(baseMs: number, random: () => number): number {
-  return baseMs + Math.floor(random() * baseMs * BACKOFF_JITTER_RATIO);
+  return baseMs + Math.floor(random() * baseMs * BACKOFF_JITTER_RATIO)
 }
 
 export interface JobFailurePlan {
-  status: Exclude<JobStatus, "done">;
-  attempts: number;
-  nextAttemptAt: string | null;
+  status: Exclude<JobStatus, 'done'>
+  attempts: number
+  nextAttemptAt: string | null
 }
 
 // The state a job moves to after one more failed attempt. `random` is
@@ -63,22 +63,22 @@ export function planJobFailure({
   now,
   random = Math.random,
 }: {
-  attempts: number;
-  now: Date;
-  random?: () => number;
+  attempts: number
+  now: Date
+  random?: () => number
 }): JobFailurePlan {
-  const total = attempts + 1;
+  const total = attempts + 1
   if (total >= JOB_MAX_ATTEMPTS) {
-    return { status: "failed", attempts: total, nextAttemptAt: null };
+    return { status: 'failed', attempts: total, nextAttemptAt: null }
   }
 
   return {
-    status: "pending",
+    status: 'pending',
     attempts: total,
     nextAttemptAt: new Date(
       now.getTime() + jitteredDelayMs(JOB_BACKOFF_MS[total - 1]!, random),
     ).toISOString(),
-  };
+  }
 }
 
 // A rate-limited attempt's own escalation ladder — separate from
@@ -86,22 +86,17 @@ export function planJobFailure({
 // 15m, 1h, then capped at 1h forever. Uncapped/deeper backoff (3h+) is
 // wrong here — the point is recovering promptly once the upstream clears,
 // not treating a rate limit like a job that's actually broken.
-const RATE_LIMIT_BACKOFF_MS = [
-  MINUTE_MS,
-  5 * MINUTE_MS,
-  15 * MINUTE_MS,
-  HOUR_MS,
-] as const;
+const RATE_LIMIT_BACKOFF_MS = [MINUTE_MS, 5 * MINUTE_MS, 15 * MINUTE_MS, HOUR_MS] as const
 
 export interface JobRateLimitPlan {
-  status: "pending";
-  nextAttemptAt: string;
+  status: 'pending'
+  nextAttemptAt: string
   // The new count of *consecutive* rate-limited outcomes, for both the
   // escalation ladder above and the runner's log line. Resets to 0 on
   // success or a non-rate-limit failure (see buildFailTx/complete below).
   // `attempts` itself is not part of this plan — a rate limit never spends
   // one, so the caller just leaves the row's existing value untouched.
-  rateLimits: number;
+  rateLimits: number
 }
 
 // The state a job moves to after a rate-limited attempt: parks for a short,
@@ -125,23 +120,23 @@ export function planJobRateLimited({
   now,
   random = Math.random,
 }: {
-  rateLimits: number;
-  now: Date;
-  random?: () => number;
+  rateLimits: number
+  now: Date
+  random?: () => number
 }): JobRateLimitPlan {
-  const rung = Math.min(rateLimits, RATE_LIMIT_BACKOFF_MS.length - 1);
+  const rung = Math.min(rateLimits, RATE_LIMIT_BACKOFF_MS.length - 1)
   return {
-    status: "pending",
+    status: 'pending',
     nextAttemptAt: new Date(
       now.getTime() + jitteredDelayMs(RATE_LIMIT_BACKOFF_MS[rung]!, random),
     ).toISOString(),
     rateLimits: rateLimits + 1,
-  };
+  }
 }
 
 export interface JobCounts {
-  pending: number;
-  failed: number;
+  pending: number
+  failed: number
 }
 
 // fail()'s return: enough for the runner to log a rate-limited outcome in
@@ -149,36 +144,36 @@ export interface JobCounts {
 // the claim was already lost (stale takeover) — nothing was written, and
 // `rateLimited`/`rateLimits`/`nextAttemptAt` are meaningless in that case.
 export interface JobFailOutcome {
-  ok: boolean;
-  rateLimited: boolean;
-  rateLimits: number;
-  nextAttemptAt: string | null;
+  ok: boolean
+  rateLimited: boolean
+  rateLimits: number
+  nextAttemptAt: string | null
 }
 
 export interface JobClaim {
-  id: string;
-  kind: string;
-  payload: unknown;
+  id: string
+  kind: string
+  payload: unknown
   // Attempts already spent before this run (0 on the first).
-  attempts: number;
+  attempts: number
   // The `claimed_at` value this claim last wrote. Completing, failing or
   // renewing the job only takes effect while that value is still on it, so a
   // claim lost to a stale takeover can't clobber the new owner's work.
-  claimToken: string;
+  claimToken: string
 }
 
 // One job's public state, for a status-lookup caller (e.g. GET /api/jobs/:id)
 // that has no business seeing claim tokens or raw payload_json.
 export interface JobRecord {
-  id: string;
-  kind: string;
-  subjectKey: string | null;
-  status: JobStatus;
-  attempts: number;
-  nextAttemptAt: string | null;
-  lastError: string | null;
-  createdAt: string;
-  finishedAt: string | null;
+  id: string
+  kind: string
+  subjectKey: string | null
+  status: JobStatus
+  attempts: number
+  nextAttemptAt: string | null
+  lastError: string | null
+  createdAt: string
+  finishedAt: string | null
 }
 
 const JOBS_SCHEMA = `
@@ -199,7 +194,7 @@ const JOBS_SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs (status, next_attempt_at, claimed_at);
   CREATE INDEX IF NOT EXISTS idx_jobs_kind ON jobs (kind, status);
-`;
+`
 
 // This module owns 100% of the jobs table's DDL (see the header comment) —
 // there is no versioned migration path for it, so a column added after the
@@ -212,41 +207,39 @@ function ensureRateLimitsColumn(db: Database): void {
   const hasColumn = db
     .query<{ name: string }, []>(`PRAGMA table_info(jobs)`)
     .all()
-    .some((column) => column.name === "rate_limits");
+    .some((column) => column.name === 'rate_limits')
   if (!hasColumn) {
-    db.run(
-      `ALTER TABLE jobs ADD COLUMN rate_limits INTEGER NOT NULL DEFAULT 0`,
-    );
+    db.run(`ALTER TABLE jobs ADD COLUMN rate_limits INTEGER NOT NULL DEFAULT 0`)
   }
 }
 
 export function ensureJobsSchema(db: Database): void {
-  db.run(JOBS_SCHEMA);
-  ensureRateLimitsColumn(db);
+  db.run(JOBS_SCHEMA)
+  ensureRateLimitsColumn(db)
 }
 
 // audio-gateway's "<hostname>:<pid>" pattern: identifies which process holds
 // a claim, so a boot reap can release exactly this host's dead-process claims
 // immediately instead of waiting out JOB_STALE_CLAIM_MS.
 export function defaultClaimedBy(hostname: string, pid: number): string {
-  return `${hostname}:${pid}`;
+  return `${hostname}:${pid}`
 }
 
 // Escapes SQLite LIKE metacharacters so a hostname containing `_` or `%`
 // (common in Docker/compose hostnames) can't accidentally match a different
 // host's claimed_by value.
 function escapeLikePattern(value: string): string {
-  return value.replace(/[\\%_]/g, "\\$&");
+  return value.replace(/[\\%_]/g, '\\$&')
 }
 
 export interface JobQueue {
   enqueue(input: {
-    kind: string;
-    payload: unknown;
-    subjectKey?: string | null;
-    id?: string;
-    now?: Date;
-  }): string;
+    kind: string
+    payload: unknown
+    subjectKey?: string | null
+    id?: string
+    now?: Date
+  }): string
   // Claims the oldest due job: pending, past its backoff, and not held by a
   // fresh claim (a stale one is taken over). `kinds` left `undefined` means
   // unrestricted; an explicit `kinds: []` means match none, not "match any"
@@ -255,20 +248,16 @@ export interface JobQueue {
   // a long sequential run and goes stale before it is judged. A row whose
   // payload_json can't be parsed is failed on the spot and skipped, so one
   // corrupt row never blocks every row behind it.
-  claimNext(input?: { kinds?: string[]; now?: Date }): JobClaim | null;
+  claimNext(input?: { kinds?: string[]; now?: Date }): JobClaim | null
   // Re-writes claimed_at so a handler still running past JOB_STALE_CLAIM_MS
   // keeps its claim instead of being taken over mid-run. Returns the new
   // claim token, or null if the claim was already lost (stale takeover or a
   // status change) — a caller must stop renewing and let the run finish
   // without touching the row further.
-  renewClaim(input: {
-    id: string;
-    claimToken: string;
-    now?: Date;
-  }): string | null;
+  renewClaim(input: { id: string; claimToken: string; now?: Date }): string | null
   // Marks a claim done. Returns false (writes nothing) when the claim was
   // lost to a stale takeover.
-  complete(input: { id: string; claimToken: string; now?: Date }): boolean;
+  complete(input: { id: string; claimToken: string; now?: Date }): boolean
   // Counts one failed attempt: schedules the next one, or gives up for good
   // after JOB_MAX_ATTEMPTS, keeping the last error either way. Pass
   // `rateLimited: true` to park and reschedule instead, without spending an
@@ -277,33 +266,27 @@ export interface JobQueue {
   // `rateLimits`/`nextAttemptAt` let the caller log the escalated retry
   // delay without a second read.
   fail(input: {
-    id: string;
-    claimToken: string;
-    error: string;
-    now?: Date;
-    rateLimited?: boolean;
-    random?: () => number;
-  }): JobFailOutcome;
+    id: string
+    claimToken: string
+    error: string
+    now?: Date
+    rateLimited?: boolean
+    random?: () => number
+  }): JobFailOutcome
   // Releases every job this host claimed before it last restarted (matched
   // by the hostname prefix of `claimedBy`, any pid) back to pending. Call
   // exactly once at boot, before the runner or anything else claims a job —
   // it has no claim-age check, so calling it again later would steal a claim
   // out from under this same process's own in-flight handler.
-  reapOwnStaleClaims(): number;
-  counts(): JobCounts;
+  reapOwnStaleClaims(): number
+  counts(): JobCounts
   // Point lookup by id, for GET /api/jobs/:id — null when the id is unknown.
-  getJob(id: string): JobRecord | null;
+  getJob(id: string): JobRecord | null
 }
 
-export function createJobQueue({
-  db,
-  claimedBy,
-}: {
-  db: Database;
-  claimedBy: string;
-}): JobQueue {
-  ensureJobsSchema(db);
-  const hostname = claimedBy.split(":")[0]!;
+export function createJobQueue({ db, claimedBy }: { db: Database; claimedBy: string }): JobQueue {
+  ensureJobsSchema(db)
+  const hostname = claimedBy.split(':')[0]!
 
   function enqueue({
     kind,
@@ -312,55 +295,45 @@ export function createJobQueue({
     id = crypto.randomUUID(),
     now = new Date(),
   }: {
-    kind: string;
-    payload: unknown;
-    subjectKey?: string | null;
-    id?: string;
-    now?: Date;
+    kind: string
+    payload: unknown
+    subjectKey?: string | null
+    id?: string
+    now?: Date
   }): string {
     db.run(
       `INSERT INTO jobs (id, kind, subject_key, payload_json, created_at)
        VALUES (?, ?, ?, ?, ?)`,
-      [
-        id,
-        kind,
-        subjectKey,
-        JSON.stringify(payload ?? null),
-        now.toISOString(),
-      ],
-    );
-    return id;
+      [id, kind, subjectKey, JSON.stringify(payload ?? null), now.toISOString()],
+    )
+    return id
   }
 
   function claimNextRow({ kinds, now }: { kinds?: string[]; now: Date }): {
-    id: string;
-    kind: string;
-    payloadJson: string;
-    attempts: number;
-    claimToken: string;
+    id: string
+    kind: string
+    payloadJson: string
+    attempts: number
+    claimToken: string
   } | null {
     // `kinds: []` means "restrict to no kinds", i.e. match nothing — distinct
     // from `kinds` left `undefined`, which means unrestricted. Without this,
     // a caller computing an empty kind list (e.g. a runner with no handlers
     // registered) would silently claim any pending job instead of none.
-    if (kinds && kinds.length === 0) return null;
+    if (kinds && kinds.length === 0) return null
 
-    const nowIso = now.toISOString();
-    const staleBefore = new Date(
-      now.getTime() - JOB_STALE_CLAIM_MS,
-    ).toISOString();
-    const kindFilter = kinds
-      ? `AND kind IN (${kinds.map(() => "?").join(", ")})`
-      : "";
+    const nowIso = now.toISOString()
+    const staleBefore = new Date(now.getTime() - JOB_STALE_CLAIM_MS).toISOString()
+    const kindFilter = kinds ? `AND kind IN (${kinds.map(() => '?').join(', ')})` : ''
 
     const row = db
       .query<
         {
-          id: string;
-          kind: string;
-          payload_json: string;
-          attempts: number;
-          claimToken: string;
+          id: string
+          kind: string
+          payload_json: string
+          attempts: number
+          claimToken: string
         },
         (string | number)[]
       >(
@@ -376,16 +349,16 @@ export function createJobQueue({
          )
          RETURNING id, kind, payload_json, attempts, claimed_at AS claimToken`,
       )
-      .get(nowIso, claimedBy, nowIso, staleBefore, ...(kinds ?? []));
+      .get(nowIso, claimedBy, nowIso, staleBefore, ...(kinds ?? []))
 
-    if (!row) return null;
+    if (!row) return null
     return {
       id: row.id,
       kind: row.kind,
       payloadJson: row.payload_json,
       attempts: row.attempts,
       claimToken: row.claimToken,
-    };
+    }
   }
 
   function claimNext({
@@ -393,8 +366,8 @@ export function createJobQueue({
     now = new Date(),
   }: { kinds?: string[]; now?: Date } = {}): JobClaim | null {
     for (;;) {
-      const claimed = claimNextRow({ kinds, now });
-      if (!claimed) return null;
+      const claimed = claimNextRow({ kinds, now })
+      if (!claimed) return null
 
       try {
         return {
@@ -403,7 +376,7 @@ export function createJobQueue({
           payload: JSON.parse(claimed.payloadJson),
           attempts: claimed.attempts,
           claimToken: claimed.claimToken,
-        };
+        }
       } catch (error) {
         // A row that can never be parsed would otherwise throw out of every
         // drain pass that reaches it (src/jev/worker.ts avoids exactly this
@@ -415,17 +388,16 @@ export function createJobQueue({
             claimToken: claimed.claimToken,
             error: `corrupt payload_json: ${errorMessage(error)}`,
             now,
-          });
+          })
         } catch (writeError) {
           // The fail() write itself hit a DB error (e.g. SQLITE_BUSY during
           // the two-container deploy overlap) — log and stop here rather
           // than looping forever or throwing out of claimNext. The row
           // stays claimed and is retried once that claim goes stale.
-          log.error(
-            `[jobs] failed to record corrupt payload_json for job ${claimed.id}`,
-            { error: writeError },
-          );
-          return null;
+          log.error(`[jobs] failed to record corrupt payload_json for job ${claimed.id}`, {
+            error: writeError,
+          })
+          return null
         }
       }
     }
@@ -436,17 +408,17 @@ export function createJobQueue({
     claimToken,
     now = new Date(),
   }: {
-    id: string;
-    claimToken: string;
-    now?: Date;
+    id: string
+    claimToken: string
+    now?: Date
   }): string | null {
-    const nowIso = now.toISOString();
+    const nowIso = now.toISOString()
     const { changes } = db.run(
       `UPDATE jobs SET claimed_at = ?
        WHERE id = ? AND claimed_at = ? AND status = 'pending'`,
       [nowIso, id, claimToken],
-    );
-    return changes > 0 ? nowIso : null;
+    )
+    return changes > 0 ? nowIso : null
   }
 
   function complete({
@@ -454,9 +426,9 @@ export function createJobQueue({
     claimToken,
     now = new Date(),
   }: {
-    id: string;
-    claimToken: string;
-    now?: Date;
+    id: string
+    claimToken: string
+    now?: Date
   }): boolean {
     const { changes } = db.run(
       `UPDATE jobs SET
@@ -470,8 +442,8 @@ export function createJobQueue({
          finished_at = ?
        WHERE id = ? AND claimed_at = ?`,
       [now.toISOString(), id, claimToken],
-    );
-    return changes > 0;
+    )
+    return changes > 0
   }
 
   // Immediate transaction: the attempt count is read and advanced under one
@@ -486,30 +458,23 @@ export function createJobQueue({
   // here would open the real file (and run migrations) the moment anything
   // merely imports that singleton, defeating the Proxy's whole point.
   interface FailTxArgs {
-    id: string;
-    claimToken: string;
-    error: string;
-    now: Date;
-    rateLimited: boolean;
-    random: () => number;
+    id: string
+    claimToken: string
+    error: string
+    now: Date
+    rateLimited: boolean
+    random: () => number
   }
   function buildFailTx() {
     return db.transaction(
-      ({
-        id,
-        claimToken,
-        error,
-        now,
-        rateLimited,
-        random,
-      }: FailTxArgs): JobFailOutcome => {
+      ({ id, claimToken, error, now, rateLimited, random }: FailTxArgs): JobFailOutcome => {
         const row = db
           .query<{ attempts: number; rate_limits: number }, [string, string]>(
             `SELECT attempts, rate_limits FROM jobs WHERE id = ? AND claimed_at = ?`,
           )
-          .get(id, claimToken);
+          .get(id, claimToken)
         if (!row) {
-          return { ok: false, rateLimited, rateLimits: 0, nextAttemptAt: null };
+          return { ok: false, rateLimited, rateLimits: 0, nextAttemptAt: null }
         }
 
         // Rate-limited: attempts stays exactly as it was (never spent), and
@@ -519,26 +484,26 @@ export function createJobQueue({
         // the next rate limit (if any) should start escalating from rung 0
         // again, not continue from wherever a prior, unrelated streak left
         // off.
-        let status: JobStatus;
-        let attempts: number;
-        let rateLimits: number;
-        let nextAttemptAt: string | null;
+        let status: JobStatus
+        let attempts: number
+        let rateLimits: number
+        let nextAttemptAt: string | null
         if (rateLimited) {
           const plan = planJobRateLimited({
             rateLimits: row.rate_limits,
             now,
             random,
-          });
-          status = plan.status;
-          attempts = row.attempts;
-          rateLimits = plan.rateLimits;
-          nextAttemptAt = plan.nextAttemptAt;
+          })
+          status = plan.status
+          attempts = row.attempts
+          rateLimits = plan.rateLimits
+          nextAttemptAt = plan.nextAttemptAt
         } else {
-          const plan = planJobFailure({ attempts: row.attempts, now, random });
-          status = plan.status;
-          attempts = plan.attempts;
-          rateLimits = 0;
-          nextAttemptAt = plan.nextAttemptAt;
+          const plan = planJobFailure({ attempts: row.attempts, now, random })
+          status = plan.status
+          attempts = plan.attempts
+          rateLimits = 0
+          nextAttemptAt = plan.nextAttemptAt
         }
 
         db.run(
@@ -553,18 +518,18 @@ export function createJobQueue({
             rateLimits,
             nextAttemptAt,
             error,
-            status === "failed" ? now.toISOString() : null,
+            status === 'failed' ? now.toISOString() : null,
             id,
             claimToken,
           ],
-        );
-        return { ok: true, rateLimited, rateLimits, nextAttemptAt };
+        )
+        return { ok: true, rateLimited, rateLimits, nextAttemptAt }
       },
-    );
+    )
   }
-  let failTxCache: ReturnType<typeof buildFailTx> | null = null;
+  let failTxCache: ReturnType<typeof buildFailTx> | null = null
   function getFailTx(): ReturnType<typeof buildFailTx> {
-    return (failTxCache ??= buildFailTx());
+    return (failTxCache ??= buildFailTx())
   }
 
   function fail({
@@ -575,12 +540,12 @@ export function createJobQueue({
     rateLimited = false,
     random = Math.random,
   }: {
-    id: string;
-    claimToken: string;
-    error: string;
-    now?: Date;
-    rateLimited?: boolean;
-    random?: () => number;
+    id: string
+    claimToken: string
+    error: string
+    now?: Date
+    rateLimited?: boolean
+    random?: () => number
   }): JobFailOutcome {
     return getFailTx().immediate({
       id,
@@ -589,7 +554,7 @@ export function createJobQueue({
       now,
       rateLimited,
       random,
-    });
+    })
   }
 
   // Safe only because a matches-by-hostname-prefix reap can run once at
@@ -605,8 +570,8 @@ export function createJobQueue({
       `UPDATE jobs SET claimed_at = NULL, claimed_by = NULL
        WHERE status = 'pending' AND claimed_by LIKE ? ESCAPE '\\'`,
       [`${escapeLikePattern(hostname)}:%`],
-    );
-    return changes;
+    )
+    return changes
   }
 
   function counts(): JobCounts {
@@ -616,22 +581,22 @@ export function createJobQueue({
                 COALESCE(SUM(status = 'failed'), 0) AS failed
          FROM jobs`,
       )
-      .get()!;
+      .get()!
   }
 
   function getJob(id: string): JobRecord | null {
     const row = db
       .query<
         {
-          id: string;
-          kind: string;
-          subject_key: string | null;
-          status: JobStatus;
-          attempts: number;
-          next_attempt_at: string | null;
-          last_error: string | null;
-          created_at: string;
-          finished_at: string | null;
+          id: string
+          kind: string
+          subject_key: string | null
+          status: JobStatus
+          attempts: number
+          next_attempt_at: string | null
+          last_error: string | null
+          created_at: string
+          finished_at: string | null
         },
         [string]
       >(
@@ -639,8 +604,8 @@ export function createJobQueue({
                 last_error, created_at, finished_at
          FROM jobs WHERE id = ?`,
       )
-      .get(id);
-    if (!row) return null;
+      .get(id)
+    if (!row) return null
 
     return {
       id: row.id,
@@ -652,7 +617,7 @@ export function createJobQueue({
       lastError: row.last_error,
       createdAt: row.created_at,
       finishedAt: row.finished_at,
-    };
+    }
   }
 
   return {
@@ -664,5 +629,5 @@ export function createJobQueue({
     reapOwnStaleClaims,
     counts,
     getJob,
-  };
+  }
 }

@@ -8,33 +8,31 @@
  * key, or an empty value is skipped rather than failing boot.
  */
 export function parseOtlpHeadersEnv(raw: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const pair of raw.split(",")) {
-    const eq = pair.indexOf("=");
-    if (eq <= 0) continue;
-    const key = pair.slice(0, eq).trim();
-    const value = pair.slice(eq + 1).trim();
-    if (key && value) out[key] = value;
+  const out: Record<string, string> = {}
+  for (const pair of raw.split(',')) {
+    const eq = pair.indexOf('=')
+    if (eq <= 0) continue
+    const key = pair.slice(0, eq).trim()
+    const value = pair.slice(eq + 1).trim()
+    if (key && value) out[key] = value
   }
-  return out;
+  return out
 }
 
 /**
  * The standard `OTEL_RESOURCE_ATTRIBUTES` env var (`key=value,key=value`) so compose can
  * override or extend the resource without a code change. Malformed pairs are skipped.
  */
-export function parseResourceAttributesEnv(
-  raw: string,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const pair of raw.split(",")) {
-    const idx = pair.indexOf("=");
-    if (idx === -1) continue;
-    const key = pair.slice(0, idx).trim();
-    const value = pair.slice(idx + 1).trim();
-    if (key) out[key] = value;
+export function parseResourceAttributesEnv(raw: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const pair of raw.split(',')) {
+    const idx = pair.indexOf('=')
+    if (idx === -1) continue
+    const key = pair.slice(0, idx).trim()
+    const value = pair.slice(idx + 1).trim()
+    if (key) out[key] = value
   }
-  return out;
+  return out
 }
 
 /**
@@ -43,7 +41,7 @@ export function parseResourceAttributesEnv(
  * exception events record the name alone.
  */
 export function errorName(error: unknown): string {
-  return error instanceof Error ? error.name : "Error";
+  return error instanceof Error ? error.name : 'Error'
 }
 
 /**
@@ -51,13 +49,10 @@ export function errorName(error: unknown): string {
  * the elapsed monotonic time, so span durations survive an NTP adjustment mid-span. Both
  * sources are injected so tests are deterministic.
  */
-export function createNanoClock(
-  wallMs: number,
-  monotonicNs: () => number,
-): () => bigint {
-  const origin = BigInt(wallMs) * 1_000_000n;
-  const startNs = BigInt(Math.trunc(monotonicNs()));
-  return () => origin + (BigInt(Math.trunc(monotonicNs())) - startNs);
+export function createNanoClock(wallMs: number, monotonicNs: () => number): () => bigint {
+  const origin = BigInt(wallMs) * 1_000_000n
+  const startNs = BigInt(Math.trunc(monotonicNs()))
+  return () => origin + (BigInt(Math.trunc(monotonicNs())) - startNs)
 }
 
 // ── Redaction ────────────────────────────────────────────────────────────────
@@ -66,67 +61,63 @@ export function createNanoClock(
 // body passes through here) instead of trusting each call site. Console output is not
 // affected: only the OTLP copy is scrubbed.
 
-const REDACTED_EMAIL = "[redacted-email]";
-const EMAIL_PATTERN = /[^\s<>"'(),;:@]+@[^\s<>"'(),;:@]+\.[^\s<>"'(),;:@]+/g;
+const REDACTED_EMAIL = '[redacted-email]'
+const EMAIL_PATTERN = /[^\s<>"'(),;:@]+@[^\s<>"'(),;:@]+\.[^\s<>"'(),;:@]+/g
 
 /** Replace anything address-shaped (also covers `<id@host>` Message-IDs) in free text. */
 export function scrubText(text: string): string {
-  return text.replace(EMAIL_PATTERN, REDACTED_EMAIL);
+  return text.replace(EMAIL_PATTERN, REDACTED_EMAIL)
 }
 
 // Attribute names whose value is mail content or a secret — dropped outright, whatever the
 // value. Compared after lower-casing and stripping `.`/`_`/`-`, against the whole key and
 // against its last dot-segment (`http.request.header.authorization`).
 const SENSITIVE_KEYS = new Set([
-  "to",
-  "from",
-  "replyto",
-  "cc",
-  "bcc",
-  "subject",
-  "recipient",
-  "recipients",
-  "address",
-  "addresses",
-  "email",
-  "body",
-  "html",
-  "text",
-  "password",
-  "secret",
-  "token",
-  "authorization",
-  "cookie",
-  "apikey",
-  "messageid",
-  "authcode",
-  "code",
-  "prompt",
-  "output",
-  "completion",
-]);
+  'to',
+  'from',
+  'replyto',
+  'cc',
+  'bcc',
+  'subject',
+  'recipient',
+  'recipients',
+  'address',
+  'addresses',
+  'email',
+  'body',
+  'html',
+  'text',
+  'password',
+  'secret',
+  'token',
+  'authorization',
+  'cookie',
+  'apikey',
+  'messageid',
+  'authcode',
+  'code',
+  'prompt',
+  'output',
+  'completion',
+])
 // `code` is only sensitive as a whole key (the auth-code field); as a last segment it is
 // the generic suffix of `error.code`-style diagnostics.
-const SENSITIVE_WHOLE_KEY_ONLY = new Set(["code"]);
+const SENSITIVE_WHOLE_KEY_ONLY = new Set(['code'])
 
-const normalizeKey = (key: string): string =>
-  key.toLowerCase().replace(/[._-]/g, "");
+const normalizeKey = (key: string): string => key.toLowerCase().replace(/[._-]/g, '')
 
 export function isSensitiveKey(key: string): boolean {
-  const whole = normalizeKey(key);
+  const whole = normalizeKey(key)
   // `providerMessageId`, `message_id`, ... — any message id, ours or the sender's.
-  if (SENSITIVE_KEYS.has(whole) || whole.endsWith("messageid")) return true;
-  const lastSegment = normalizeKey(key.split(".").at(-1) ?? "");
-  return (
-    SENSITIVE_KEYS.has(lastSegment) &&
-    !SENSITIVE_WHOLE_KEY_ONLY.has(lastSegment)
-  );
+  if (SENSITIVE_KEYS.has(whole) || whole.endsWith('messageid')) return true
+  const lastSegment = normalizeKey(key.split('.').at(-1) ?? '')
+  return SENSITIVE_KEYS.has(lastSegment) && !SENSITIVE_WHOLE_KEY_ONLY.has(lastSegment)
 }
 
-export type LogAttributeValue = string | number | boolean;
+export type LogAttributeValue = string | number | boolean
 
 function errorText(error: Error): string {
-  return `${error.name}: ${error.message}`;
+  return `${error.name}: ${error.message}`
 }
 
 /**
@@ -139,37 +130,37 @@ function errorText(error: Error): string {
 export function toLogAttributes(
   fields: Record<string, unknown>,
 ): Record<string, LogAttributeValue> {
-  const attrs: Record<string, LogAttributeValue> = {};
+  const attrs: Record<string, LogAttributeValue> = {}
   for (const [key, value] of Object.entries(fields)) {
-    if (value === undefined || value === null || isSensitiveKey(key)) continue;
-    if (typeof value === "number" || typeof value === "boolean") {
-      attrs[key] = value;
-      continue;
+    if (value === undefined || value === null || isSensitiveKey(key)) continue
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      attrs[key] = value
+      continue
     }
-    if (typeof value === "string") {
-      attrs[key] = scrubText(value);
-      continue;
+    if (typeof value === 'string') {
+      attrs[key] = scrubText(value)
+      continue
     }
     if (value instanceof Error) {
-      attrs[key] = scrubText(errorText(value));
-      continue;
+      attrs[key] = scrubText(errorText(value))
+      continue
     }
-    attrs[key] = scrubText(safeStringify(value));
+    attrs[key] = scrubText(safeStringify(value))
   }
-  return attrs;
+  return attrs
 }
 
 function safeStringify(value: unknown): string {
   try {
-    return JSON.stringify(value) ?? String(value);
+    return JSON.stringify(value) ?? String(value)
   } catch {
-    return String(value);
+    return String(value)
   }
 }
 
 // ── Severity ─────────────────────────────────────────────────────────────────
 
-export type LogSeverity = "info" | "warn" | "error";
+export type LogSeverity = 'info' | 'warn' | 'error'
 
 /**
  * Mechanical severity for a structured event: ERROR when the name ends in `.failed` or
@@ -177,18 +168,15 @@ export type LogSeverity = "info" | "warn" | "error";
  * `.rate_limited` or `.stalled`; INFO otherwise. Legacy `log.*` lines take their severity
  * from the console method they replace and never come through here.
  */
-export function severityFor(
-  event: string,
-  fields: Record<string, unknown> = {},
-): LogSeverity {
-  if (event.endsWith(".failed") || event.endsWith(".error")) return "error";
+export function severityFor(event: string, fields: Record<string, unknown> = {}): LogSeverity {
+  if (event.endsWith('.failed') || event.endsWith('.error')) return 'error'
   if (
-    Boolean(fields["error"]) ||
-    event.endsWith(".rejected") ||
-    event.endsWith(".rate_limited") ||
-    event.endsWith(".stalled")
+    Boolean(fields['error']) ||
+    event.endsWith('.rejected') ||
+    event.endsWith('.rate_limited') ||
+    event.endsWith('.stalled')
   ) {
-    return "warn";
+    return 'warn'
   }
-  return "info";
+  return 'info'
 }

@@ -77,16 +77,16 @@ environment:
 labels:
   # ...existing public router (email-gateway.${DOMAIN}) unchanged, plus
   # an explicit service name so both routers can point at it...
-  - "traefik.http.routers.email-gateway.service=email-gateway"
+  - 'traefik.http.routers.email-gateway.service=email-gateway'
   # Mail surface — reachable only over the tailnet: the A record (DNS-only/
   # grey cloud) resolves to the VPS's CGNAT tailnet IP, and Traefik's
   # websecure entrypoint is itself published only on that same IP
   # (compose.networking.yml), not 0.0.0.0 — a forged Host/SNI header from
   # the public internet has no route to hit this router at all.
-  - "traefik.http.routers.email-gateway-mail.rule=Host(`mail.${DOMAIN}`)"
-  - "traefik.http.routers.email-gateway-mail.entrypoints=websecure"
-  - "traefik.http.routers.email-gateway-mail.tls.certresolver=letsencrypt"
-  - "traefik.http.routers.email-gateway-mail.service=email-gateway"
+  - 'traefik.http.routers.email-gateway-mail.rule=Host(`mail.${DOMAIN}`)'
+  - 'traefik.http.routers.email-gateway-mail.entrypoints=websecure'
+  - 'traefik.http.routers.email-gateway-mail.tls.certresolver=letsencrypt'
+  - 'traefik.http.routers.email-gateway-mail.service=email-gateway'
 ```
 
 `IMAP_TLS_INSECURE: "true"` can come out once `IMAP_TLS_CERT` is set and
@@ -177,10 +177,10 @@ blocker for the cron entry itself.
 
 1. Apply §1 (ACL grant) and §2 (DNS record).
 2. Apply §3/§4 to the `vps` repo, run `make email-gateway-env` then `make
-email-gateway-up` to recreate the container with the new env + labels.
+   email-gateway-up` to recreate the container with the new env + labels.
 3. Clone this repo on the VPS host and install the §5 cron entry.
 4. Once Gmail's app password is in 1Password (`op://vps/email-gateway/
-GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD`) and a sync has run
+   GMAIL_IMAP_USER`/`GMAIL_IMAP_APP_PASSWORD`) and a sync has run
    successfully against it in prod: **revoke argo's Gmail OAuth scope** (the
    argo `/gmail/*` deletion PR from Wave 5,
    [jkrumm/argo#20](https://github.com/jkrumm/argo/pull/20), stays unmerged

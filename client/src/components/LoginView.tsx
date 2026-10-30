@@ -1,33 +1,25 @@
-import { useState, type FormEvent } from "react";
-import {
-  Button,
-  Card,
-  Center,
-  PasswordInput,
-  Stack,
-  Text,
-  Title,
-} from "@mantine/core";
-import { useQueryClient } from "@tanstack/react-query";
-import { login } from "../lib/session";
+import { useState, type FormEvent } from 'react'
+import { Button, Card, Center, PasswordInput, Stack, Text, Title } from '@mantine/core'
+import { useQueryClient } from '@tanstack/react-query'
+import { login } from '../lib/session'
 
 export function LoginView() {
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const queryClient = useQueryClient();
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const queryClient = useQueryClient()
 
   async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    setSubmitting(true);
-    setError(null);
+    event.preventDefault()
+    setSubmitting(true)
+    setError(null)
     try {
-      await login(password);
-      await queryClient.invalidateQueries({ queryKey: ["session"] });
+      await login(password)
+      await queryClient.invalidateQueries({ queryKey: ['session'] })
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Login failed");
+      setError(cause instanceof Error ? cause.message : 'Login failed')
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
@@ -58,5 +50,5 @@ export function LoginView() {
         </form>
       </Card>
     </Center>
-  );
+  )
 }

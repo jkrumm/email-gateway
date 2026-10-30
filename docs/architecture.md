@@ -59,16 +59,16 @@ one implementation, SES (`src/providers/ses/send.ts`); there is no send-only
 
 ```ts
 interface MailProvider {
-  readonly id: ProviderId; // "proton" | "gmail"
-  readonly account: string; // hello@…, me@gmail.com
-  capabilities(): Promise<Capabilities>; // { list, read, search, flag, move, idle }
-  listMailboxes(): Promise<Mailbox[]>;
-  list(mailbox: string, cursor: Cursor): Promise<Page<Envelope>>; // newest first, bounded
-  read(ref: MessageRef): Promise<Message>; // headers + parsed body + attachment meta
-  search(query: SearchQuery): Promise<MessageRef[]>; // provider-side, may lag
-  setFlags(ref: MessageRef, flags: FlagChange): Promise<void>;
-  move(ref: MessageRef, toMailbox: string): Promise<MessageRef>;
-  watch?(mailbox: string, onChange: () => void): Promise<Unsubscribe>; // IDLE / push
+  readonly id: ProviderId // "proton" | "gmail"
+  readonly account: string // hello@…, me@gmail.com
+  capabilities(): Promise<Capabilities> // { list, read, search, flag, move, idle }
+  listMailboxes(): Promise<Mailbox[]>
+  list(mailbox: string, cursor: Cursor): Promise<Page<Envelope>> // newest first, bounded
+  read(ref: MessageRef): Promise<Message> // headers + parsed body + attachment meta
+  search(query: SearchQuery): Promise<MessageRef[]> // provider-side, may lag
+  setFlags(ref: MessageRef, flags: FlagChange): Promise<void>
+  move(ref: MessageRef, toMailbox: string): Promise<MessageRef>
+  watch?(mailbox: string, onChange: () => void): Promise<Unsubscribe> // IDLE / push
 }
 ```
 
@@ -169,7 +169,7 @@ later wave doesn't rediscover them by surprise.
   yet — envelope `list()` calls carry no Message-ID (only a full body
   `read()` does) — so its message key is scoped per **mailbox**
   (`sha256(account:provider:mailbox:uidValidity:uid)`). A `POST
-/messages/:key/move` (`src/api/plugin.ts`) updates the location row
+  /messages/:key/move` (`src/api/plugin.ts`) updates the location row
   correctly, but the _next_ sync tick still ingests the moved message under
   its new mailbox+uid as a brand-new key — a second `messages` row (and a
   second `classifications` row) for one physical email. Real fix: re-key by
@@ -256,7 +256,7 @@ later wave doesn't rediscover them by surprise.
   send-as-owner with no throttle. Real fix: a rate limit, a domain/recipient
   allowlist, or scoped bearer tiers before this door is exposed more widely.
 - **`templateProps` has no per-template schema (Wave 8).** `src/emails/
-registry.ts`'s `renderTemplateElement` casts unchecked, and `POST /api/sends`
+  registry.ts`'s `renderTemplateElement` casts unchecked, and `POST /api/sends`
   is the first caller passing agent-supplied props straight through to a
   component. Real fix: a zod schema per `emailRegistry` entry, validated before
   the send job is enqueued.

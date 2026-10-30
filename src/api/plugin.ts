@@ -1,16 +1,16 @@
-import { render } from "@react-email/render";
-import type { Database } from "bun:sqlite";
-import { Elysia, t } from "elysia";
-import { extractBearerToken, timingSafeEqualStrings } from "../auth";
-import { splitCsv as splitList } from "../utils/csv";
-import { env } from "../env";
+import { render } from '@react-email/render'
+import type { Database } from 'bun:sqlite'
+import { Elysia, t } from 'elysia'
+import { extractBearerToken, timingSafeEqualStrings } from '../auth'
+import { splitCsv as splitList } from '../utils/csv'
+import { env } from '../env'
 import {
   handleCookieSignatureError,
   isSameOrigin,
   isSessionValue,
   sessionCookieOptions,
   sessionSecret,
-} from "../session";
+} from '../session'
 import {
   accountsRepo as defaultAccounts,
   mailDb as defaultMailDb,
@@ -21,51 +21,43 @@ import {
   sesAccountRepo as defaultSesAccount,
   templatesRepo as defaultTemplates,
   threadSummariesRepo as defaultThreadSummaries,
-} from "../db/mail-index";
-import type { AccountsRepo } from "../db/accounts";
-import type {
-  ListMessagesFilters,
-  MessageLocation,
-  MessagesRepo,
-} from "../db/messages";
-import type {
-  MailSubmissionsRepo,
-  SubmissionSource,
-  Verdict,
-} from "../db/mail-submissions";
-import type { SendBodiesRepo } from "../db/send-bodies";
-import type { SendLogRepo } from "../db/send-log";
-import type { SesAccountRepo } from "../db/ses-account";
-import type { TemplatesRepo } from "../db/templates";
-import type { ThreadSummariesRepo } from "../db/thread-summaries";
-import { findTemplateEntry, renderTemplateElement } from "../emails/registry";
-import { enqueueSyncTick, jobQueue as defaultJobQueue } from "../jobs/queue";
-import type { JobQueue } from "../db/jobs";
-import { accountIdFor } from "../sync/ingest";
+} from '../db/mail-index'
+import type { AccountsRepo } from '../db/accounts'
+import type { ListMessagesFilters, MessageLocation, MessagesRepo } from '../db/messages'
+import type { MailSubmissionsRepo, SubmissionSource, Verdict } from '../db/mail-submissions'
+import type { SendBodiesRepo } from '../db/send-bodies'
+import type { SendLogRepo } from '../db/send-log'
+import type { SesAccountRepo } from '../db/ses-account'
+import type { TemplatesRepo } from '../db/templates'
+import type { ThreadSummariesRepo } from '../db/thread-summaries'
+import { findTemplateEntry, renderTemplateElement } from '../emails/registry'
+import { enqueueSyncTick, jobQueue as defaultJobQueue } from '../jobs/queue'
+import type { JobQueue } from '../db/jobs'
+import { accountIdFor } from '../sync/ingest'
 import {
   configuredProviders as defaultConfiguredProviders,
   providerForAccountId as defaultProviderFor,
-} from "../providers/from-env";
-import type { MailProvider, MessageRef } from "../providers/port";
-import { sesClient } from "../providers/send-registry";
+} from '../providers/from-env'
+import type { MailProvider, MessageRef } from '../providers/port'
+import { sesClient } from '../providers/send-registry'
 import {
   createSesSuppressions,
   isSuppressionNotFound,
   type SesSuppressions,
-} from "../providers/ses/suppressions";
+} from '../providers/ses/suppressions'
 import {
   agentErrorStatus,
   createAgentApi,
   isInvalidCursorError,
   type AgentApi,
-} from "../services/agent-api";
-import { enqueueTemplateSend } from "../services/template-send";
-import { log } from "../telemetry/log";
+} from '../services/agent-api'
+import { enqueueTemplateSend } from '../services/template-send'
+import { log } from '../telemetry/log'
 
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60_000;
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60_000
 
 function defaultSince(): string {
-  return new Date(Date.now() - THIRTY_DAYS_MS).toISOString();
+  return new Date(Date.now() - THIRTY_DAYS_MS).toISOString()
 }
 
 // Accepts "1" (the architecture doc's `needs_me=1`) or "true" as true, "0" or
@@ -76,45 +68,41 @@ function defaultSince(): string {
 // silently turn `?needs_me=tru` into a real `actionRequired: false` filter,
 // returning the wrong, non-empty result set instead of the unfiltered one.
 function parseFlag(value: string | undefined): boolean | undefined {
-  if (value === "1" || value === "true") return true;
-  if (value === "0" || value === "false") return false;
-  return undefined;
+  if (value === '1' || value === 'true') return true
+  if (value === '0' || value === 'false') return false
+  return undefined
 }
 
 function messagesFilters(query: {
-  account?: string;
-  direction?: "inbound" | "outbound";
-  category?: string;
-  action_required?: string;
-  needs_me?: string;
-  since?: string;
-  until?: string;
-  limit?: number;
-  cursor?: string;
+  account?: string
+  direction?: 'inbound' | 'outbound'
+  category?: string
+  action_required?: string
+  needs_me?: string
+  since?: string
+  until?: string
+  limit?: number
+  cursor?: string
 }): ListMessagesFilters {
   return {
     accountIds: splitList(query.account),
     direction: query.direction,
     category: query.category,
-    actionRequired:
-      parseFlag(query.needs_me) ?? parseFlag(query.action_required),
+    actionRequired: parseFlag(query.needs_me) ?? parseFlag(query.action_required),
     since: query.since,
     until: query.until,
     limit: query.limit,
     cursor: query.cursor,
-  };
+  }
 }
 
-function findLocation(
-  locations: MessageLocation[],
-  mailbox: string,
-): MessageLocation | undefined {
-  return locations.find((location) => location.mailbox === mailbox);
+function findLocation(locations: MessageLocation[], mailbox: string): MessageLocation | undefined {
+  return locations.find((location) => location.mailbox === mailbox)
 }
 
 const messagesListQuery = t.Object({
   account: t.Optional(t.String()),
-  direction: t.Optional(t.Union([t.Literal("inbound"), t.Literal("outbound")])),
+  direction: t.Optional(t.Union([t.Literal('inbound'), t.Literal('outbound')])),
   category: t.Optional(t.String()),
   action_required: t.Optional(t.String()),
   needs_me: t.Optional(t.String()),
@@ -122,7 +110,7 @@ const messagesListQuery = t.Object({
   until: t.Optional(t.String()),
   limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100 })),
   cursor: t.Optional(t.String()),
-});
+})
 
 // GET /api/needs-action's own query: messagesListQuery minus the filters that
 // are meaningless here (direction/category/needs_me/action_required — this
@@ -133,88 +121,82 @@ const needsActionQuery = t.Object({
   until: t.Optional(t.String()),
   limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100 })),
   cursor: t.Optional(t.String()),
-});
+})
 
 const draftBody = t.Object({
   key: t.String(),
   instructions: t.Optional(t.String()),
-});
+})
 
 const sendBody = t.Object({
   templateId: t.String(),
-  to: t.String({ format: "email" }),
+  to: t.String({ format: 'email' }),
   // Required: a bare t.Unknown() would accept an omitted field, and
   // src/jobs/send.ts's renderTemplateElement then defaults to the template's
   // previewProps — silently mailing demo content to a real recipient.
   templateProps: t.Record(t.String(), t.Unknown()),
   subject: t.Optional(t.String()),
-  replyTo: t.Optional(t.String({ format: "email" })),
-});
+  replyTo: t.Optional(t.String({ format: 'email' })),
+})
 
 const messageByKeyQuery = t.Object({
   include: t.Optional(t.String()),
-});
+})
 
 const statsQuery = t.Object({
   since: t.Optional(t.String()),
-});
+})
 
 const submissionsListQuery = t.Object({
-  verdict: t.Optional(
-    t.Union([t.Literal("legit"), t.Literal("spam"), t.Literal("marketing")]),
-  ),
+  verdict: t.Optional(t.Union([t.Literal('legit'), t.Literal('spam'), t.Literal('marketing')])),
   source: t.Optional(
-    t.Union([
-      t.Literal("fpp"),
-      t.Literal("sy-serendipity"),
-      t.Literal("jkrumm-contact"),
-    ]),
+    t.Union([t.Literal('fpp'), t.Literal('sy-serendipity'), t.Literal('jkrumm-contact')]),
   ),
   delivered: t.Optional(t.String()),
   limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100 })),
   cursor: t.Optional(t.String()),
-});
+})
 
 const sendLogListQuery = t.Object({
   templateId: t.Optional(t.String()),
   limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100 })),
   cursor: t.Optional(t.String()),
-});
+})
 
 const sendStatsQuery = t.Object({
   days: t.Optional(t.Numeric({ minimum: 1, maximum: 90 })),
-});
+})
 
-const DEFAULT_SEND_STATS_DAYS = 30;
+const DEFAULT_SEND_STATS_DAYS = 30
 
 const suppressionsListQuery = t.Object({
-  reason: t.Optional(t.Union([t.Literal("BOUNCE"), t.Literal("COMPLAINT")])),
+  reason: t.Optional(t.Union([t.Literal('BOUNCE'), t.Literal('COMPLAINT')])),
   cursor: t.Optional(t.String()),
-});
+})
 
 // `width` is advisory only: the client uses it to frame its own preview, so
 // the server validates it as a number and otherwise ignores it.
 const templatePreviewQuery = t.Object({
   width: t.Optional(t.Numeric()),
-});
+})
 
 const searchQuery = t.Object({
   q: t.String(),
   account: t.Optional(t.String()),
   limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100 })),
-});
+})
 
 const flagsBody = t.Object({
   mailbox: t.String(),
   add: t.Optional(t.Array(t.String())),
   remove: t.Optional(t.Array(t.String())),
   set: t.Optional(t.Array(t.String())),
-});
+})
 
 const moveBody = t.Object({
   mailbox: t.String(),
   toMailbox: t.String(),
-});
+})
 
 export function createApiRoutes({
   apiKey,
@@ -234,31 +216,31 @@ export function createApiRoutes({
   configuredProviders = defaultConfiguredProviders,
   agentApi,
 }: {
-  apiKey: string | undefined;
+  apiKey: string | undefined
   // When set, a same-origin request carrying the /app session cookie is
   // accepted as an alternative to the bearer — that is how the browser client
   // reads data. The bearer contract for agents is unchanged.
-  session?: { secret: string; now?: () => number };
+  session?: { secret: string; now?: () => number }
   // The write connection the send/test-send transaction helper wraps; defaults
   // to the production mail.sqlite singleton and matches the repos above.
-  db?: Database;
-  messages?: MessagesRepo;
-  mailSubmissions?: MailSubmissionsRepo;
-  accounts?: AccountsRepo;
-  jobs?: JobQueue;
-  templates?: TemplatesRepo;
-  sendLog?: SendLogRepo;
-  sendBodies?: SendBodiesRepo;
-  sesAccount?: SesAccountRepo;
-  suppressions?: SesSuppressions;
-  threadSummaries?: ThreadSummariesRepo;
-  providerFor?: (accountId: string) => MailProvider | null;
-  configuredProviders?: () => MailProvider[];
+  db?: Database
+  messages?: MessagesRepo
+  mailSubmissions?: MailSubmissionsRepo
+  accounts?: AccountsRepo
+  jobs?: JobQueue
+  templates?: TemplatesRepo
+  sendLog?: SendLogRepo
+  sendBodies?: SendBodiesRepo
+  sesAccount?: SesAccountRepo
+  suppressions?: SesSuppressions
+  threadSummaries?: ThreadSummariesRepo
+  providerFor?: (accountId: string) => MailProvider | null
+  configuredProviders?: () => MailProvider[]
   // Injectable for tests; defaulted from the repos above so the routes and
   // (later) the MCP tools share one implementation.
-  agentApi?: AgentApi;
+  agentApi?: AgentApi
 }) {
-  const configured = apiKey !== undefined || session !== undefined;
+  const configured = apiKey !== undefined || session !== undefined
 
   const service =
     agentApi ??
@@ -269,7 +251,7 @@ export function createApiRoutes({
       sendLog,
       threadSummaries,
       providerFor,
-    });
+    })
 
   // Shared by /messages/:key/flags and /messages/:key/move: both need the
   // same message → location → provider chain before doing anything specific.
@@ -279,44 +261,39 @@ export function createApiRoutes({
   ):
     | { ok: true; location: MessageLocation; provider: MailProvider }
     | { ok: false; status: number; error: string } {
-    const message = messages.getMessage(key);
-    if (!message) return { ok: false, status: 404, error: "not_found" };
+    const message = messages.getMessage(key)
+    if (!message) return { ok: false, status: 404, error: 'not_found' }
 
-    const location = findLocation(message.locations, mailbox);
+    const location = findLocation(message.locations, mailbox)
     if (!location) {
-      return { ok: false, status: 404, error: "location_not_found" };
+      return { ok: false, status: 404, error: 'location_not_found' }
     }
 
-    const provider = providerFor(message.account);
+    const provider = providerFor(message.account)
     if (!provider) {
-      return { ok: false, status: 404, error: "provider_not_found" };
+      return { ok: false, status: 404, error: 'provider_not_found' }
     }
 
-    return { ok: true, location, provider };
+    return { ok: true, location, provider }
   }
 
   return new Elysia(
     session
       ? {
-          prefix: "/api",
+          prefix: '/api',
           cookie: sessionCookieOptions(session.secret),
         }
-      : { prefix: "/api" },
+      : { prefix: '/api' },
   )
     .onBeforeHandle(({ headers, request, cookie, set }) => {
       if (!configured) {
-        set.status = 404;
-        return { error: "not_found" };
+        set.status = 404
+        return { error: 'not_found' }
       }
 
-      const token = extractBearerToken(headers.authorization);
+      const token = extractBearerToken(headers.authorization)
 
-      if (
-        token &&
-        apiKey !== undefined &&
-        timingSafeEqualStrings(token, apiKey)
-      )
-        return;
+      if (token && apiKey !== undefined && timingSafeEqualStrings(token, apiKey)) return
 
       // Browser door: the signed /app session cookie, same-origin only. A
       // tampered cookie is rejected by Elysia before this runs (see onError).
@@ -325,16 +302,15 @@ export function createApiRoutes({
         isSameOrigin(request) &&
         isSessionValue(cookie?.session?.value, (session.now ?? Date.now)())
       ) {
-        return;
+        return
       }
 
-      set.status = 401;
-      set.headers["WWW-Authenticate"] =
-        `Bearer realm='api', error="invalid_token"`;
-      return { error: "unauthorized" };
+      set.status = 401
+      set.headers['WWW-Authenticate'] = `Bearer realm='api', error="invalid_token"`
+      return { error: 'unauthorized' }
     })
     .onError(({ error, set }) => handleCookieSignatureError(error, set))
-    .get("/accounts", () =>
+    .get('/accounts', () =>
       configuredProviders().map((provider) => ({
         id: accountIdFor(provider),
         provider: provider.id,
@@ -342,55 +318,55 @@ export function createApiRoutes({
       })),
     )
     .get(
-      "/messages",
+      '/messages',
       ({ query, set }) => {
         try {
-          return messages.listMessages(messagesFilters(query));
+          return messages.listMessages(messagesFilters(query))
         } catch (error) {
-          if (!isInvalidCursorError(error)) throw error;
-          set.status = 400;
-          return { error: "invalid_cursor" };
+          if (!isInvalidCursorError(error)) throw error
+          set.status = 400
+          return { error: 'invalid_cursor' }
         }
       },
       { query: messagesListQuery },
     )
     .get(
-      "/messages/:key",
+      '/messages/:key',
       ({ params, query, set }) => {
         const outcome = service.readMessage({
           key: params.key,
-          includeBody: query.include === "body",
-        });
+          includeBody: query.include === 'body',
+        })
         if (!outcome.ok) {
-          set.status = 404;
-          return { error: outcome.error };
+          set.status = 404
+          return { error: outcome.error }
         }
 
-        return outcome.message;
+        return outcome.message
       },
       { params: t.Object({ key: t.String() }), query: messageByKeyQuery },
     )
     .get(
-      "/threads/:key",
+      '/threads/:key',
       ({ params, set }) => {
-        const outcome = service.getThread({ key: params.key });
+        const outcome = service.getThread({ key: params.key })
         if (!outcome.ok) {
-          set.status = 404;
-          return { error: outcome.error };
+          set.status = 404
+          return { error: outcome.error }
         }
 
-        return outcome.thread;
+        return outcome.thread
       },
       { params: t.Object({ key: t.String() }) },
     )
     .get(
-      "/threads/:key/summary",
+      '/threads/:key/summary',
       async ({ params, set }) => {
-        const outcome = await service.getThreadSummary({ key: params.key });
+        const outcome = await service.getThreadSummary({ key: params.key })
         if (!outcome.ok) {
-          const { status, code } = agentErrorStatus(outcome.error);
-          set.status = status;
-          return { error: code };
+          const { status, code } = agentErrorStatus(outcome.error)
+          set.status = status
+          return { error: code }
         }
 
         return {
@@ -398,12 +374,12 @@ export function createApiRoutes({
           model: outcome.model,
           messageCount: outcome.messageCount,
           cached: outcome.cached,
-        };
+        }
       },
       { params: t.Object({ key: t.String() }) },
     )
     .get(
-      "/search",
+      '/search',
       ({ query }) =>
         service.searchMail({
           q: query.q,
@@ -413,24 +389,24 @@ export function createApiRoutes({
       { query: searchQuery },
     )
     .post(
-      "/drafts",
+      '/drafts',
       async ({ body, set }) => {
         const outcome = await service.draftReply({
           key: body.key,
           instructions: body.instructions,
-        });
+        })
         if (!outcome.ok) {
-          const { status, code } = agentErrorStatus(outcome.error);
-          set.status = status;
-          return { error: code };
+          const { status, code } = agentErrorStatus(outcome.error)
+          set.status = status
+          return { error: code }
         }
 
-        return { draft: outcome.draft, model: outcome.model };
+        return { draft: outcome.draft, model: outcome.model }
       },
       { body: draftBody },
     )
     .post(
-      "/sends",
+      '/sends',
       ({ body, set }) => {
         const outcome = service.sendTemplate({
           templateId: body.templateId,
@@ -438,22 +414,22 @@ export function createApiRoutes({
           templateProps: body.templateProps,
           subject: body.subject,
           replyTo: body.replyTo,
-        });
+        })
         if (!outcome.ok) {
-          set.status = 404;
-          return { error: "not_found" };
+          set.status = 404
+          return { error: 'not_found' }
         }
 
         return {
           enqueued: true,
           sendLogId: outcome.sendLogId,
           jobId: outcome.jobId,
-        };
+        }
       },
       { body: sendBody },
     )
     .get(
-      "/needs-action",
+      '/needs-action',
       ({ query, set }) => {
         try {
           return service.listNeedsAction({
@@ -462,60 +438,57 @@ export function createApiRoutes({
             until: query.until,
             limit: query.limit,
             cursor: query.cursor,
-          });
+          })
         } catch (error) {
-          if (!isInvalidCursorError(error)) throw error;
-          set.status = 400;
-          return { error: "invalid_cursor" };
+          if (!isInvalidCursorError(error)) throw error
+          set.status = 400
+          return { error: 'invalid_cursor' }
         }
       },
       { query: needsActionQuery },
     )
     .post(
-      "/messages/:key/flags",
+      '/messages/:key/flags',
       async ({ params, body, set }) => {
-        const resolved = resolveMessageLocation(params.key, body.mailbox);
+        const resolved = resolveMessageLocation(params.key, body.mailbox)
         if (!resolved.ok) {
-          set.status = resolved.status;
-          return { error: resolved.error };
+          set.status = resolved.status
+          return { error: resolved.error }
         }
-        const { location, provider } = resolved;
+        const { location, provider } = resolved
 
-        const capabilities = await provider.capabilities();
+        const capabilities = await provider.capabilities()
         if (!capabilities.flag) {
-          set.status = 501;
-          return { error: "flag_not_supported" };
+          set.status = 501
+          return { error: 'flag_not_supported' }
         }
 
         await provider.setFlags(location.providerRef as MessageRef, {
           add: body.add,
           remove: body.remove,
           set: body.set,
-        });
-        return { ok: true };
+        })
+        return { ok: true }
       },
       { params: t.Object({ key: t.String() }), body: flagsBody },
     )
     .post(
-      "/messages/:key/move",
+      '/messages/:key/move',
       async ({ params, body, set }) => {
-        const resolved = resolveMessageLocation(params.key, body.mailbox);
+        const resolved = resolveMessageLocation(params.key, body.mailbox)
         if (!resolved.ok) {
-          set.status = resolved.status;
-          return { error: resolved.error };
+          set.status = resolved.status
+          return { error: resolved.error }
         }
-        const { location, provider } = resolved;
+        const { location, provider } = resolved
 
-        const capabilities = await provider.capabilities();
+        const capabilities = await provider.capabilities()
         if (!capabilities.move) {
-          set.status = 501;
-          return { error: "move_not_supported" };
+          set.status = 501
+          return { error: 'move_not_supported' }
         }
 
-        const newRef = await provider.move(
-          location.providerRef as MessageRef,
-          body.toMailbox,
-        );
+        const newRef = await provider.move(location.providerRef as MessageRef, body.toMailbox)
         // Records the new location under the fresh ref so a subsequent
         // flags/move call finds it immediately, then removes the OLD
         // mailbox's location row so it can't resolve a now-stale providerRef
@@ -535,20 +508,20 @@ export function createApiRoutes({
         // away.
         messages.upsertLocation(params.key, {
           mailbox: body.toMailbox,
-          uidValidity: "uidValidity" in newRef ? newRef.uidValidity : null,
-          uid: "uid" in newRef ? newRef.uid : null,
+          uidValidity: 'uidValidity' in newRef ? newRef.uidValidity : null,
+          uid: 'uid' in newRef ? newRef.uid : null,
           providerRef: newRef,
           lastSeenAt: new Date().toISOString(),
-        });
+        })
         if (body.toMailbox !== body.mailbox) {
-          messages.removeLocation(params.key, body.mailbox);
+          messages.removeLocation(params.key, body.mailbox)
         }
-        return { ok: true };
+        return { ok: true }
       },
       { params: t.Object({ key: t.String() }), body: moveBody },
     )
     .get(
-      "/submissions",
+      '/submissions',
       ({ query, set }) => {
         try {
           return mailSubmissions.listSubmissions({
@@ -557,51 +530,51 @@ export function createApiRoutes({
             delivered: parseFlag(query.delivered),
             limit: query.limit,
             cursor: query.cursor,
-          });
+          })
         } catch (error) {
-          if (!isInvalidCursorError(error)) throw error;
-          set.status = 400;
-          return { error: "invalid_cursor" };
+          if (!isInvalidCursorError(error)) throw error
+          set.status = 400
+          return { error: 'invalid_cursor' }
         }
       },
       { query: submissionsListQuery },
     )
-    .get("/templates", () => templates.listTemplates())
+    .get('/templates', () => templates.listTemplates())
     .get(
-      "/templates/:id/preview",
+      '/templates/:id/preview',
       async ({ params, set }) => {
-        const entry = findTemplateEntry(params.id);
+        const entry = findTemplateEntry(params.id)
         if (!entry) {
-          set.status = 404;
-          return { error: "not_found" };
+          set.status = 404
+          return { error: 'not_found' }
         }
 
-        const html = await render(renderTemplateElement(entry));
-        set.headers["content-type"] = "text/html; charset=utf-8";
+        const html = await render(renderTemplateElement(entry))
+        set.headers['content-type'] = 'text/html; charset=utf-8'
         // Belt-and-suspenders against the client's own iframe sandboxing:
         // this response is safe to load directly (a bookmark, a middle-click
         // "open in new tab" on the raw-HTML link) regardless of how it's
         // reached, not just when embedded through the sandboxed iframe.
-        set.headers["content-security-policy"] = "sandbox";
+        set.headers['content-security-policy'] = 'sandbox'
         // Cloudflare's Email Address Obfuscation rewrites addresses in HTML
         // responses into a script the sandbox blocks, so the preview showed
         // "[email protected]". `no-transform` and `email_off` are its
         // opt-outs; the markers must sit inside <html> (React Email emits no
         // <body> for these templates), outside it they were ignored.
-        set.headers["cache-control"] = "no-store, no-transform";
+        set.headers['cache-control'] = 'no-store, no-transform'
         return html
-          .replace("</head>", "</head><!--email_off-->")
-          .replace(/<\/html>\s*$/i, "<!--/email_off--></html>");
+          .replace('</head>', '</head><!--email_off-->')
+          .replace(/<\/html>\s*$/i, '<!--/email_off--></html>')
       },
       { params: t.Object({ id: t.String() }), query: templatePreviewQuery },
     )
     .post(
-      "/templates/:id/test-send",
+      '/templates/:id/test-send',
       ({ params, set }) => {
-        const entry = findTemplateEntry(params.id);
+        const entry = findTemplateEntry(params.id)
         if (!entry) {
-          set.status = 404;
-          return { error: "not_found" };
+          set.status = 404
+          return { error: 'not_found' }
         }
 
         const { sendLogId, jobId } = enqueueTemplateSend(
@@ -611,49 +584,48 @@ export function createApiRoutes({
             to: env.RECEIVER_EMAIL,
             subject: `Test send: ${entry.name}`,
             templateProps: entry.previewProps,
-            requestedBy: "test-send",
+            requestedBy: 'test-send',
           },
-        );
-        templates.recordTestSend(entry.id);
+        )
+        templates.recordTestSend(entry.id)
 
-        return { enqueued: true, sendLogId, jobId };
+        return { enqueued: true, sendLogId, jobId }
       },
       { params: t.Object({ id: t.String() }) },
     )
     .get(
-      "/send-log",
+      '/send-log',
       ({ query, set }) => {
         try {
           return sendLog.listSendLog({
             templateId: query.templateId,
             limit: query.limit,
             cursor: query.cursor,
-          });
+          })
         } catch (error) {
-          if (!isInvalidCursorError(error)) throw error;
-          set.status = 400;
-          return { error: "invalid_cursor" };
+          if (!isInvalidCursorError(error)) throw error
+          set.status = 400
+          return { error: 'invalid_cursor' }
         }
       },
       { query: sendLogListQuery },
     )
     .get(
-      "/sends/stats",
-      ({ query }) =>
-        sendLog.getSendStats({ days: query.days ?? DEFAULT_SEND_STATS_DAYS }),
+      '/sends/stats',
+      ({ query }) => sendLog.getSendStats({ days: query.days ?? DEFAULT_SEND_STATS_DAYS }),
       { query: sendStatsQuery },
     )
     .get(
-      "/sends/:id",
+      '/sends/:id',
       ({ params, set }) => {
-        const entry = sendLog.getSendLog(params.id);
+        const entry = sendLog.getSendLog(params.id)
         if (!entry) {
-          set.status = 404;
-          return { error: "not_found" };
+          set.status = 404
+          return { error: 'not_found' }
         }
 
         // Null once the 30-day retention pruned it (or it was never stored).
-        const stored = sendBodies.get(entry.id);
+        const stored = sendBodies.get(entry.id)
         return {
           ...entry,
           events: sendLog.listSendEvents(entry.id),
@@ -664,61 +636,61 @@ export function createApiRoutes({
                 storedAt: stored.createdAt,
               }
             : null,
-        };
+        }
       },
       { params: t.Object({ id: t.String() }) },
     )
-    .get("/ses/account", ({ set }) => {
-      const snapshot = sesAccount.get();
+    .get('/ses/account', ({ set }) => {
+      const snapshot = sesAccount.get()
       if (!snapshot) {
         // The hourly ses_account job has not run yet.
-        set.status = 404;
-        return { error: "not_found" };
+        set.status = 404
+        return { error: 'not_found' }
       }
-      return snapshot;
+      return snapshot
     })
     .get(
-      "/ses/suppressions",
+      '/ses/suppressions',
       async ({ query, set }) => {
         try {
           return await suppressions.list({
             reason: query.reason,
             cursor: query.cursor,
-          });
+          })
         } catch (error) {
-          log.warn("ses suppressions list failed", {
-            reason: error instanceof Error ? error.name : "unknown",
-          });
-          set.status = 502;
-          return { error: "ses_unavailable" };
+          log.warn('ses suppressions list failed', {
+            reason: error instanceof Error ? error.name : 'unknown',
+          })
+          set.status = 502
+          return { error: 'ses_unavailable' }
         }
       },
       { query: suppressionsListQuery },
     )
     .delete(
-      "/ses/suppressions/:email",
+      '/ses/suppressions/:email',
       async ({ params, set }) => {
         try {
-          await suppressions.remove(params.email);
+          await suppressions.remove(params.email)
         } catch (error) {
           if (isSuppressionNotFound(error)) {
-            set.status = 404;
-            return { error: "not_found" };
+            set.status = 404
+            return { error: 'not_found' }
           }
-          log.warn("ses suppression removal failed", {
-            reason: error instanceof Error ? error.name : "unknown",
-          });
-          set.status = 502;
-          return { error: "ses_unavailable" };
+          log.warn('ses suppression removal failed', {
+            reason: error instanceof Error ? error.name : 'unknown',
+          })
+          set.status = 502
+          return { error: 'ses_unavailable' }
         }
-        return { ok: true };
+        return { ok: true }
       },
-      { params: t.Object({ email: t.String({ format: "email" }) }) },
+      { params: t.Object({ email: t.String({ format: 'email' }) }) },
     )
     .get(
-      "/stats",
+      '/stats',
       ({ query }) => {
-        const since = query.since ?? defaultSince();
+        const since = query.since ?? defaultSince()
         return {
           messages: messages.getStats({ since }),
           jevComparison: mailSubmissions.getJevComparison({ since }),
@@ -727,35 +699,35 @@ export function createApiRoutes({
           // counts it replaces.
           jobs: jobs.counts(),
           accounts: accounts.listAccounts(),
-        };
+        }
       },
       { query: statsQuery },
     )
-    .post("/sync", () => {
+    .post('/sync', () => {
       // Async now: jobs don't run inline, so there is no tick result to
       // return synchronously and no in-memory "busy" flag to 409 on. A
       // duplicate enqueue is harmless (the sync_tick handler re-lists from
       // its saved cursor, per src/jobs/register.ts).
-      enqueueSyncTick(jobs);
-      return { enqueued: true };
+      enqueueSyncTick(jobs)
+      return { enqueued: true }
     })
     .get(
-      "/jobs/:id",
+      '/jobs/:id',
       ({ params, set }) => {
-        const job = jobs.getJob(params.id);
+        const job = jobs.getJob(params.id)
         if (!job) {
-          set.status = 404;
-          return { error: "not_found" };
+          set.status = 404
+          return { error: 'not_found' }
         }
-        return job;
+        return job
       },
       { params: t.Object({ id: t.String() }) },
-    );
+    )
 }
 
-const apiSessionSecret = sessionSecret(env.ADMIN_PASSWORD, env.COOKIE_SECRET);
+const apiSessionSecret = sessionSecret(env.ADMIN_PASSWORD, env.COOKIE_SECRET)
 
 export const apiRoutes = createApiRoutes({
   apiKey: env.API_KEY,
   session: apiSessionSecret ? { secret: apiSessionSecret } : undefined,
-});
+})

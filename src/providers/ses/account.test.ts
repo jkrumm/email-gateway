@@ -1,16 +1,16 @@
-import { GetAccountCommand } from "@aws-sdk/client-sesv2";
-import { describe, expect, test } from "bun:test";
-import { fetchSesAccount, toSesAccountSnapshot } from "./account";
+import { GetAccountCommand } from '@aws-sdk/client-sesv2'
+import { describe, expect, test } from 'bun:test'
+import { fetchSesAccount, toSesAccountSnapshot } from './account'
 
-const fetchedAt = new Date("2026-10-14T10:00:00.000Z");
+const fetchedAt = new Date('2026-10-14T10:00:00.000Z')
 
-describe("toSesAccountSnapshot", () => {
+describe('toSesAccountSnapshot', () => {
   test("maps GetAccount's response", () => {
     expect(
       toSesAccountSnapshot(
         {
           SendingEnabled: true,
-          EnforcementStatus: "HEALTHY",
+          EnforcementStatus: 'HEALTHY',
           ProductionAccessEnabled: true,
           SendQuota: {
             Max24HourSend: 50000,
@@ -22,16 +22,16 @@ describe("toSesAccountSnapshot", () => {
       ),
     ).toEqual({
       sendingEnabled: true,
-      enforcementStatus: "HEALTHY",
+      enforcementStatus: 'HEALTHY',
       productionAccess: true,
       max24HourSend: 50000,
       maxSendRate: 14,
       sentLast24Hours: 12,
-      fetchedAt: "2026-10-14T10:00:00.000Z",
-    });
-  });
+      fetchedAt: '2026-10-14T10:00:00.000Z',
+    })
+  })
 
-  test("a sparse response maps to the safe defaults", () => {
+  test('a sparse response maps to the safe defaults', () => {
     expect(toSesAccountSnapshot({}, fetchedAt)).toEqual({
       sendingEnabled: false,
       enforcementStatus: null,
@@ -39,38 +39,38 @@ describe("toSesAccountSnapshot", () => {
       max24HourSend: null,
       maxSendRate: null,
       sentLast24Hours: null,
-      fetchedAt: "2026-10-14T10:00:00.000Z",
-    });
-  });
-});
+      fetchedAt: '2026-10-14T10:00:00.000Z',
+    })
+  })
+})
 
-describe("fetchSesAccount", () => {
-  test("sends GetAccountCommand and maps the response", async () => {
-    const commands: unknown[] = [];
+describe('fetchSesAccount', () => {
+  test('sends GetAccountCommand and maps the response', async () => {
+    const commands: unknown[] = []
     const snapshot = await fetchSesAccount({
       client: {
         send: async (command: unknown) => {
-          commands.push(command);
-          return { SendingEnabled: true };
+          commands.push(command)
+          return { SendingEnabled: true }
         },
       } as never,
       now: () => fetchedAt,
-    });
+    })
 
-    expect(commands[0]).toBeInstanceOf(GetAccountCommand);
-    expect(snapshot.sendingEnabled).toBe(true);
-    expect(snapshot.fetchedAt).toBe("2026-10-14T10:00:00.000Z");
-  });
+    expect(commands[0]).toBeInstanceOf(GetAccountCommand)
+    expect(snapshot.sendingEnabled).toBe(true)
+    expect(snapshot.fetchedAt).toBe('2026-10-14T10:00:00.000Z')
+  })
 
-  test("propagates a client failure", async () => {
+  test('propagates a client failure', async () => {
     await expect(
       fetchSesAccount({
         client: {
           send: async () => {
-            throw new Error("AccessDenied");
+            throw new Error('AccessDenied')
           },
         } as never,
       }),
-    ).rejects.toThrow("AccessDenied");
-  });
-});
+    ).rejects.toThrow('AccessDenied')
+  })
+})

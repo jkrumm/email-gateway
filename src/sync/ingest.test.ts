@@ -1,46 +1,38 @@
-import { describe, expect, test } from "bun:test";
-import { openMailDatabase } from "../db/mail-client";
-import { createAccountsRepo } from "../db/accounts";
-import { createMessagesRepo } from "../db/messages";
-import type {
-  Envelope,
-  ListOptions,
-  MailProvider,
-  Page,
-  ProviderId,
-} from "../providers/port";
-import { _test } from "../telemetry/otel";
-import { mailboxRole } from "../utils/mailboxes";
-import { ingestMailbox } from "./ingest";
+import { describe, expect, test } from 'bun:test'
+import { openMailDatabase } from '../db/mail-client'
+import { createAccountsRepo } from '../db/accounts'
+import { createMessagesRepo } from '../db/messages'
+import type { Envelope, ListOptions, MailProvider, Page, ProviderId } from '../providers/port'
+import { _test } from '../telemetry/otel'
+import { mailboxRole } from '../utils/mailboxes'
+import { ingestMailbox } from './ingest'
 
 function repos() {
-  const db = openMailDatabase(":memory:");
-  return { accounts: createAccountsRepo(db), messages: createMessagesRepo(db) };
+  const db = openMailDatabase(':memory:')
+  return { accounts: createAccountsRepo(db), messages: createMessagesRepo(db) }
 }
 
-function envelope(
-  overrides: Partial<Envelope> & { ref: Envelope["ref"] },
-): Envelope {
+function envelope(overrides: Partial<Envelope> & { ref: Envelope['ref'] }): Envelope {
   return {
-    from: "sender@example.com",
-    to: ["hello@example.com"],
-    subject: "Subject",
-    date: "2026-01-01T00:00:00.000Z",
+    from: 'sender@example.com',
+    to: ['hello@example.com'],
+    subject: 'Subject',
+    date: '2026-01-01T00:00:00.000Z',
     size: 100,
     hasAttachments: false,
     flags: [],
     ...overrides,
-  };
+  }
 }
 
-function imapRef(uid: number, mailbox = "INBOX") {
+function imapRef(uid: number, mailbox = 'INBOX') {
   return {
-    provider: "proton" as const,
-    account: "hello@example.com",
+    provider: 'proton' as const,
+    account: 'hello@example.com',
     mailbox,
-    uidValidity: "1",
+    uidValidity: '1',
     uid,
-  };
+  }
 }
 
 // A cursor-paginated fake: page index is the cursor itself, so resuming a
@@ -49,19 +41,15 @@ function imapRef(uid: number, mailbox = "INBOX") {
 // cloned), so tests can mutate a mailbox's page arrays in place between
 // ingestMailbox calls to simulate new mail arriving.
 function fakeProvider({
-  id = "proton" as ProviderId,
-  account = "hello@example.com",
+  id = 'proton' as ProviderId,
+  account = 'hello@example.com',
   pages,
   onList,
 }: {
-  id?: ProviderId;
-  account?: string;
-  pages: Record<string, Page<Envelope>["items"][]>;
-  onList?: (
-    mailbox: string,
-    cursor: string | undefined,
-    options: ListOptions | undefined,
-  ) => void;
+  id?: ProviderId
+  account?: string
+  pages: Record<string, Page<Envelope>['items'][]>
+  onList?: (mailbox: string, cursor: string | undefined, options: ListOptions | undefined) => void
 }): MailProvider {
   return {
     id,
@@ -74,133 +62,130 @@ function fakeProvider({
         flag: false,
         move: false,
         idle: false,
-      };
+      }
     },
     async listMailboxes() {
-      return [];
+      return []
     },
     async list(mailbox, cursor, options) {
-      onList?.(mailbox, cursor, options);
-      const mailboxPages = pages[mailbox] ?? [];
-      const index = cursor ? Number(cursor) : 0;
-      const items = mailboxPages[index] ?? [];
-      const hasMore = index + 1 < mailboxPages.length;
-      return { items, cursor: hasMore ? String(index + 1) : undefined };
+      onList?.(mailbox, cursor, options)
+      const mailboxPages = pages[mailbox] ?? []
+      const index = cursor ? Number(cursor) : 0
+      const items = mailboxPages[index] ?? []
+      const hasMore = index + 1 < mailboxPages.length
+      return { items, cursor: hasMore ? String(index + 1) : undefined }
     },
     async read() {
-      throw new Error("not implemented in fake");
+      throw new Error('not implemented in fake')
     },
     async search() {
-      return [];
+      return []
     },
     async setFlags() {},
     async move(ref) {
-      return ref;
+      return ref
     },
-  };
+  }
 }
 
-describe("ingest telemetry", () => {
-  test("mailboxRole names only well-known folders", () => {
-    expect(mailboxRole("INBOX")).toBe("inbox");
-    expect(mailboxRole("[Gmail]/Sent")).toBe("sent");
-    expect(mailboxRole("Clients/Acme Corp")).toBe("other");
-  });
+describe('ingest telemetry', () => {
+  test('mailboxRole names only well-known folders', () => {
+    expect(mailboxRole('INBOX')).toBe('inbox')
+    expect(mailboxRole('[Gmail]/Sent')).toBe('sent')
+    expect(mailboxRole('Clients/Acme Corp')).toBe('other')
+  })
 
-  test("one mailbox is an imap.sync client span plus a sync.tick event, counts only", async () => {
-    const { accounts, messages } = repos();
+  test('one mailbox is an imap.sync client span plus a sync.tick event, counts only', async () => {
+    const { accounts, messages } = repos()
     const provider = fakeProvider({
       pages: {
-        "Clients/Acme": [
+        'Clients/Acme': [
           [
-            envelope({ ref: imapRef(1, "Clients/Acme") }),
-            envelope({ ref: imapRef(2, "Clients/Acme") }),
+            envelope({ ref: imapRef(1, 'Clients/Acme') }),
+            envelope({ ref: imapRef(2, 'Clients/Acme') }),
           ],
         ],
       },
-    });
-    const capture = _test.capture();
+    })
+    const capture = _test.capture()
 
     await ingestMailbox({
       provider,
-      mailbox: "Clients/Acme",
+      mailbox: 'Clients/Acme',
       accounts,
       messages,
-    });
-    capture.stop();
+    })
+    capture.stop()
 
-    const [span] = capture.spans;
-    expect(span?.name).toBe("imap.sync");
-    expect(span?.kind).toBe(3);
-    expect(span?.status.code).toBe(1);
+    const [span] = capture.spans
+    expect(span?.name).toBe('imap.sync')
+    expect(span?.kind).toBe(3)
+    expect(span?.status.code).toBe(1)
     expect(span?.attributes).toEqual([
-      { key: "mail.provider", value: { stringValue: "proton" } },
-      { key: "mail.mailbox", value: { stringValue: "other" } },
-      { key: "outcome", value: { stringValue: "ok" } },
-      { key: "sync.fetched", value: { intValue: "2" } },
-      { key: "sync.ingested", value: { intValue: "2" } },
-    ]);
-    const event = capture.logs.find((l) => l.body.stringValue === "sync.tick");
-    expect(event?.traceId).toBe(span?.traceId);
-    expect(JSON.stringify(capture.logs)).not.toContain("Acme");
-    expect(JSON.stringify(capture.logs)).not.toContain("example.com");
-  });
+      { key: 'mail.provider', value: { stringValue: 'proton' } },
+      { key: 'mail.mailbox', value: { stringValue: 'other' } },
+      { key: 'outcome', value: { stringValue: 'ok' } },
+      { key: 'sync.fetched', value: { intValue: '2' } },
+      { key: 'sync.ingested', value: { intValue: '2' } },
+    ])
+    const event = capture.logs.find((l) => l.body.stringValue === 'sync.tick')
+    expect(event?.traceId).toBe(span?.traceId)
+    expect(JSON.stringify(capture.logs)).not.toContain('Acme')
+    expect(JSON.stringify(capture.logs)).not.toContain('example.com')
+  })
 
-  test("a failure leaves no raw folder name or error text on the span", async () => {
-    const { accounts, messages } = repos();
-    const provider = fakeProvider({ pages: {} });
+  test('a failure leaves no raw folder name or error text on the span', async () => {
+    const { accounts, messages } = repos()
+    const provider = fakeProvider({ pages: {} })
     provider.list = async () => {
-      throw new Error("Mailbox doesn't exist: Clients/Acme");
-    };
-    const capture = _test.capture();
+      throw new Error("Mailbox doesn't exist: Clients/Acme")
+    }
+    const capture = _test.capture()
 
     await ingestMailbox({
       provider,
-      mailbox: "Clients/Acme",
+      mailbox: 'Clients/Acme',
       accounts,
       messages,
-    });
-    capture.stop();
+    })
+    capture.stop()
 
     expect(capture.spans[0]?.status).toEqual({
       code: 2,
-      message: "other: sync failed",
-    });
-    expect(JSON.stringify([capture.spans, capture.logs])).not.toContain("Acme");
-  });
+      message: 'other: sync failed',
+    })
+    expect(JSON.stringify([capture.spans, capture.logs])).not.toContain('Acme')
+  })
 
-  test("a provider failure is an error span and a warn event", async () => {
-    const { accounts, messages } = repos();
-    const provider = fakeProvider({ pages: {} });
+  test('a provider failure is an error span and a warn event', async () => {
+    const { accounts, messages } = repos()
+    const provider = fakeProvider({ pages: {} })
     provider.list = async () => {
-      throw new Error("connection reset");
-    };
-    const capture = _test.capture();
+      throw new Error('connection reset')
+    }
+    const capture = _test.capture()
 
     const result = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
-    capture.stop();
+    })
+    capture.stop()
 
-    expect(result.errors).toHaveLength(1);
-    expect(capture.spans[0]?.status.code).toBe(2);
+    expect(result.errors).toHaveLength(1)
+    expect(capture.spans[0]?.status.code).toBe(2)
     expect(capture.spans[0]?.attributes).toContainEqual({
-      key: "outcome",
-      value: { stringValue: "error" },
-    });
-    expect(
-      capture.logs.find((l) => l.body.stringValue === "sync.tick")
-        ?.severityText,
-    ).toBe("WARN");
-  });
-});
+      key: 'outcome',
+      value: { stringValue: 'error' },
+    })
+    expect(capture.logs.find((l) => l.body.stringValue === 'sync.tick')?.severityText).toBe('WARN')
+  })
+})
 
-describe("ingestMailbox", () => {
-  test("paginates across multiple pages in one run (head pass plus backfill catching up to it)", async () => {
-    const { accounts, messages } = repos();
+describe('ingestMailbox', () => {
+  test('paginates across multiple pages in one run (head pass plus backfill catching up to it)', async () => {
+    const { accounts, messages } = repos()
     const provider = fakeProvider({
       pages: {
         INBOX: [
@@ -208,77 +193,65 @@ describe("ingestMailbox", () => {
           [envelope({ ref: imapRef(3) })],
         ],
       },
-    });
+    })
 
     const result = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
+    })
 
-    expect(result).toEqual({ new: 3, errors: [] });
-    expect(
-      accounts.getAccount("proton:hello@example.com")?.cursors[
-        "INBOX#backfill"
-      ],
-    ).toBe("done");
-  });
+    expect(result).toEqual({ new: 3, errors: [] })
+    expect(accounts.getAccount('proton:hello@example.com')?.cursors['INBOX#backfill']).toBe('done')
+  })
 
-  test("requests skipFastPath on the head call exactly when backfill is about to be seeded from its cursor", async () => {
-    const { accounts, messages } = repos();
+  test('requests skipFastPath on the head call exactly when backfill is about to be seeded from its cursor', async () => {
+    const { accounts, messages } = repos()
     const calls: {
-      cursor: string | undefined;
-      options: ListOptions | undefined;
-    }[] = [];
+      cursor: string | undefined
+      options: ListOptions | undefined
+    }[] = []
     const provider = fakeProvider({
       pages: {
         INBOX: [[envelope({ ref: imapRef(1) })]],
       },
       onList: (_mailbox, cursor, options) => calls.push({ cursor, options }),
-    });
+    })
 
     // First tick: no stored backfill cursor yet — this is the seeding call.
-    await ingestMailbox({ provider, mailbox: "INBOX", accounts, messages });
-    expect(calls).toEqual([
-      { cursor: undefined, options: { skipFastPath: true } },
-    ]);
+    await ingestMailbox({ provider, mailbox: 'INBOX', accounts, messages })
+    expect(calls).toEqual([{ cursor: undefined, options: { skipFastPath: true } }])
 
     // Backfill is already "done" after the first tick (one-page mailbox), so
     // the second tick's head call is an ordinary one — never a seeding call.
-    calls.length = 0;
-    await ingestMailbox({ provider, mailbox: "INBOX", accounts, messages });
-    expect(calls).toEqual([
-      { cursor: undefined, options: { skipFastPath: false } },
-    ]);
-  });
+    calls.length = 0
+    await ingestMailbox({ provider, mailbox: 'INBOX', accounts, messages })
+    expect(calls).toEqual([{ cursor: undefined, options: { skipFastPath: false } }])
+  })
 
-  test("re-seeds backfill with skipFastPath after a stale cursor resets it to restart", async () => {
-    const { accounts, messages } = repos();
+  test('re-seeds backfill with skipFastPath after a stale cursor resets it to restart', async () => {
+    const { accounts, messages } = repos()
     accounts.upsertAccount({
-      id: "proton:hello@example.com",
-      provider: "proton",
-      address: "hello@example.com",
-    });
-    accounts.updateCursor(
-      "proton:hello@example.com",
-      "INBOX#backfill",
-      "restart",
-    );
-    const calls: { options: ListOptions | undefined }[] = [];
+      id: 'proton:hello@example.com',
+      provider: 'proton',
+      address: 'hello@example.com',
+    })
+    accounts.updateCursor('proton:hello@example.com', 'INBOX#backfill', 'restart')
+    const calls: { options: ListOptions | undefined }[] = []
     const provider = fakeProvider({
       pages: { INBOX: [[envelope({ ref: imapRef(1) })]] },
       onList: (_mailbox, _cursor, options) => calls.push({ options }),
-    });
+    })
 
-    await ingestMailbox({ provider, mailbox: "INBOX", accounts, messages });
+    await ingestMailbox({ provider, mailbox: 'INBOX', accounts, messages })
 
-    expect(calls[0]).toEqual({ options: { skipFastPath: true } });
-  });
+    expect(calls[0]).toEqual({ options: { skipFastPath: true } })
+  })
 
-  test("persists the backfill cursor and resumes from it on the next call", async () => {
-    const { accounts, messages } = repos();
-    const listedCursors: (string | undefined)[] = [];
+  test('persists the backfill cursor and resumes from it on the next call', async () => {
+    const { accounts, messages } = repos()
+    const listedCursors: (string | undefined)[] = []
     const provider = fakeProvider({
       pages: {
         INBOX: [
@@ -288,197 +261,183 @@ describe("ingestMailbox", () => {
         ],
       },
       onList: (_mailbox, cursor) => listedCursors.push(cursor),
-    });
+    })
 
     // Head pass (page 0) + one backfill page (page 1) per tick, since
     // maxPagesPerRun bounds the backfill pass to one page.
     const first = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
       maxPagesPerRun: 1,
-    });
-    expect(first.new).toBe(2);
+    })
+    expect(first.new).toBe(2)
 
-    const account = accounts.getAccount("proton:hello@example.com");
-    expect(account?.cursors["INBOX#backfill"]).toBe("2");
+    const account = accounts.getAccount('proton:hello@example.com')
+    expect(account?.cursors['INBOX#backfill']).toBe('2')
 
     const second = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
       maxPagesPerRun: 1,
-    });
-    expect(second.new).toBe(1);
-    expect(
-      accounts.getAccount("proton:hello@example.com")?.cursors[
-        "INBOX#backfill"
-      ],
-    ).toBe("done");
-    expect(listedCursors).toEqual([undefined, "1", undefined, "2"]);
-  });
+    })
+    expect(second.new).toBe(1)
+    expect(accounts.getAccount('proton:hello@example.com')?.cursors['INBOX#backfill']).toBe('done')
+    expect(listedCursors).toEqual([undefined, '1', undefined, '2'])
+  })
 
-  test("re-listing a known message is not counted as new and does not re-enqueue", async () => {
-    const { accounts, messages } = repos();
+  test('re-listing a known message is not counted as new and does not re-enqueue', async () => {
+    const { accounts, messages } = repos()
     const provider = fakeProvider({
       pages: { INBOX: [[envelope({ ref: imapRef(1) })]] },
-    });
-    const enqueued: string[] = [];
+    })
+    const enqueued: string[] = []
 
     await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
       enqueueClassify: (key) => enqueued.push(key),
-    });
+    })
     const result = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
       enqueueClassify: (key) => enqueued.push(key),
-    });
+    })
 
-    expect(result.new).toBe(0);
-    expect(enqueued).toHaveLength(1);
-  });
+    expect(result.new).toBe(0)
+    expect(enqueued).toHaveLength(1)
+  })
 
-  test("ingests every message as inbound", async () => {
-    const { accounts, messages } = repos();
+  test('ingests every message as inbound', async () => {
+    const { accounts, messages } = repos()
     const provider = fakeProvider({
       pages: { INBOX: [[envelope({ ref: imapRef(1) })]] },
-    });
+    })
 
-    await ingestMailbox({ provider, mailbox: "INBOX", accounts, messages });
+    await ingestMailbox({ provider, mailbox: 'INBOX', accounts, messages })
 
-    expect(messages.listMessages().rows.map((row) => row.direction)).toEqual([
-      "inbound",
-    ]);
-  });
+    expect(messages.listMessages().rows.map((row) => row.direction)).toEqual(['inbound'])
+  })
 
-  test("a mailbox named sent is still ingested as inbound", async () => {
-    const { accounts, messages } = repos();
+  test('a mailbox named sent is still ingested as inbound', async () => {
+    const { accounts, messages } = repos()
     const provider = fakeProvider({
       pages: { sent: [[envelope({ ref: imapRef(1) })]] },
-    });
+    })
 
-    await ingestMailbox({ provider, mailbox: "sent", accounts, messages });
+    await ingestMailbox({ provider, mailbox: 'sent', accounts, messages })
 
-    expect(messages.listMessages().rows.map((row) => row.direction)).toEqual([
-      "inbound",
-    ]);
-  });
+    expect(messages.listMessages().rows.map((row) => row.direction)).toEqual(['inbound'])
+  })
 
-  test("a provider failure mid-run is recorded and does not throw, and a later run on the same mailbox still works", async () => {
-    const { accounts, messages } = repos();
-    let calls = 0;
+  test('a provider failure mid-run is recorded and does not throw, and a later run on the same mailbox still works', async () => {
+    const { accounts, messages } = repos()
+    let calls = 0
     const provider: MailProvider = {
       ...fakeProvider({ pages: {} }),
       async list() {
-        calls++;
-        if (calls === 1) throw new Error("connection reset");
-        return { items: [envelope({ ref: imapRef(9) })], cursor: undefined };
+        calls++
+        if (calls === 1) throw new Error('connection reset')
+        return { items: [envelope({ ref: imapRef(9) })], cursor: undefined }
       },
-    };
+    }
 
     const first = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
-    expect(first.errors).toEqual(["INBOX: connection reset"]);
-    expect(accounts.getAccount("proton:hello@example.com")?.lastError).toBe(
-      "connection reset",
-    );
+    })
+    expect(first.errors).toEqual(['INBOX: connection reset'])
+    expect(accounts.getAccount('proton:hello@example.com')?.lastError).toBe('connection reset')
 
     const second = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
-    expect(second).toEqual({ new: 1, errors: [] });
-  });
+    })
+    expect(second).toEqual({ new: 1, errors: [] })
+  })
 
-  test("steady state: new mail at the top is detected by the head pass alone once backfill is done, with zero backfill list() calls", async () => {
-    const { accounts, messages } = repos();
-    const listCalls: (string | undefined)[] = [];
-    const pages: Record<string, Page<Envelope>["items"][]> = {
+  test('steady state: new mail at the top is detected by the head pass alone once backfill is done, with zero backfill list() calls', async () => {
+    const { accounts, messages } = repos()
+    const listCalls: (string | undefined)[] = []
+    const pages: Record<string, Page<Envelope>['items'][]> = {
       INBOX: [
         [envelope({ ref: imapRef(1) }), envelope({ ref: imapRef(2) })],
         [envelope({ ref: imapRef(3) })],
       ],
-    };
+    }
     const provider = fakeProvider({
       pages,
       onList: (_mailbox, cursor) => listCalls.push(cursor),
-    });
+    })
 
     const first = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
-    expect(first.new).toBe(3);
-    expect(
-      accounts.getAccount("proton:hello@example.com")?.cursors[
-        "INBOX#backfill"
-      ],
-    ).toBe("done");
+    })
+    expect(first.new).toBe(3)
+    expect(accounts.getAccount('proton:hello@example.com')?.cursors['INBOX#backfill']).toBe('done')
 
     // New mail arrives at the very top of the mailbox.
-    pages.INBOX[0]!.unshift(envelope({ ref: imapRef(99) }));
-    listCalls.length = 0;
+    pages.INBOX[0]!.unshift(envelope({ ref: imapRef(99) }))
+    listCalls.length = 0
 
     const second = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
+    })
 
-    expect(second.new).toBe(1);
+    expect(second.new).toBe(1)
     // Only the head pass ran — backfill is "done" and made no provider calls.
-    expect(listCalls).toEqual([undefined]);
-  });
+    expect(listCalls).toEqual([undefined])
+  })
 
-  test("regression: new top-of-mailbox mail is still detected after several no-op ticks once the mailbox has exceeded one page", async () => {
-    const { accounts, messages } = repos();
-    const pages: Record<string, Page<Envelope>["items"][]> = {
+  test('regression: new top-of-mailbox mail is still detected after several no-op ticks once the mailbox has exceeded one page', async () => {
+    const { accounts, messages } = repos()
+    const pages: Record<string, Page<Envelope>['items'][]> = {
       INBOX: [
         [envelope({ ref: imapRef(1) }), envelope({ ref: imapRef(2) })],
         [envelope({ ref: imapRef(3) })],
         [envelope({ ref: imapRef(4) })],
       ],
-    };
-    const provider = fakeProvider({ pages });
+    }
+    const provider = fakeProvider({ pages })
 
     // Several ticks, simulating the 5-minute schedule, with no new mail.
     for (let tick = 0; tick < 3; tick++) {
-      await ingestMailbox({ provider, mailbox: "INBOX", accounts, messages });
+      await ingestMailbox({ provider, mailbox: 'INBOX', accounts, messages })
     }
 
     // New mail arrives at the top of the mailbox.
-    pages.INBOX[0]!.unshift(envelope({ ref: imapRef(100) }));
+    pages.INBOX[0]!.unshift(envelope({ ref: imapRef(100) }))
 
     const result = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
+    })
 
-    expect(result.new).toBe(1);
-  });
+    expect(result.new).toBe(1)
+  })
 
-  test("backfill resumes correctly across multiple ticks and eventually reaches done, ingesting every message exactly once", async () => {
-    const { accounts, messages } = repos();
-    const pages: Record<string, Page<Envelope>["items"][]> = {
+  test('backfill resumes correctly across multiple ticks and eventually reaches done, ingesting every message exactly once', async () => {
+    const { accounts, messages } = repos()
+    const pages: Record<string, Page<Envelope>['items'][]> = {
       INBOX: [
         [envelope({ ref: imapRef(1) })],
         [envelope({ ref: imapRef(2) })],
@@ -486,145 +445,127 @@ describe("ingestMailbox", () => {
         [envelope({ ref: imapRef(4) })],
         [envelope({ ref: imapRef(5) })],
       ],
-    };
-    const provider = fakeProvider({ pages });
+    }
+    const provider = fakeProvider({ pages })
 
-    let totalNew = 0;
-    let ticks = 0;
+    let totalNew = 0
+    let ticks = 0
     while (
-      accounts.getAccount("proton:hello@example.com")?.cursors[
-        "INBOX#backfill"
-      ] !== "done" &&
+      accounts.getAccount('proton:hello@example.com')?.cursors['INBOX#backfill'] !== 'done' &&
       ticks < 10
     ) {
       const result = await ingestMailbox({
         provider,
-        mailbox: "INBOX",
+        mailbox: 'INBOX',
         accounts,
         messages,
         maxPagesPerRun: 1,
-      });
-      totalNew += result.new;
-      ticks++;
+      })
+      totalNew += result.new
+      ticks++
     }
 
-    expect(
-      accounts.getAccount("proton:hello@example.com")?.cursors[
-        "INBOX#backfill"
-      ],
-    ).toBe("done");
-    expect(totalNew).toBe(5);
-    expect(messages.listMessages().rows).toHaveLength(5);
-  });
+    expect(accounts.getAccount('proton:hello@example.com')?.cursors['INBOX#backfill']).toBe('done')
+    expect(totalNew).toBe(5)
+    expect(messages.listMessages().rows).toHaveLength(5)
+  })
 
-  test("small mailbox that fits in one head page marks backfill done immediately with no extra list() calls", async () => {
-    const { accounts, messages } = repos();
-    const listCalls: (string | undefined)[] = [];
+  test('small mailbox that fits in one head page marks backfill done immediately with no extra list() calls', async () => {
+    const { accounts, messages } = repos()
+    const listCalls: (string | undefined)[] = []
     const provider = fakeProvider({
       pages: { INBOX: [[envelope({ ref: imapRef(1) })]] },
       onList: (_mailbox, cursor) => listCalls.push(cursor),
-    });
+    })
 
     const result = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
+    })
 
-    expect(result.new).toBe(1);
-    expect(listCalls).toEqual([undefined]);
-    expect(
-      accounts.getAccount("proton:hello@example.com")?.cursors[
-        "INBOX#backfill"
-      ],
-    ).toBe("done");
-  });
+    expect(result.new).toBe(1)
+    expect(listCalls).toEqual([undefined])
+    expect(accounts.getAccount('proton:hello@example.com')?.cursors['INBOX#backfill']).toBe('done')
+  })
 
   test("a head-pass failure is recorded without disturbing a previously completed backfill's done state", async () => {
-    const { accounts, messages } = repos();
-    let failNext = false;
+    const { accounts, messages } = repos()
+    let failNext = false
     const provider: MailProvider = {
       ...fakeProvider({
         pages: { INBOX: [[envelope({ ref: imapRef(1) })]] },
       }),
       async list(mailbox, cursor) {
-        if (failNext) throw new Error("connection reset");
-        const mailboxPages: Page<Envelope>["items"][] =
-          mailbox === "INBOX" ? [[envelope({ ref: imapRef(1) })]] : [];
-        const index = cursor ? Number(cursor) : 0;
-        const items = mailboxPages[index] ?? [];
-        const hasMore = index + 1 < mailboxPages.length;
-        return { items, cursor: hasMore ? String(index + 1) : undefined };
+        if (failNext) throw new Error('connection reset')
+        const mailboxPages: Page<Envelope>['items'][] =
+          mailbox === 'INBOX' ? [[envelope({ ref: imapRef(1) })]] : []
+        const index = cursor ? Number(cursor) : 0
+        const items = mailboxPages[index] ?? []
+        const hasMore = index + 1 < mailboxPages.length
+        return { items, cursor: hasMore ? String(index + 1) : undefined }
       },
-    };
+    }
 
     const first = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
-    expect(first.errors).toEqual([]);
-    expect(
-      accounts.getAccount("proton:hello@example.com")?.cursors[
-        "INBOX#backfill"
-      ],
-    ).toBe("done");
+    })
+    expect(first.errors).toEqual([])
+    expect(accounts.getAccount('proton:hello@example.com')?.cursors['INBOX#backfill']).toBe('done')
 
-    failNext = true;
+    failNext = true
     const second = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
+    })
 
-    expect(second.errors).toEqual(["INBOX: connection reset"]);
-    expect(
-      accounts.getAccount("proton:hello@example.com")?.cursors[
-        "INBOX#backfill"
-      ],
-    ).toBe("done");
-  });
+    expect(second.errors).toEqual(['INBOX: connection reset'])
+    expect(accounts.getAccount('proton:hello@example.com')?.cursors['INBOX#backfill']).toBe('done')
+  })
 
   test("one item's enqueueClassify failure doesn't lose the rest of the page", async () => {
-    const { accounts, messages } = repos();
+    const { accounts, messages } = repos()
     const provider = fakeProvider({
       pages: {
         INBOX: [[envelope({ ref: imapRef(1) }), envelope({ ref: imapRef(2) })]],
       },
-    });
+    })
 
-    const enqueued: string[] = [];
-    let calls = 0;
+    const enqueued: string[] = []
+    let calls = 0
     const result = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
       enqueueClassify: (key) => {
-        calls++;
-        if (calls === 1) throw new Error("jobs table busy");
-        enqueued.push(key);
+        calls++
+        if (calls === 1) throw new Error('jobs table busy')
+        enqueued.push(key)
       },
-    });
+    })
 
     // Both messages are still stored and counted new, even though the first
     // one's enqueue threw — a jobs-table hiccup on one item must not lose
     // the rest of the page.
-    expect(result.new).toBe(2);
-    expect(result.errors).toEqual([]);
-    expect(enqueued).toHaveLength(1);
-  });
+    expect(result.new).toBe(2)
+    expect(result.errors).toEqual([])
+    expect(enqueued).toHaveLength(1)
+  })
 
-  test("a stale backfill cursor (UIDVALIDITY changed) resets instead of retrying forever", async () => {
-    const { accounts, messages } = repos();
-    let backfillCalls = 0;
+  test('a stale backfill cursor (UIDVALIDITY changed) resets instead of retrying forever', async () => {
+    const { accounts, messages } = repos()
+    let backfillCalls = 0
 
     const provider: MailProvider = {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       async capabilities() {
         return {
           list: true,
@@ -633,102 +574,98 @@ describe("ingestMailbox", () => {
           flag: false,
           move: false,
           idle: false,
-        };
+        }
       },
       async listMailboxes() {
-        return [];
+        return []
       },
       async list(_mailbox, cursor) {
         if (cursor === undefined) {
           // Head pass: one message, with a continuation cursor so the
           // backfill pass has somewhere to seed from.
-          return { items: [envelope({ ref: imapRef(1) })], cursor: "1" };
+          return { items: [envelope({ ref: imapRef(1) })], cursor: '1' }
         }
         // Backfill pass, using the seeded cursor: simulate the mailbox
         // having been recreated (UIDVALIDITY bump) since that cursor was
         // issued — exactly the error src/providers/imap/provider.ts's
         // imapList throws in this situation.
-        backfillCalls++;
-        throw new Error(
-          "stale list() cursor: issued for UIDVALIDITY 1, mailbox INBOX is now at 2",
-        );
+        backfillCalls++
+        throw new Error('stale list() cursor: issued for UIDVALIDITY 1, mailbox INBOX is now at 2')
       },
       async read() {
-        throw new Error("not implemented in fake");
+        throw new Error('not implemented in fake')
       },
       async search() {
-        return [];
+        return []
       },
       async setFlags() {},
       async move(ref) {
-        return ref;
+        return ref
       },
-    };
+    }
 
     const first = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
+    })
     expect(first.errors).toEqual([
-      "INBOX: stale list() cursor: issued for UIDVALIDITY 1, mailbox INBOX is now at 2",
-    ]);
-    expect(
-      accounts.getAccount("proton:hello@example.com")?.cursors[
-        "INBOX#backfill"
-      ],
-    ).toBe("restart");
-    expect(backfillCalls).toBe(1);
+      'INBOX: stale list() cursor: issued for UIDVALIDITY 1, mailbox INBOX is now at 2',
+    ])
+    expect(accounts.getAccount('proton:hello@example.com')?.cursors['INBOX#backfill']).toBe(
+      'restart',
+    )
+    expect(backfillCalls).toBe(1)
 
     // Next tick: the reset cursor re-seeds from the head pass's own
     // continuation point instead of retrying the same doomed cursor again.
     const second = await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-    });
+    })
     expect(second.errors).toEqual([
-      "INBOX: stale list() cursor: issued for UIDVALIDITY 1, mailbox INBOX is now at 2",
-    ]);
-    expect(backfillCalls).toBe(2);
-  });
+      'INBOX: stale list() cursor: issued for UIDVALIDITY 1, mailbox INBOX is now at 2',
+    ])
+    expect(backfillCalls).toBe(2)
+  })
 
-  test("a message with no provider date keeps its originally-assigned date across multiple ticks instead of drifting forward", async () => {
-    const { accounts, messages } = repos();
+  test('a message with no provider date keeps its originally-assigned date across multiple ticks instead of drifting forward', async () => {
+    const { accounts, messages } = repos()
     const provider = fakeProvider({
       pages: { INBOX: [[envelope({ ref: imapRef(1), date: null })]] },
-    });
+    })
 
     await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-      now: () => new Date("2026-09-28T08:00:00.000Z"),
-    });
+      now: () => new Date('2026-09-28T08:00:00.000Z'),
+    })
 
-    const firstDate = messages.listMessages().rows[0]?.date;
-    expect(firstDate).toBe("2026-09-28T08:00:00.000Z");
+    const firstDate = messages.listMessages().rows[0]?.date
+    expect(firstDate).toBe('2026-09-28T08:00:00.000Z')
 
     // A later tick, still no provider date, at a much later "now" — the
     // stored date must not advance.
     await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-      now: () => new Date("2026-09-28T12:00:00.000Z"),
-    });
+      now: () => new Date('2026-09-28T12:00:00.000Z'),
+    })
     await ingestMailbox({
       provider,
-      mailbox: "INBOX",
+      mailbox: 'INBOX',
       accounts,
       messages,
-      now: () => new Date("2026-09-29T08:00:00.000Z"),
-    });
+      now: () => new Date('2026-09-29T08:00:00.000Z'),
+    })
 
-    expect(messages.listMessages().rows[0]?.date).toBe(firstDate);
-  });
-});
+    expect(messages.listMessages().rows[0]?.date).toBe(firstDate)
+  })
+})

@@ -6,20 +6,20 @@ export function hostAllowed(
   hostHeader: string | null | undefined,
   mailHost: string | undefined,
 ): boolean {
-  if (!mailHost) return true;
-  if (!hostHeader) return false;
-  return hostnameOf(hostHeader) === hostnameOf(mailHost);
+  if (!mailHost) return true
+  if (!hostHeader) return false
+  return hostnameOf(hostHeader) === hostnameOf(mailHost)
 }
 
 // Compares only the hostname: the request's Host carries a port (e.g.
 // `mail.test:3010`) while MAIL_HOST is a bare hostname. IPv6 literals are
 // bracketed (`[::1]:3010`), so the port colon is only the one after `]`.
 function hostnameOf(host: string): string {
-  const trimmed = host.trim().toLowerCase();
-  if (trimmed.startsWith("[")) {
-    const end = trimmed.indexOf("]");
-    return end === -1 ? trimmed : trimmed.slice(1, end);
+  const trimmed = host.trim().toLowerCase()
+  if (trimmed.startsWith('[')) {
+    const end = trimmed.indexOf(']')
+    return end === -1 ? trimmed : trimmed.slice(1, end)
   }
-  const colon = trimmed.indexOf(":");
-  return colon === -1 ? trimmed : trimmed.slice(0, colon);
+  const colon = trimmed.indexOf(':')
+  return colon === -1 ? trimmed : trimmed.slice(0, colon)
 }

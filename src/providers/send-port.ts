@@ -1,5 +1,5 @@
-import { render } from "@react-email/render";
-import type { ReactElement } from "react";
+import { render } from '@react-email/render'
+import type { ReactElement } from 'react'
 
 // The outbound half of a mail provider, kept separate from MailProvider
 // (src/providers/port.ts): sending is provider-neutral and driven by a
@@ -7,33 +7,30 @@ import type { ReactElement } from "react";
 // Every implementation throws on a failed send; callers never inspect a
 // provider-specific error shape.
 export interface SendMessage {
-  from: string;
-  to: string;
-  replyTo?: string;
-  subject: string;
-  html: string;
-  text: string;
+  from: string
+  to: string
+  replyTo?: string
+  subject: string
+  html: string
+  text: string
   // Forwarded as the provider's own idempotency key when it supports one —
   // the send job passes its send_log row id so a re-run cannot duplicate.
-  idempotencyKey?: string;
+  idempotencyKey?: string
   // Free-form labels for the provider's own reporting (SES message tags):
   // `template` is the template id, `source` what requested the send (route,
   // test-send, agent). A provider sanitizes them to what it accepts.
-  tags?: Record<string, string>;
+  tags?: Record<string, string>
 }
 
 export interface SendProvider {
-  id: string;
-  send(message: SendMessage): Promise<{ providerMessageId: string }>;
+  id: string
+  send(message: SendMessage): Promise<{ providerMessageId: string }>
 }
 
 // Rendered once per send, so a provider never has to know about React.
 export async function renderTemplate(
   element: ReactElement,
 ): Promise<{ html: string; text: string }> {
-  const [html, text] = await Promise.all([
-    render(element),
-    render(element, { plainText: true }),
-  ]);
-  return { html, text };
+  const [html, text] = await Promise.all([render(element), render(element, { plainText: true })])
+  return { html, text }
 }

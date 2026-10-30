@@ -1,12 +1,12 @@
-import { Container, Heading, Html, Section } from "react-email";
-import type { ReactNode } from "react";
+import { Container, Heading, Html, Section } from 'react-email'
+import type { ReactNode } from 'react'
 
 export default function FppLayout({ children }: { children: ReactNode }) {
   return (
     <Html
       style={{
-        fontFamily: "sans-serif",
-        padding: "30px 20px",
+        fontFamily: 'sans-serif',
+        padding: '30px 20px',
       }}
       lang="en"
     >
@@ -14,20 +14,20 @@ export default function FppLayout({ children }: { children: ReactNode }) {
         <a
           href="https://free-planning-poker.com/?source=email"
           target="_blank"
-          style={{ textDecoration: "none" }}
+          style={{ textDecoration: 'none' }}
         >
           <Section
             style={{
-              padding: "20px",
+              padding: '20px',
             }}
           >
             <Heading
               as="h1"
               style={{
-                margin: "0",
-                textAlign: "center",
-                fontWeight: "bold",
-                color: "#1971C2 !important",
+                margin: '0',
+                textAlign: 'center',
+                fontWeight: 'bold',
+                color: '#1971C2 !important',
               }}
             >
               Free-Planning-Poker.com
@@ -36,13 +36,13 @@ export default function FppLayout({ children }: { children: ReactNode }) {
         </a>
         <Section
           style={{
-            borderTop: "0",
-            padding: "20px",
+            borderTop: '0',
+            padding: '20px',
           }}
         >
           {children}
         </Section>
       </Container>
     </Html>
-  );
+  )
 }

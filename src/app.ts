@@ -1,43 +1,43 @@
-import { Elysia, type AnyElysia } from "elysia";
-import { fppRoutes } from "./routes/fpp";
-import { jkrummContactRoutes } from "./routes/jkrumm-contact";
-import { sySerendipityRoutes } from "./routes/sy-serendipity";
-import { athenaRoutes } from "./routes/athena";
-import { shutterflowRoutes } from "./routes/shutterflow";
-import { sySerendipityRequestsRoutes } from "./routes/sy-serendipity-requests";
-import { sesWebhookRoutes } from "./routes/ses-webhook";
-import { webRoutes } from "./web/plugin";
-import { apiRoutes } from "./api/plugin";
-import { mcpRoutes } from "./mcp/plugin";
-import { env } from "./env";
-import { hostAllowed } from "./host-gate";
-import { httpTelemetry } from "./telemetry/http";
+import { Elysia, type AnyElysia } from 'elysia'
+import { fppRoutes } from './routes/fpp'
+import { jkrummContactRoutes } from './routes/jkrumm-contact'
+import { sySerendipityRoutes } from './routes/sy-serendipity'
+import { athenaRoutes } from './routes/athena'
+import { shutterflowRoutes } from './routes/shutterflow'
+import { sySerendipityRequestsRoutes } from './routes/sy-serendipity-requests'
+import { sesWebhookRoutes } from './routes/ses-webhook'
+import { webRoutes } from './web/plugin'
+import { apiRoutes } from './api/plugin'
+import { mcpRoutes } from './mcp/plugin'
+import { env } from './env'
+import { hostAllowed } from './host-gate'
+import { httpTelemetry } from './telemetry/http'
 
 export interface CreateAppOptions<
   TWeb extends AnyElysia = typeof webRoutes,
   TApi extends AnyElysia = typeof apiRoutes,
 > {
   // Overrides env.MAIL_HOST; unset -> the gate is a no-op.
-  mailHost?: string;
+  mailHost?: string
   // Route-factory seams for tests: mount a configured web/api app instead of
   // the env-bound singletons without re-declaring the gate. The instance type
   // is generic so a configured seam keeps its concrete routes in `App`.
-  web?: TWeb;
-  api?: TApi;
+  web?: TWeb
+  api?: TApi
   // Same for the SES webhook, which sits outside the gate. Typed concretely
   // (not generic like web/api): it is mounted before the `.guard`, and a
   // generic instance there leaks into the guard's hook typing and breaks it.
-  ses?: typeof sesWebhookRoutes;
+  ses?: typeof sesWebhookRoutes
 }
 
 export function createApp<
   TWeb extends AnyElysia = typeof webRoutes,
   TApi extends AnyElysia = typeof apiRoutes,
 >(options: CreateAppOptions<TWeb, TApi> = {}) {
-  const mailHost = options.mailHost ?? env.MAIL_HOST;
-  const web = (options.web ?? webRoutes) as TWeb;
-  const api = (options.api ?? apiRoutes) as TApi;
-  const ses = options.ses ?? sesWebhookRoutes;
+  const mailHost = options.mailHost ?? env.MAIL_HOST
+  const web = (options.web ?? webRoutes) as TWeb
+  const api = (options.api ?? apiRoutes) as TApi
+  const ses = options.ses ?? sesWebhookRoutes
 
   return (
     new Elysia()
@@ -47,7 +47,7 @@ export function createApp<
       // check — never lists accounts here, that's real-address PII. The
       // bearer-guarded GET /api/accounts is where every configured account is
       // listed.
-      .get("/health", () => ({ ok: true }))
+      .get('/health', () => ({ ok: true }))
       .use(fppRoutes)
       .use(sySerendipityRoutes)
       // Public (no bearer): the static personal site cannot hold a secret.
@@ -72,17 +72,17 @@ export function createApp<
       .guard(
         {
           beforeHandle: ({ request, set }) => {
-            if (!hostAllowed(request.headers.get("host"), mailHost)) {
-              set.status = 404;
-              return "Not Found";
+            if (!hostAllowed(request.headers.get('host'), mailHost)) {
+              set.status = 404
+              return 'Not Found'
             }
           },
         },
         (gated) => gated.use(web).use(api).use(mcpRoutes),
       )
-  );
+  )
 }
 
-export const app = createApp();
+export const app = createApp()
 
-export type App = typeof app;
+export type App = typeof app

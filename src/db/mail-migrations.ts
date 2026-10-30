@@ -1,5 +1,5 @@
-import type { Database } from "bun:sqlite";
-import { type Migration, applyMigrations } from "./migration-runner";
+import type { Database } from 'bun:sqlite'
+import { type Migration, applyMigrations } from './migration-runner'
 
 // Ordered, idempotent migrations for the lean `mail.sqlite` store (Wave 4,
 // docs/architecture.md §Lean store), tracked via its own PRAGMA user_version —
@@ -314,11 +314,8 @@ const MAIL_MIGRATIONS: Migration[] = [
       );
     `,
   },
-];
+]
 
-export function runMailMigrations(
-  db: Database,
-  opts?: { targetVersion?: number },
-): void {
-  applyMigrations(db, MAIL_MIGRATIONS, opts);
+export function runMailMigrations(db: Database, opts?: { targetVersion?: number }): void {
+  applyMigrations(db, MAIL_MIGRATIONS, opts)
 }

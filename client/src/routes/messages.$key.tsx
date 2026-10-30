@@ -1,5 +1,5 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createFileRoute, Link } from '@tanstack/react-router'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
   Badge,
@@ -11,45 +11,41 @@ import {
   Stack,
   Text,
   Title,
-} from "@mantine/core";
-import { getMessage, moveMessage, setFlags } from "../lib/api";
-import { formatDate } from "../lib/format";
-import type { Classification, MessageDetail } from "../lib/types";
+} from '@mantine/core'
+import { getMessage, moveMessage, setFlags } from '../lib/api'
+import { formatDate } from '../lib/format'
+import type { Classification, MessageDetail } from '../lib/types'
 
-export const Route = createFileRoute("/messages/$key")({
+export const Route = createFileRoute('/messages/$key')({
   component: MessagePage,
-});
+})
 
 function classificationRow(
   label: string,
   value: string | null | undefined,
 ): { label: string; value: string }[] {
-  return value ? [{ label, value }] : [];
+  return value ? [{ label, value }] : []
 }
 
 function classificationRows(
   classification: Classification | null,
 ): { label: string; value: string }[] {
-  if (!classification) return [];
+  if (!classification) return []
   return [
-    ...classificationRow("Category", classification.category),
-    ...classificationRow("Priority", classification.priority),
+    ...classificationRow('Category', classification.category),
+    ...classificationRow('Priority', classification.priority),
     {
-      label: "Action required",
-      value: classification.actionRequired ? "yes" : "no",
+      label: 'Action required',
+      value: classification.actionRequired ? 'yes' : 'no',
     },
-    ...classificationRow("Summary", classification.summary),
-    ...classificationRow("Suggested action", classification.suggestedAction),
-    ...classificationRow("Language", classification.language),
-  ];
+    ...classificationRow('Summary', classification.summary),
+    ...classificationRow('Suggested action', classification.suggestedAction),
+    ...classificationRow('Language', classification.language),
+  ]
 }
 
-function ClassificationPanel({
-  classification,
-}: {
-  classification: Classification | null;
-}) {
-  const rows = classificationRows(classification);
+function ClassificationPanel({ classification }: { classification: Classification | null }) {
+  const rows = classificationRows(classification)
   return (
     <Card py="xs" px="sm">
       <Title order={4} mb="xs">
@@ -72,7 +68,7 @@ function ClassificationPanel({
         </Stack>
       )}
     </Card>
-  );
+  )
 }
 
 function MessageActions({
@@ -81,61 +77,42 @@ function MessageActions({
   onFlag,
   onMove,
 }: {
-  message: MessageDetail;
-  busy: boolean;
-  onFlag: (change: { add?: string[]; remove?: string[] }) => void;
-  onMove: (toMailbox: string) => void;
+  message: MessageDetail
+  busy: boolean
+  onFlag: (change: { add?: string[]; remove?: string[] }) => void
+  onMove: (toMailbox: string) => void
 }) {
-  const isSeen = message.flags.includes("\\Seen");
-  const isStarred = message.flags.includes("\\Flagged");
+  const isSeen = message.flags.includes('\\Seen')
+  const isStarred = message.flags.includes('\\Flagged')
   return (
     <Group gap="xs" mt="xs">
       <Button
         size="xs"
         variant="default"
         disabled={busy}
-        onClick={() =>
-          onFlag(isSeen ? { remove: ["\\Seen"] } : { add: ["\\Seen"] })
-        }
+        onClick={() => onFlag(isSeen ? { remove: ['\\Seen'] } : { add: ['\\Seen'] })}
       >
-        {isSeen ? "Mark unread" : "Mark read"}
+        {isSeen ? 'Mark unread' : 'Mark read'}
       </Button>
       <Button
         size="xs"
         variant="default"
         disabled={busy}
-        onClick={() =>
-          onFlag(isStarred ? { remove: ["\\Flagged"] } : { add: ["\\Flagged"] })
-        }
+        onClick={() => onFlag(isStarred ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] })}
       >
-        {isStarred ? "Unstar" : "Star"}
+        {isStarred ? 'Unstar' : 'Star'}
       </Button>
-      <Button
-        size="xs"
-        variant="default"
-        disabled={busy}
-        onClick={() => onMove("Archive")}
-      >
+      <Button size="xs" variant="default" disabled={busy} onClick={() => onMove('Archive')}>
         Archive
       </Button>
-      <Button
-        size="xs"
-        variant="default"
-        disabled={busy}
-        onClick={() => onMove("Spam")}
-      >
+      <Button size="xs" variant="default" disabled={busy} onClick={() => onMove('Spam')}>
         Spam
       </Button>
-      <Button
-        size="xs"
-        variant="default"
-        disabled={busy}
-        onClick={() => onMove("Trash")}
-      >
+      <Button size="xs" variant="default" disabled={busy} onClick={() => onMove('Trash')}>
         Trash
       </Button>
     </Group>
-  );
+  )
 }
 
 function MessageHeader({
@@ -144,17 +121,17 @@ function MessageHeader({
   onFlag,
   onMove,
 }: {
-  message: MessageDetail;
-  busy: boolean;
-  onFlag: (change: { add?: string[]; remove?: string[] }) => void;
-  onMove: (toMailbox: string) => void;
+  message: MessageDetail
+  busy: boolean
+  onFlag: (change: { add?: string[]; remove?: string[] }) => void
+  onMove: (toMailbox: string) => void
 }) {
   return (
     <Card py="xs" px="sm">
       <Stack gap="xs">
-        <Title order={3}>{message.subject ?? "(no subject)"}</Title>
+        <Title order={3}>{message.subject ?? '(no subject)'}</Title>
         <Group gap="xs">
-          <Text size="sm">{message.fromAddress ?? "—"}</Text>
+          <Text size="sm">{message.fromAddress ?? '—'}</Text>
           <Text size="sm" c="dimmed">
             {formatDate(message.date)}
           </Text>
@@ -165,21 +142,16 @@ function MessageHeader({
           ))}
         </Group>
         <Text size="sm" c="dimmed">
-          To: {message.toAddresses.join(", ") || "—"}
+          To: {message.toAddresses.join(', ') || '—'}
         </Text>
-        <MessageActions
-          message={message}
-          busy={busy}
-          onFlag={onFlag}
-          onMove={onMove}
-        />
+        <MessageActions message={message} busy={busy} onFlag={onFlag} onMove={onMove} />
       </Stack>
     </Card>
-  );
+  )
 }
 
-function MessageBody({ body }: { body: MessageDetail["body"] }) {
-  const { html, text } = body ?? { html: null, text: null };
+function MessageBody({ body }: { body: MessageDetail['body'] }) {
+  const { html, text } = body ?? { html: null, text: null }
   return (
     <Card py="xs" px="sm">
       <Divider />
@@ -190,7 +162,7 @@ function MessageBody({ body }: { body: MessageDetail["body"] }) {
           title="message body"
           sandbox=""
           srcDoc={html}
-          style={{ width: "100%", height: "60vh", border: "none" }}
+          style={{ width: '100%', height: '60vh', border: 'none' }}
         />
       ) : text ? (
         <Text
@@ -200,8 +172,8 @@ function MessageBody({ body }: { body: MessageDetail["body"] }) {
           c="var(--mantine-color-text)"
           size="sm"
           style={{
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
             margin: 0,
           }}
         >
@@ -213,54 +185,54 @@ function MessageBody({ body }: { body: MessageDetail["body"] }) {
         </Text>
       )}
     </Card>
-  );
+  )
 }
 
 function MessagePage() {
-  const { key } = Route.useParams();
-  const queryClient = useQueryClient();
+  const { key } = Route.useParams()
+  const queryClient = useQueryClient()
 
   const messageQuery = useQuery({
-    queryKey: ["message", key],
+    queryKey: ['message', key],
     queryFn: () => getMessage(key),
-  });
+  })
 
   const invalidate = async () => {
-    await queryClient.invalidateQueries({ queryKey: ["message", key] });
-    await queryClient.invalidateQueries({ queryKey: ["messages"] });
-  };
+    await queryClient.invalidateQueries({ queryKey: ['message', key] })
+    await queryClient.invalidateQueries({ queryKey: ['messages'] })
+  }
 
   const flagMutation = useMutation({
     mutationFn: (change: { add?: string[]; remove?: string[] }) => {
-      const message = messageQuery.data;
-      if (!message) throw new Error("message not loaded");
-      const mailbox = message.locations[0]?.mailbox;
-      if (!mailbox) throw new Error("no mailbox location");
-      return setFlags(key, mailbox, change);
+      const message = messageQuery.data
+      if (!message) throw new Error('message not loaded')
+      const mailbox = message.locations[0]?.mailbox
+      if (!mailbox) throw new Error('no mailbox location')
+      return setFlags(key, mailbox, change)
     },
     onSuccess: invalidate,
-  });
+  })
 
   const moveMutation = useMutation({
     mutationFn: (toMailbox: string) => {
-      const message = messageQuery.data;
-      if (!message) throw new Error("message not loaded");
-      const mailbox = message.locations[0]?.mailbox;
-      if (!mailbox) throw new Error("no mailbox location");
-      return moveMessage(key, mailbox, toMailbox);
+      const message = messageQuery.data
+      if (!message) throw new Error('message not loaded')
+      const mailbox = message.locations[0]?.mailbox
+      if (!mailbox) throw new Error('no mailbox location')
+      return moveMessage(key, mailbox, toMailbox)
     },
     onSuccess: invalidate,
-  });
+  })
 
   if (messageQuery.isError) {
-    return <Alert color="red">Could not load this message.</Alert>;
+    return <Alert color="red">Could not load this message.</Alert>
   }
   if (messageQuery.isLoading || !messageQuery.data) {
-    return <Loader />;
+    return <Loader />
   }
 
-  const message: MessageDetail = messageQuery.data;
-  const busy = flagMutation.isPending || moveMutation.isPending;
+  const message: MessageDetail = messageQuery.data
+  const busy = flagMutation.isPending || moveMutation.isPending
 
   return (
     <Stack>
@@ -278,5 +250,5 @@ function MessagePage() {
       <ClassificationPanel classification={message.classification} />
       <MessageBody body={message.body} />
     </Stack>
-  );
+  )
 }

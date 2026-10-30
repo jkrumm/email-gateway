@@ -1,159 +1,159 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from 'bun:sqlite'
 
-export type MessageDirection = "inbound" | "outbound";
+export type MessageDirection = 'inbound' | 'outbound'
 
 export interface MessageEnvelope {
-  key: string;
-  account: string;
-  direction: MessageDirection;
-  fromAddress: string | null;
-  toAddresses: string[];
-  cc: string[] | null;
-  bcc: string[] | null;
-  replyTo: string[] | null;
-  subject: string | null;
+  key: string
+  account: string
+  direction: MessageDirection
+  fromAddress: string | null
+  toAddresses: string[]
+  cc: string[] | null
+  bcc: string[] | null
+  replyTo: string[] | null
+  subject: string | null
   // null when the provider reported no usable date for this sighting (e.g.
   // IMAP's internalDate can be legitimately absent). See upsertMessage
   // below for how a null date is handled: fallback-to-now applies only on a
   // message's first-ever insert, never overwriting an already-stored date
   // on a re-sight.
-  date: string | null;
-  size: number | null;
-  hasAttachments: boolean;
-  threadKey: string | null;
-  flags: string[];
+  date: string | null
+  size: number | null
+  hasAttachments: boolean
+  threadKey: string | null
+  flags: string[]
 }
 
 export interface MessageLocation {
-  mailbox: string;
-  uidValidity: string | null;
-  uid: number | null;
-  providerRef: unknown;
-  lastSeenAt: string;
+  mailbox: string
+  uidValidity: string | null
+  uid: number | null
+  providerRef: unknown
+  lastSeenAt: string
 }
 
 export interface Classification {
-  category: string | null;
-  priority: string | null;
-  actionRequired: boolean | null;
-  summary: string | null;
-  suggestedAction: string | null;
-  language: string | null;
-  facts: unknown;
-  model: string | null;
-  error: string | null;
-  jevSpamProbability: number | null;
-  jevCategory: string | null;
-  jevCategoryConfidence: number | null;
-  jevLatencyMs: number | null;
-  jevModel: string | null;
-  jevError: string | null;
+  category: string | null
+  priority: string | null
+  actionRequired: boolean | null
+  summary: string | null
+  suggestedAction: string | null
+  language: string | null
+  facts: unknown
+  model: string | null
+  error: string | null
+  jevSpamProbability: number | null
+  jevCategory: string | null
+  jevCategoryConfidence: number | null
+  jevLatencyMs: number | null
+  jevModel: string | null
+  jevError: string | null
 }
 
 export interface EnrichmentFields {
-  category: string | null;
-  priority: string | null;
-  actionRequired: boolean | null;
-  summary: string | null;
-  suggestedAction: string | null;
-  language: string | null;
-  facts: unknown;
-  model: string | null;
-  error: string | null;
+  category: string | null
+  priority: string | null
+  actionRequired: boolean | null
+  summary: string | null
+  suggestedAction: string | null
+  language: string | null
+  facts: unknown
+  model: string | null
+  error: string | null
 }
 
 export interface JevClassificationFields {
-  jevSpamProbability: number | null;
-  jevCategory: string | null;
-  jevCategoryConfidence: number | null;
-  jevLatencyMs: number | null;
-  jevModel: string | null;
-  jevError: string | null;
+  jevSpamProbability: number | null
+  jevCategory: string | null
+  jevCategoryConfidence: number | null
+  jevLatencyMs: number | null
+  jevModel: string | null
+  jevError: string | null
 }
 
 export interface ListMessagesFilters {
-  accountIds?: string[];
-  direction?: MessageDirection;
-  category?: string;
-  actionRequired?: boolean;
-  threadKey?: string;
-  since?: string;
-  until?: string;
-  limit?: number;
-  cursor?: string;
+  accountIds?: string[]
+  direction?: MessageDirection
+  category?: string
+  actionRequired?: boolean
+  threadKey?: string
+  since?: string
+  until?: string
+  limit?: number
+  cursor?: string
 }
 
 export interface MessageStats {
-  total: number;
-  inbound: number;
-  outbound: number;
-  byCategory: Record<string, number>;
+  total: number
+  inbound: number
+  outbound: number
+  byCategory: Record<string, number>
 }
 
 export interface ListMessagesResult {
-  rows: (MessageEnvelope & { classification: Classification | null })[];
-  nextCursor: string | null;
+  rows: (MessageEnvelope & { classification: Classification | null })[]
+  nextCursor: string | null
 }
 
 export interface SearchMessagesOptions {
-  accountIds?: string[];
-  limit?: number;
+  accountIds?: string[]
+  limit?: number
 }
 
-const DEFAULT_LIST_LIMIT = 25;
-const MAX_LIST_LIMIT = 100;
+const DEFAULT_LIST_LIMIT = 25
+const MAX_LIST_LIMIT = 100
 
 interface MessageRow {
-  key: string;
-  account: string;
-  direction: MessageDirection;
-  from_address: string | null;
-  to_addresses: string;
-  cc: string | null;
-  bcc: string | null;
-  reply_to: string | null;
-  subject: string | null;
-  date: string;
-  size: number | null;
-  has_attachments: number;
-  thread_key: string | null;
-  flags: string;
-  created_at: string;
-  updated_at: string;
+  key: string
+  account: string
+  direction: MessageDirection
+  from_address: string | null
+  to_addresses: string
+  cc: string | null
+  bcc: string | null
+  reply_to: string | null
+  subject: string | null
+  date: string
+  size: number | null
+  has_attachments: number
+  thread_key: string | null
+  flags: string
+  created_at: string
+  updated_at: string
 }
 
 interface MessageLocationRow {
-  mailbox: string;
-  uid_validity: string | null;
-  uid: number | null;
-  provider_ref: string;
-  last_seen_at: string;
+  mailbox: string
+  uid_validity: string | null
+  uid: number | null
+  provider_ref: string
+  last_seen_at: string
 }
 
 interface ClassificationRow {
-  category: string | null;
-  priority: string | null;
-  action_required: number | null;
-  summary: string | null;
-  suggested_action: string | null;
-  language: string | null;
-  facts: string | null;
-  model: string | null;
-  error: string | null;
-  jev_spam_probability: number | null;
-  jev_category: string | null;
-  jev_category_confidence: number | null;
-  jev_latency_ms: number | null;
-  jev_model: string | null;
-  jev_error: string | null;
+  category: string | null
+  priority: string | null
+  action_required: number | null
+  summary: string | null
+  suggested_action: string | null
+  language: string | null
+  facts: string | null
+  model: string | null
+  error: string | null
+  jev_spam_probability: number | null
+  jev_category: string | null
+  jev_category_confidence: number | null
+  jev_latency_ms: number | null
+  jev_model: string | null
+  jev_error: string | null
 }
 
 type MessageWithClassificationRow = MessageRow &
-  Partial<ClassificationRow> & { classification_updated_at: string | null };
+  Partial<ClassificationRow> & { classification_updated_at: string | null }
 
 function parseJsonArray<T>(value: string | null): T[] {
-  if (!value) return [];
-  return JSON.parse(value) as T[];
+  if (!value) return []
+  return JSON.parse(value) as T[]
 }
 
 function toEnvelope(row: MessageRow): MessageEnvelope {
@@ -172,7 +172,7 @@ function toEnvelope(row: MessageRow): MessageEnvelope {
     hasAttachments: Boolean(row.has_attachments),
     threadKey: row.thread_key,
     flags: parseJsonArray<string>(row.flags),
-  };
+  }
 }
 
 function toLocation(row: MessageLocationRow): MessageLocation {
@@ -182,7 +182,7 @@ function toLocation(row: MessageLocationRow): MessageLocation {
     uid: row.uid,
     providerRef: JSON.parse(row.provider_ref),
     lastSeenAt: row.last_seen_at,
-  };
+  }
 }
 
 function toClassification(row: Partial<ClassificationRow>): Classification {
@@ -205,23 +205,23 @@ function toClassification(row: Partial<ClassificationRow>): Classification {
     jevLatencyMs: row.jev_latency_ms ?? null,
     jevModel: row.jev_model ?? null,
     jevError: row.jev_error ?? null,
-  };
+  }
 }
 
 function encodeMessageCursor(date: string, key: string): string {
-  return Buffer.from(`${date}|${key}`, "utf-8").toString("base64url");
+  return Buffer.from(`${date}|${key}`, 'utf-8').toString('base64url')
 }
 
 function decodeMessageCursor(cursor: string): { date: string; key: string } {
-  const decoded = Buffer.from(cursor, "base64url").toString("utf-8");
-  const separatorIndex = decoded.lastIndexOf("|");
+  const decoded = Buffer.from(cursor, 'base64url').toString('utf-8')
+  const separatorIndex = decoded.lastIndexOf('|')
   if (separatorIndex === -1) {
-    throw new Error("Invalid cursor");
+    throw new Error('Invalid cursor')
   }
   return {
     date: decoded.slice(0, separatorIndex),
     key: decoded.slice(separatorIndex + 1),
-  };
+  }
 }
 
 // Turns free-text search input into quoted, prefix-matched FTS5 tokens so
@@ -233,7 +233,7 @@ function sanitizeFtsQuery(input: string): string {
     .map((token) => token.trim())
     .filter(Boolean)
     .map((token) => `"${token.replace(/"/g, '""')}"*`)
-    .join(" ");
+    .join(' ')
 }
 
 // Covers `messages`, `message_locations`, `classifications`, `body_cache` and
@@ -265,11 +265,11 @@ export function createMessagesRepo(db: Database) {
       const row = db
         .query<
           {
-            subject: string | null;
-            from_address: string | null;
-            to_addresses: string;
-            cc: string | null;
-            summary: string | null;
+            subject: string | null
+            from_address: string | null
+            to_addresses: string
+            cc: string | null
+            summary: string | null
           },
           [string]
         >(
@@ -278,10 +278,10 @@ export function createMessagesRepo(db: Database) {
            LEFT JOIN classifications c ON c.key = m.key
            WHERE m.key = ?`,
         )
-        .get(key);
+        .get(key)
 
-      db.run("DELETE FROM messages_fts WHERE message_key = ?", [key]);
-      if (!row) return;
+      db.run('DELETE FROM messages_fts WHERE message_key = ?', [key])
+      if (!row) return
 
       const addresses = [
         row.from_address,
@@ -289,14 +289,14 @@ export function createMessagesRepo(db: Database) {
         ...(row.cc ? parseJsonArray<string>(row.cc) : []),
       ]
         .filter(Boolean)
-        .join(" ");
+        .join(' ')
 
       db.run(
         `INSERT INTO messages_fts (subject, addresses, summary, message_key)
          VALUES (?, ?, ?, ?)`,
-        [row.subject ?? "", addresses, row.summary ?? "", key],
-      );
-    })(key);
+        [row.subject ?? '', addresses, row.summary ?? '', key],
+      )
+    })(key)
   }
 
   // Built lazily, per call, rather than once at factory-construction time:
@@ -361,16 +361,13 @@ export function createMessagesRepo(db: Database) {
           envelope.date,
           envelope.date,
         ],
-      );
-      syncFtsRow(envelope.key);
-    })(envelope, now);
+      )
+      syncFtsRow(envelope.key)
+    })(envelope, now)
   }
 
-  function upsertMessage(
-    envelope: MessageEnvelope,
-    now: string = new Date().toISOString(),
-  ): void {
-    upsertMessageTx(envelope, now);
+  function upsertMessage(envelope: MessageEnvelope, now: string = new Date().toISOString()): void {
+    upsertMessageTx(envelope, now)
   }
 
   function upsertLocation(key: string, location: MessageLocation): void {
@@ -390,84 +387,71 @@ export function createMessagesRepo(db: Database) {
         JSON.stringify(location.providerRef),
         location.lastSeenAt,
       ],
-    );
+    )
   }
 
   // Removes one mailbox's location row for a key — used after a successful
   // move so the OLD mailbox's now-stale location (its uid no longer exists
   // there) doesn't linger for a later /flags or /move call to resolve.
   function removeLocation(key: string, mailbox: string): void {
-    db.run("DELETE FROM message_locations WHERE key = ? AND mailbox = ?", [
-      key,
-      mailbox,
-    ]);
+    db.run('DELETE FROM message_locations WHERE key = ? AND mailbox = ?', [key, mailbox])
   }
 
-  function getMessage(
-    key: string,
-  ): (MessageEnvelope & { locations: MessageLocation[] }) | null {
-    const row = db
-      .query<MessageRow, [string]>("SELECT * FROM messages WHERE key = ?")
-      .get(key);
-    if (!row) return null;
+  function getMessage(key: string): (MessageEnvelope & { locations: MessageLocation[] }) | null {
+    const row = db.query<MessageRow, [string]>('SELECT * FROM messages WHERE key = ?').get(key)
+    if (!row) return null
 
     const locations = db
       .query<MessageLocationRow, [string]>(
-        "SELECT * FROM message_locations WHERE key = ? ORDER BY last_seen_at DESC",
+        'SELECT * FROM message_locations WHERE key = ? ORDER BY last_seen_at DESC',
       )
       .all(key)
-      .map(toLocation);
+      .map(toLocation)
 
-    return { ...toEnvelope(row), locations };
+    return { ...toEnvelope(row), locations }
   }
 
   function listMessages(filters: ListMessagesFilters = {}): ListMessagesResult {
-    const limit = Math.min(
-      Math.max(filters.limit ?? DEFAULT_LIST_LIMIT, 1),
-      MAX_LIST_LIMIT,
-    );
+    const limit = Math.min(Math.max(filters.limit ?? DEFAULT_LIST_LIMIT, 1), MAX_LIST_LIMIT)
 
-    const conditions: string[] = [];
-    const params: (string | number)[] = [];
+    const conditions: string[] = []
+    const params: (string | number)[] = []
 
     if (filters.accountIds && filters.accountIds.length > 0) {
-      conditions.push(
-        `m.account IN (${filters.accountIds.map(() => "?").join(", ")})`,
-      );
-      params.push(...filters.accountIds);
+      conditions.push(`m.account IN (${filters.accountIds.map(() => '?').join(', ')})`)
+      params.push(...filters.accountIds)
     }
     if (filters.direction) {
-      conditions.push("m.direction = ?");
-      params.push(filters.direction);
+      conditions.push('m.direction = ?')
+      params.push(filters.direction)
     }
     if (filters.category) {
-      conditions.push("c.category = ?");
-      params.push(filters.category);
+      conditions.push('c.category = ?')
+      params.push(filters.category)
     }
     if (filters.actionRequired !== undefined) {
-      conditions.push("c.action_required = ?");
-      params.push(filters.actionRequired ? 1 : 0);
+      conditions.push('c.action_required = ?')
+      params.push(filters.actionRequired ? 1 : 0)
     }
     if (filters.threadKey) {
-      conditions.push("m.thread_key = ?");
-      params.push(filters.threadKey);
+      conditions.push('m.thread_key = ?')
+      params.push(filters.threadKey)
     }
     if (filters.since) {
-      conditions.push("m.date >= ?");
-      params.push(filters.since);
+      conditions.push('m.date >= ?')
+      params.push(filters.since)
     }
     if (filters.until) {
-      conditions.push("m.date <= ?");
-      params.push(filters.until);
+      conditions.push('m.date <= ?')
+      params.push(filters.until)
     }
     if (filters.cursor) {
-      const { date, key } = decodeMessageCursor(filters.cursor);
-      conditions.push("(m.date < ? OR (m.date = ? AND m.key < ?))");
-      params.push(date, date, key);
+      const { date, key } = decodeMessageCursor(filters.cursor)
+      conditions.push('(m.date < ? OR (m.date = ? AND m.key < ?))')
+      params.push(date, date, key)
     }
 
-    const where =
-      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
     const rows = db
       .query<MessageWithClassificationRow, (string | number)[]>(
@@ -482,27 +466,24 @@ export function createMessagesRepo(db: Database) {
          ORDER BY m.date DESC, m.key DESC
          LIMIT ?`,
       )
-      .all(...params, limit + 1);
+      .all(...params, limit + 1)
 
-    const hasMore = rows.length > limit;
-    const page = hasMore ? rows.slice(0, limit) : rows;
+    const hasMore = rows.length > limit
+    const page = hasMore ? rows.slice(0, limit) : rows
 
     const data = page.map((row) => ({
       ...toEnvelope(row),
-      classification: row.classification_updated_at
-        ? toClassification(row)
-        : null,
-    }));
+      classification: row.classification_updated_at ? toClassification(row) : null,
+    }))
 
-    const last = data[data.length - 1];
+    const last = data[data.length - 1]
     // last.date is read back from the messages.date column, which is NOT
     // NULL — MessageEnvelope.date is string | null only on the write side
     // (an envelope not yet upserted); a row already in the table always has
     // a real date.
-    const nextCursor =
-      hasMore && last ? encodeMessageCursor(last.date!, last.key) : null;
+    const nextCursor = hasMore && last ? encodeMessageCursor(last.date!, last.key) : null
 
-    return { rows: data, nextCursor };
+    return { rows: data, nextCursor }
   }
 
   // Writes ONLY the LLM enrichment columns, leaving any existing jev_*
@@ -544,17 +525,14 @@ export function createMessagesRepo(db: Database) {
         fields.error,
         new Date().toISOString(),
       ],
-    );
+    )
 
-    syncFtsRow(key);
+    syncFtsRow(key)
   }
 
   // Writes ONLY the jev_* columns, leaving any existing LLM enrichment
   // columns untouched. See saveEnrichment above for why this is split out.
-  function saveJevClassification(
-    key: string,
-    fields: JevClassificationFields,
-  ): void {
+  function saveJevClassification(key: string, fields: JevClassificationFields): void {
     db.run(
       `INSERT INTO classifications (
          key, jev_spam_probability, jev_category, jev_category_confidence,
@@ -578,38 +556,30 @@ export function createMessagesRepo(db: Database) {
         fields.jevError,
         new Date().toISOString(),
       ],
-    );
+    )
 
-    syncFtsRow(key);
+    syncFtsRow(key)
   }
 
   function getClassification(key: string): Classification | null {
     const row = db
-      .query<ClassificationRow, [string]>(
-        "SELECT * FROM classifications WHERE key = ?",
-      )
-      .get(key);
-    return row ? toClassification(row) : null;
+      .query<ClassificationRow, [string]>('SELECT * FROM classifications WHERE key = ?')
+      .get(key)
+    return row ? toClassification(row) : null
   }
 
   function getBody(
     key: string,
   ): { html: string | null; text: string | null; fetchedAt: string } | null {
     const row = db
-      .query<
-        { html: string | null; text: string | null; fetched_at: string },
-        [string]
-      >("SELECT html, text, fetched_at FROM body_cache WHERE key = ?")
-      .get(key);
-    return row
-      ? { html: row.html, text: row.text, fetchedAt: row.fetched_at }
-      : null;
+      .query<{ html: string | null; text: string | null; fetched_at: string }, [string]>(
+        'SELECT html, text, fetched_at FROM body_cache WHERE key = ?',
+      )
+      .get(key)
+    return row ? { html: row.html, text: row.text, fetchedAt: row.fetched_at } : null
   }
 
-  function saveBody(
-    key: string,
-    body: { html: string | null; text: string | null },
-  ): void {
+  function saveBody(key: string, body: { html: string | null; text: string | null }): void {
     db.run(
       `INSERT INTO body_cache (key, html, text, fetched_at)
        VALUES (?, ?, ?, ?)
@@ -618,7 +588,7 @@ export function createMessagesRepo(db: Database) {
          text = excluded.text,
          fetched_at = excluded.fetched_at`,
       [key, body.html, body.text, new Date().toISOString()],
-    );
+    )
   }
 
   // LRU eviction: rows older than maxAgeMs go first, then (if still over
@@ -629,60 +599,57 @@ export function createMessagesRepo(db: Database) {
     maxAgeMs,
     now = new Date(),
   }: {
-    maxRows: number;
-    maxAgeMs: number;
-    now?: Date;
+    maxRows: number
+    maxAgeMs: number
+    now?: Date
   }): number {
-    const cutoff = new Date(now.getTime() - maxAgeMs).toISOString();
-    const { changes: ageDeleted } = db.run(
-      "DELETE FROM body_cache WHERE fetched_at < ?",
-      [cutoff],
-    );
+    const cutoff = new Date(now.getTime() - maxAgeMs).toISOString()
+    const { changes: ageDeleted } = db.run('DELETE FROM body_cache WHERE fetched_at < ?', [cutoff])
 
     const { count } = db
-      .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM body_cache")
-      .get()!;
+      .query<{ count: number }, []>('SELECT COUNT(*) AS count FROM body_cache')
+      .get()!
 
-    let countDeleted = 0;
+    let countDeleted = 0
     if (count > maxRows) {
-      const excess = count - maxRows;
+      const excess = count - maxRows
       const { changes } = db.run(
         `DELETE FROM body_cache WHERE key IN (
            SELECT key FROM body_cache ORDER BY fetched_at ASC LIMIT ?
          )`,
         [excess],
-      );
-      countDeleted = changes;
+      )
+      countDeleted = changes
     }
 
-    return ageDeleted + countDeleted;
+    return ageDeleted + countDeleted
   }
 
   function knownMessageKeys(keys: string[]): Set<string> {
-    if (keys.length === 0) return new Set();
+    if (keys.length === 0) return new Set()
 
     const rows = db
       .query<{ key: string }, string[]>(
-        `SELECT key FROM messages WHERE key IN (${keys.map(() => "?").join(", ")})`,
+        `SELECT key FROM messages WHERE key IN (${keys.map(() => '?').join(', ')})`,
       )
-      .all(...keys);
+      .all(...keys)
 
-    return new Set(rows.map((row) => row.key));
+    return new Set(rows.map((row) => row.key))
   }
 
   function searchMessages(
     query: string,
     { accountIds, limit = DEFAULT_LIST_LIMIT }: SearchMessagesOptions = {},
   ): string[] {
-    const ftsQuery = sanitizeFtsQuery(query);
-    if (!ftsQuery) return [];
+    const ftsQuery = sanitizeFtsQuery(query)
+    if (!ftsQuery) return []
 
-    const conditions = ["messages_fts MATCH ?"];
-    const params: (string | number)[] = [ftsQuery];
+    const conditions = ['messages_fts MATCH ?']
+    const params: (string | number)[] = [ftsQuery]
 
     if (accountIds && accountIds.length > 0) {
-      conditions.push(`m.account IN (${accountIds.map(() => "?").join(", ")})`);
-      params.push(...accountIds);
+      conditions.push(`m.account IN (${accountIds.map(() => '?').join(', ')})`)
+      params.push(...accountIds)
     }
 
     const rows = db
@@ -690,13 +657,13 @@ export function createMessagesRepo(db: Database) {
         `SELECT fts.message_key AS message_key
          FROM messages_fts fts
          JOIN messages m ON m.key = fts.message_key
-         WHERE ${conditions.join(" AND ")}
+         WHERE ${conditions.join(' AND ')}
          ORDER BY m.date DESC
          LIMIT ?`,
       )
-      .all(...params, limit);
+      .all(...params, limit)
 
-    return rows.map((row) => row.message_key);
+    return rows.map((row) => row.message_key)
   }
 
   // Minimal aggregate for GET /api/stats: total/inbound/outbound counts plus a
@@ -705,25 +672,22 @@ export function createMessagesRepo(db: Database) {
   // simplest thing this schema can answer directly — not a full day-bucketed
   // chart (the old stats shape), which nothing here has asked for yet.
   function getStats({ since }: { since?: string } = {}): MessageStats {
-    const totalsWhere = since ? "WHERE date >= ?" : "";
+    const totalsWhere = since ? 'WHERE date >= ?' : ''
     const totals = db
-      .query<
-        { total: number; inbound: number; outbound: number },
-        [string] | []
-      >(
+      .query<{ total: number; inbound: number; outbound: number }, [string] | []>(
         `SELECT COUNT(*) AS total,
                 COALESCE(SUM(direction = 'inbound'), 0) AS inbound,
                 COALESCE(SUM(direction = 'outbound'), 0) AS outbound
          FROM messages
          ${totalsWhere}`,
       )
-      .get(...(since ? [since] : []))!;
+      .get(...(since ? [since] : []))!
 
     // classifications has no date column of its own — the since filter joins
     // to messages for the date, same as listMessages's category filter.
     const categoryWhere = since
-      ? "WHERE c.category IS NOT NULL AND m.date >= ?"
-      : "WHERE c.category IS NOT NULL";
+      ? 'WHERE c.category IS NOT NULL AND m.date >= ?'
+      : 'WHERE c.category IS NOT NULL'
     const categoryRows = db
       .query<{ category: string; count: number }, [string] | []>(
         `SELECT c.category AS category, COUNT(*) AS count
@@ -732,14 +696,12 @@ export function createMessagesRepo(db: Database) {
          ${categoryWhere}
          GROUP BY c.category`,
       )
-      .all(...(since ? [since] : []));
+      .all(...(since ? [since] : []))
 
     return {
       ...totals,
-      byCategory: Object.fromEntries(
-        categoryRows.map((row) => [row.category, row.count]),
-      ),
-    };
+      byCategory: Object.fromEntries(categoryRows.map((row) => [row.category, row.count])),
+    }
   }
 
   return {
@@ -757,7 +719,7 @@ export function createMessagesRepo(db: Database) {
     knownMessageKeys,
     searchMessages,
     getStats,
-  };
+  }
 }
 
-export type MessagesRepo = ReturnType<typeof createMessagesRepo>;
+export type MessagesRepo = ReturnType<typeof createMessagesRepo>

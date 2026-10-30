@@ -1,6 +1,6 @@
-import PostalMime, { type Email } from "postal-mime";
-import { addressList } from "./address";
-import { validDate } from "../../utils/date";
+import PostalMime, { type Email } from 'postal-mime'
+import { addressList } from './address'
+import { validDate } from '../../utils/date'
 import type {
   Capabilities,
   Envelope,
@@ -15,8 +15,8 @@ import type {
   ProviderId,
   SearchQuery,
   Unsubscribe,
-} from "../port";
-import { unsupported } from "../port";
+} from '../port'
+import { unsupported } from '../port'
 import {
   createIdleClient as createIdleClientFromAdapter,
   createImapflowPort,
@@ -25,28 +25,28 @@ import {
   type ImapIdleClient,
   type ImapPort,
   type ImapSession,
-} from "./adapter";
-import { log } from "../../telemetry/log";
-import { errorName } from "../../telemetry/otel-format";
-import { mailboxRole } from "../../utils/mailboxes";
+} from './adapter'
+import { log } from '../../telemetry/log'
+import { errorName } from '../../telemetry/otel-format'
+import { mailboxRole } from '../../utils/mailboxes'
 
 // Both provider ids are IMAP-backed.
-export type ImapProviderId = ProviderId;
+export type ImapProviderId = ProviderId
 
-const LIST_PAGE_LIMIT = 500;
+const LIST_PAGE_LIMIT = 500
 
 // No calls into a pooled provider instance for this long closes its
 // connection, freeing the slot against Bridge's connection limit; the next
 // call reconnects. Overridable per instance (tests use a short window).
-const DEFAULT_POOL_IDLE_MS = 5 * 60 * 1000;
+const DEFAULT_POOL_IDLE_MS = 5 * 60 * 1000
 
-type MailboxHandle = Awaited<ReturnType<ImapSession["openMailbox"]>>;
+type MailboxHandle = Awaited<ReturnType<ImapSession['openMailbox']>>
 
 interface PooledSession {
-  session: ImapSession;
-  mailboxPath: string | null;
-  readOnly: boolean | null;
-  mailboxHandle: MailboxHandle | null;
+  session: ImapSession
+  mailboxPath: string | null
+  readOnly: boolean | null
+  mailboxHandle: MailboxHandle | null
 }
 
 // A dead connection (closed socket, protocol error) is retried once against
@@ -54,7 +54,7 @@ interface PooledSession {
 // an unsupported operation) never is. `isUsable` is how the two are told
 // apart — see adapter.ts's ImapSession.isUsable.
 function isUsable(session: ImapSession): boolean {
-  return session.isUsable ? session.isUsable() : true;
+  return session.isUsable ? session.isUsable() : true
 }
 
 // Reused per `createImapProvider` instance: one IMAP connection, serialized
@@ -64,70 +64,70 @@ function isUsable(session: ImapSession): boolean {
 // idle-closing after `idleCloseMs` with no calls. Kept entirely separate from
 // watch()'s own dedicated long-lived IDLE connection below.
 function createSessionPool(port: ImapPort, idleCloseMs: number) {
-  let pooled: PooledSession | null = null;
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let pooled: PooledSession | null = null
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
   // Concurrent calls chain through this instead of racing multiple commands
   // down one connection; an operation's own failure never stalls the next
   // one queued behind it.
-  let tail: Promise<unknown> = Promise.resolve();
+  let tail: Promise<unknown> = Promise.resolve()
 
   function enqueue<T>(op: () => Promise<T>): Promise<T> {
     tail = tail.then(
       () => op(),
       () => op(),
-    );
-    return tail as Promise<T>;
+    )
+    return tail as Promise<T>
   }
 
   function clearIdleTimer(): void {
     if (idleTimer) {
-      clearTimeout(idleTimer);
-      idleTimer = null;
+      clearTimeout(idleTimer)
+      idleTimer = null
     }
   }
 
   function resetIdleTimer(): void {
-    clearIdleTimer();
+    clearIdleTimer()
     idleTimer = setTimeout(() => {
-      idleTimer = null;
-      void invalidate();
-    }, idleCloseMs);
-    idleTimer.unref();
+      idleTimer = null
+      void invalidate()
+    }, idleCloseMs)
+    idleTimer.unref()
   }
 
   async function invalidate(): Promise<void> {
-    const current = pooled;
-    pooled = null;
+    const current = pooled
+    pooled = null
     if (idleTimer) {
-      clearTimeout(idleTimer);
-      idleTimer = null;
+      clearTimeout(idleTimer)
+      idleTimer = null
     }
-    if (!current) return;
+    if (!current) return
     if (current.mailboxHandle) {
       try {
-        current.mailboxHandle.release();
+        current.mailboxHandle.release()
       } catch {
         // best-effort: releasing a lock on a connection we're discarding
         // anyway must never mask the real failure that triggered this.
       }
     }
     try {
-      await current.session.close();
+      await current.session.close()
     } catch {
       // the connection is already presumed dead.
     }
   }
 
   async function ensureSession(): Promise<ImapSession> {
-    if (pooled) return pooled.session;
-    const session = await port.connect();
+    if (pooled) return pooled.session
+    const session = await port.connect()
     pooled = {
       session,
       mailboxPath: null,
       readOnly: null,
       mailboxHandle: null,
-    };
-    return session;
+    }
+    return session
   }
 
   // Cache-check-and-open against an already-resolved session, factored out of
@@ -139,58 +139,51 @@ function createSessionPool(port: ImapPort, idleCloseMs: number) {
     path: string,
     readOnly: boolean,
   ): Promise<MailboxHandle> {
-    const state = pooled;
+    const state = pooled
     /* v8 ignore next */
-    if (!state)
-      throw new Error("imap session pool: session lost after connect");
-    if (
-      state.mailboxPath === path &&
-      state.readOnly === readOnly &&
-      state.mailboxHandle
-    ) {
-      return state.mailboxHandle;
+    if (!state) throw new Error('imap session pool: session lost after connect')
+    if (state.mailboxPath === path && state.readOnly === readOnly && state.mailboxHandle) {
+      return state.mailboxHandle
     }
     if (state.mailboxHandle) {
       try {
-        state.mailboxHandle.release();
+        state.mailboxHandle.release()
       } catch {
         // best-effort: replacing this mailbox handle anyway.
       }
     }
-    const mailbox = await session.openMailbox(path, { readOnly });
-    state.mailboxPath = path;
-    state.readOnly = readOnly;
-    state.mailboxHandle = mailbox;
-    return mailbox;
+    const mailbox = await session.openMailbox(path, { readOnly })
+    state.mailboxPath = path
+    state.readOnly = readOnly
+    state.mailboxHandle = mailbox
+    return mailbox
   }
 
   async function ensureMailbox(
     path: string,
     readOnly: boolean,
   ): Promise<{ session: ImapSession; mailbox: MailboxHandle }> {
-    const session = await ensureSession();
-    const mailbox = await openMailboxOn(session, path, readOnly);
-    return { session, mailbox };
+    const session = await ensureSession()
+    const mailbox = await openMailboxOn(session, path, readOnly)
+    return { session, mailbox }
   }
 
   // The idle-close timer is armed only in the `finally` below, after `fn`
   // settles — arming it up front would let it fire mid-operation on a call
   // that outlasts `idleCloseMs` and invalidate a perfectly healthy, still
   // in-flight session (see PLAN.md Wave 4 review, bug 2).
-  async function runWithSession<T>(
-    fn: (session: ImapSession) => Promise<T>,
-  ): Promise<T> {
-    const session = await ensureSession();
-    clearIdleTimer();
+  async function runWithSession<T>(fn: (session: ImapSession) => Promise<T>): Promise<T> {
+    const session = await ensureSession()
+    clearIdleTimer()
     try {
-      return await fn(session);
+      return await fn(session)
     } catch (error) {
-      if (isUsable(session)) throw error;
-      await invalidate();
-      const fresh = await ensureSession();
-      return await fn(fresh);
+      if (isUsable(session)) throw error
+      await invalidate()
+      const fresh = await ensureSession()
+      return await fn(fresh)
     } finally {
-      resetIdleTimer();
+      resetIdleTimer()
     }
   }
 
@@ -199,18 +192,18 @@ function createSessionPool(port: ImapPort, idleCloseMs: number) {
     readOnly: boolean,
     fn: (mailbox: MailboxHandle) => Promise<T>,
   ): Promise<T> {
-    const session = await ensureSession();
-    clearIdleTimer();
+    const session = await ensureSession()
+    clearIdleTimer()
     try {
       // Opening the mailbox lives inside this try too — a pooled session that
       // died between the previous call and this one fails right here (not
       // inside fn), and must hit the same dead-connection retry below rather
       // than bypass it and leave the dead session cached for every
       // subsequent call.
-      const mailbox = await openMailboxOn(session, path, readOnly);
-      return await fn(mailbox);
+      const mailbox = await openMailboxOn(session, path, readOnly)
+      return await fn(mailbox)
     } catch (error) {
-      if (isUsable(session)) throw error;
+      if (isUsable(session)) throw error
       // A dead connection after a mutating command (setFlags/move, readOnly
       // === false) leaves the outcome unknown — the server may have already
       // applied it before the socket dropped. Replaying it here could
@@ -219,14 +212,14 @@ function createSessionPool(port: ImapPort, idleCloseMs: number) {
       // propagate instead of retrying. Read-only calls stay idempotent to
       // retry, unchanged.
       if (!readOnly) {
-        await invalidate();
-        throw error;
+        await invalidate()
+        throw error
       }
-      await invalidate();
-      const fresh = await ensureMailbox(path, readOnly);
-      return await fn(fresh.mailbox);
+      await invalidate()
+      const fresh = await ensureMailbox(path, readOnly)
+      return await fn(fresh.mailbox)
     } finally {
-      resetIdleTimer();
+      resetIdleTimer()
     }
   }
 
@@ -237,33 +230,25 @@ function createSessionPool(port: ImapPort, idleCloseMs: number) {
       path: string,
       options: { readOnly?: boolean },
       fn: (mailbox: MailboxHandle) => Promise<T>,
-    ): Promise<T> =>
-      enqueue(() => runWithMailbox(path, options.readOnly ?? true, fn)),
-  };
+    ): Promise<T> => enqueue(() => runWithMailbox(path, options.readOnly ?? true, fn)),
+  }
 }
 
-type SessionPool = ReturnType<typeof createSessionPool>;
+type SessionPool = ReturnType<typeof createSessionPool>
 
 // Every IMAP entry point takes this first, with no I/O yet: a ref for the
 // wrong provider kind (a proton ref against a gmail MailProvider) OR a
 // *different account of the same kind* (two Gmail accounts, Wave 8) is
 // detectable for free — `provider` alone doesn't name which account issued the
 // ref.
-function assertOwnProvider(
-  id: ImapProviderId,
-  account: string,
-  ref: MessageRef,
-): void {
+function assertOwnProvider(id: ImapProviderId, account: string, ref: MessageRef): void {
   if (ref.provider !== id) {
-    throw new Error(
-      `adapter for "${id}" received a ref for provider "${ref.provider}"`,
-    );
+    throw new Error(`adapter for "${id}" received a ref for provider "${ref.provider}"`)
   }
   if (ref.account !== account) {
     throw new Error(
-      `adapter for account "${account}" received a ref for account ` +
-        `"${ref.account}"`,
-    );
+      `adapter for account "${account}" received a ref for account ` + `"${ref.account}"`,
+    )
   }
 }
 
@@ -275,7 +260,7 @@ function assertFreshRef(ref: MessageRef, currentUidValidity: string): void {
     throw new Error(
       `stale ref: ${ref.mailbox} uid ${ref.uid} was issued for UIDVALIDITY ` +
         `${ref.uidValidity}, mailbox is now at ${currentUidValidity}`,
-    );
+    )
   }
 }
 
@@ -303,30 +288,24 @@ function toEnvelope(
     flags: info.flags,
     // X-GM-THRID (Gmail) when the server advertised it; absent for Bridge.
     ...(info.threadKey ? { threadKey: info.threadKey } : {}),
-  };
+  }
 }
 
-async function imapCapabilities(
-  pool: SessionPool,
-  id: ImapProviderId,
-): Promise<Capabilities> {
+async function imapCapabilities(pool: SessionPool, id: ImapProviderId): Promise<Capabilities> {
   return pool.withSession(async (session) => {
-    if (!session.capabilities) throw unsupported(id, "capabilities");
+    if (!session.capabilities) throw unsupported(id, 'capabilities')
     // watch() now exists, so idle reflects exactly what the low-level
     // session derived from the server's real CAPABILITY response — never
     // hardcoded here.
-    return session.capabilities();
-  });
+    return session.capabilities()
+  })
 }
 
-async function imapListMailboxes(
-  pool: SessionPool,
-  id: ImapProviderId,
-): Promise<Mailbox[]> {
+async function imapListMailboxes(pool: SessionPool, id: ImapProviderId): Promise<Mailbox[]> {
   return pool.withSession(async (session) => {
-    if (!session.listMailboxes) throw unsupported(id, "listMailboxes");
-    return session.listMailboxes();
-  });
+    if (!session.listMailboxes) throw unsupported(id, 'listMailboxes')
+    return session.listMailboxes()
+  })
 }
 
 // A cursor names a uid *scoped to the UIDVALIDITY that issued it* — without
@@ -334,22 +313,19 @@ async function imapListMailboxes(
 // pages would silently reinterpret its uid against the new mailbox and skip
 // everything at or above it. A garbage cursor must fail loud too, not
 // silently read as NaN and turn into an empty "pagination ended" page.
-function parseCursor(
-  cursor: string | undefined,
-): { uidValidity: string; uid: number } | undefined {
-  if (cursor === undefined) return undefined;
-  const [uidValidity, uidPart] = cursor.split(":");
+function parseCursor(cursor: string | undefined): { uidValidity: string; uid: number } | undefined {
+  if (cursor === undefined) return undefined
+  const [uidValidity, uidPart] = cursor.split(':')
   // Number("") is 0, not NaN — reject it explicitly rather than treating an
   // empty part as a valid uid.
-  const uid =
-    uidPart === "" || uidPart === undefined ? Number.NaN : Number(uidPart);
+  const uid = uidPart === '' || uidPart === undefined ? Number.NaN : Number(uidPart)
   // IMAP UIDs start at 1: a cursor of 0 isn't "the start of the mailbox", it
   // is garbage that would make listBefore(0, …) return an empty page and
   // look like pagination legitimately ended.
   if (!uidValidity || !Number.isInteger(uid) || uid < 1) {
-    throw new Error(`invalid list() cursor: "${cursor}"`);
+    throw new Error(`invalid list() cursor: "${cursor}"`)
   }
-  return { uidValidity, uid };
+  return { uidValidity, uid }
 }
 
 // modseqByMailbox is keyed by `${mailboxPath}:${uidValidity}`, not the bare
@@ -360,7 +336,7 @@ function parseCursor(
 // happens to be higher than anything it currently has. Scoping the key by
 // UIDVALIDITY makes a recreation look like "no bookmark yet" instead.
 function modseqKey(mailboxPath: string, uidValidity: string): string {
-  return `${mailboxPath}:${uidValidity}`;
+  return `${mailboxPath}:${uidValidity}`
 }
 
 // Drops every OTHER modseqKey entry for this mailbox path — called only when
@@ -373,21 +349,21 @@ function pruneStaleModseqKeys(
   mailboxPath: string,
   keep: string,
 ): void {
-  const prefix = `${mailboxPath}:`;
+  const prefix = `${mailboxPath}:`
   for (const key of modseqByMailbox.keys()) {
     if (key !== keep && key.startsWith(prefix)) {
-      modseqByMailbox.delete(key);
+      modseqByMailbox.delete(key)
     }
   }
 }
 
 interface ImapListContext {
-  id: ImapProviderId;
-  account: string;
-  mailboxPath: string;
-  mailbox: MailboxHandle;
-  bookmarked: bigint | undefined;
-  modseqByMailbox: Map<string, bigint>;
+  id: ImapProviderId
+  account: string
+  mailboxPath: string
+  mailbox: MailboxHandle
+  bookmarked: bigint | undefined
+  modseqByMailbox: Map<string, bigint>
 }
 
 // The changedSince fast path for imapList's plain head call (no cursor, once
@@ -399,14 +375,11 @@ interface ImapListContext {
 // a skip), or the caller passed `skipFastPath: true` — its result's
 // `cursor` is always `undefined`, which the caller can't tell apart from a
 // genuine "nothing older than this page" (see ListOptions.skipFastPath).
-async function imapListChangedSince(
-  ctx: ImapListContext,
-): Promise<Page<Envelope> | undefined> {
-  const { id, account, mailboxPath, mailbox, bookmarked, modseqByMailbox } =
-    ctx;
-  if (bookmarked === undefined || !mailbox.listChangedSince) return undefined;
+async function imapListChangedSince(ctx: ImapListContext): Promise<Page<Envelope> | undefined> {
+  const { id, account, mailboxPath, mailbox, bookmarked, modseqByMailbox } = ctx
+  if (bookmarked === undefined || !mailbox.listChangedSince) return undefined
 
-  const changed = await mailbox.listChangedSince(bookmarked, LIST_PAGE_LIMIT);
+  const changed = await mailbox.listChangedSince(bookmarked, LIST_PAGE_LIMIT)
   if (changed.truncated) {
     // Silent otherwise: the bookmark correctly stays put (never advances
     // past what fit), so every subsequent tick retries the identical
@@ -417,22 +390,19 @@ async function imapListChangedSince(
     log.error(
       `[imap] ${mailboxRole(mailboxPath)} has more CONDSTORE changes than fit one page ` +
         `(limit ${LIST_PAGE_LIMIT}); falling back to a full scan this tick`,
-    );
-    return undefined;
+    )
+    return undefined
   }
 
   if (changed.highestModseq > bookmarked) {
-    modseqByMailbox.set(
-      modseqKey(mailboxPath, mailbox.uidValidity),
-      changed.highestModseq,
-    );
+    modseqByMailbox.set(modseqKey(mailboxPath, mailbox.uidValidity), changed.highestModseq)
   }
   return {
     items: changed.messages.map((info) =>
       toEnvelope(id, account, mailboxPath, mailbox.uidValidity, info),
     ),
     cursor: undefined,
-  };
+  }
 }
 
 // Whether a bookmark actually exists is tracked separately from the
@@ -444,9 +414,9 @@ async function imapListChangedSince(
 // already-precise bookmark with a coarser one that a UID-window scan's
 // limited results don't actually back up.
 interface BookmarkLookup {
-  modseqKeyForMailbox: string;
-  hasExistingBookmark: boolean;
-  bookmarked: bigint | undefined;
+  modseqKeyForMailbox: string
+  hasExistingBookmark: boolean
+  bookmarked: bigint | undefined
 }
 
 function resolveBookmark(
@@ -456,14 +426,13 @@ function resolveBookmark(
   modseqByMailbox: Map<string, bigint>,
   options: ListOptions | undefined,
 ): BookmarkLookup {
-  const modseqKeyForMailbox = modseqKey(mailboxPath, mailbox.uidValidity);
-  const hasExistingBookmark =
-    parsed === undefined && modseqByMailbox.has(modseqKeyForMailbox);
+  const modseqKeyForMailbox = modseqKey(mailboxPath, mailbox.uidValidity)
+  const hasExistingBookmark = parsed === undefined && modseqByMailbox.has(modseqKeyForMailbox)
   const bookmarked =
     hasExistingBookmark && !options?.skipFastPath
       ? modseqByMailbox.get(modseqKeyForMailbox)
-      : undefined;
-  return { modseqKeyForMailbox, hasExistingBookmark, bookmarked };
+      : undefined
+  return { modseqKeyForMailbox, hasExistingBookmark, bookmarked }
 }
 
 // A full head scan only bootstraps the bookmark on a true cold start — no
@@ -482,23 +451,15 @@ function bootstrapBookmarkIfColdStart(
   parsed: ReturnType<typeof parseCursor>,
   modseqByMailbox: Map<string, bigint>,
 ): void {
-  if (
-    parsed !== undefined ||
-    lookup.hasExistingBookmark ||
-    mailbox.highestModseq === undefined
-  ) {
-    return;
+  if (parsed !== undefined || lookup.hasExistingBookmark || mailbox.highestModseq === undefined) {
+    return
   }
   // A bootstrap under a new UIDVALIDITY (mailbox recreation) is the one
   // moment this mailbox's OLD key is known to be dead — prune it so a
   // long-lived process doesn't accumulate one stale entry per recreation
   // forever.
-  pruneStaleModseqKeys(
-    modseqByMailbox,
-    mailboxPath,
-    lookup.modseqKeyForMailbox,
-  );
-  modseqByMailbox.set(lookup.modseqKeyForMailbox, mailbox.highestModseq);
+  pruneStaleModseqKeys(modseqByMailbox, mailboxPath, lookup.modseqKeyForMailbox)
+  modseqByMailbox.set(lookup.modseqKeyForMailbox, mailbox.highestModseq)
 }
 
 // Newest-first bounded page over one mailbox; cursor is `uidValidity:uid` for
@@ -515,17 +476,11 @@ async function imapList(
   modseqByMailbox: Map<string, bigint>,
   options: ListOptions | undefined,
 ): Promise<Page<Envelope>> {
-  const parsed = parseCursor(cursor);
+  const parsed = parseCursor(cursor)
   return pool.withMailbox(mailboxPath, {}, async (mailbox) => {
-    if (!mailbox.listBefore) throw unsupported(id, "list");
+    if (!mailbox.listBefore) throw unsupported(id, 'list')
 
-    const lookup = resolveBookmark(
-      mailboxPath,
-      mailbox,
-      parsed,
-      modseqByMailbox,
-      options,
-    );
+    const lookup = resolveBookmark(mailboxPath, mailbox, parsed, modseqByMailbox, options)
     const fastPath = await imapListChangedSince({
       id,
       account,
@@ -533,68 +488,55 @@ async function imapList(
       mailbox,
       bookmarked: lookup.bookmarked,
       modseqByMailbox,
-    });
-    if (fastPath) return fastPath;
+    })
+    if (fastPath) return fastPath
 
     if (parsed && parsed.uidValidity !== mailbox.uidValidity) {
       throw new Error(
         `stale list() cursor: issued for UIDVALIDITY ${parsed.uidValidity}, ` +
           `mailbox ${mailboxPath} is now at ${mailbox.uidValidity}`,
-      );
+      )
     }
-    const window = await mailbox.listBefore(parsed?.uid, LIST_PAGE_LIMIT);
+    const window = await mailbox.listBefore(parsed?.uid, LIST_PAGE_LIMIT)
     const items = window.messages.map((info) =>
       toEnvelope(id, account, mailboxPath, mailbox.uidValidity, info),
-    );
-    bootstrapBookmarkIfColdStart(
-      lookup,
-      mailboxPath,
-      mailbox,
-      parsed,
-      modseqByMailbox,
-    );
-    const last = window.messages[window.messages.length - 1];
+    )
+    bootstrapBookmarkIfColdStart(lookup, mailboxPath, mailbox, parsed, modseqByMailbox)
+    const last = window.messages[window.messages.length - 1]
     // Prefer the lowest returned message's uid (tighter — a window that had
     // more than `limit` hits gets revisited from exactly the right spot);
     // fall back to the scan boundary when the page came back empty (a
     // window-budget cap can stop the scan before finding anything), so an
     // empty-but-truncated page never collapses into "pagination ended".
-    const nextUid = last?.uid ?? window.nextBeforeUid;
+    const nextUid = last?.uid ?? window.nextBeforeUid
     return {
       items,
-      cursor: window.truncated
-        ? `${mailbox.uidValidity}:${nextUid}`
-        : undefined,
-    };
-  });
+      cursor: window.truncated ? `${mailbox.uidValidity}:${nextUid}` : undefined,
+    }
+  })
 }
 
-function toMessageAttachments(
-  attachments: Email["attachments"],
-): MessageAttachment[] {
+function toMessageAttachments(attachments: Email['attachments']): MessageAttachment[] {
   return attachments.map((attachment) => ({
     filename: attachment.filename,
     contentType: attachment.mimeType,
     size:
-      typeof attachment.content === "string"
+      typeof attachment.content === 'string'
         ? Buffer.byteLength(attachment.content)
         : attachment.content.byteLength,
-  }));
+  }))
 }
 
-async function parseImapSource(
-  ref: MessageRef,
-  raw: Uint8Array,
-): Promise<Message> {
-  const parsed = await PostalMime.parse(raw);
-  const attachments = toMessageAttachments(parsed.attachments);
-  const cc = addressList(parsed.cc);
+async function parseImapSource(ref: MessageRef, raw: Uint8Array): Promise<Message> {
+  const parsed = await PostalMime.parse(raw)
+  const attachments = toMessageAttachments(parsed.attachments)
+  const cc = addressList(parsed.cc)
   return {
     ref,
-    from: parsed.from?.address ?? "",
+    from: parsed.from?.address ?? '',
     to: addressList(parsed.to),
     ...(cc.length > 0 ? { cc } : {}),
-    subject: parsed.subject ?? "",
+    subject: parsed.subject ?? '',
     // parsed.date is postal-mime's raw, unvalidated Date header — go through
     // the same validDate() gate list()/toEnvelope() use, so a malformed
     // header becomes null instead of flowing through as garbage.
@@ -609,7 +551,7 @@ async function parseImapSource(
     html: parsed.html ?? null,
     text: parsed.text ?? null,
     attachments,
-  };
+  }
 }
 
 async function imapRead(
@@ -618,14 +560,14 @@ async function imapRead(
   account: string,
   ref: MessageRef,
 ): Promise<Message> {
-  assertOwnProvider(id, account, ref);
+  assertOwnProvider(id, account, ref)
   return pool.withMailbox(ref.mailbox, {}, async (mailbox) => {
-    assertFreshRef(ref, mailbox.uidValidity);
-    const sources = await mailbox.fetchSources([ref.uid]);
-    const raw = sources.get(ref.uid);
-    if (!raw) throw new Error(`uid ${ref.uid} not found in ${ref.mailbox}`);
-    return parseImapSource(ref, raw);
-  });
+    assertFreshRef(ref, mailbox.uidValidity)
+    const sources = await mailbox.fetchSources([ref.uid])
+    const raw = sources.get(ref.uid)
+    if (!raw) throw new Error(`uid ${ref.uid} not found in ${ref.mailbox}`)
+    return parseImapSource(ref, raw)
+  })
 }
 
 async function imapSearch(
@@ -634,18 +576,18 @@ async function imapSearch(
   account: string,
   query: SearchQuery,
 ): Promise<MessageRef[]> {
-  const mailboxPath = query.mailbox ?? "INBOX";
+  const mailboxPath = query.mailbox ?? 'INBOX'
   return pool.withMailbox(mailboxPath, {}, async (mailbox) => {
-    if (!mailbox.search) throw unsupported(id, "search");
-    const uids = await mailbox.search(query);
+    if (!mailbox.search) throw unsupported(id, 'search')
+    const uids = await mailbox.search(query)
     return uids.map((uid) => ({
       provider: id,
       account,
       mailbox: mailboxPath,
       uidValidity: mailbox.uidValidity,
       uid,
-    }));
-  });
+    }))
+  })
 }
 
 async function imapSetFlags(
@@ -655,12 +597,12 @@ async function imapSetFlags(
   ref: MessageRef,
   flags: FlagChange,
 ): Promise<void> {
-  assertOwnProvider(id, account, ref);
+  assertOwnProvider(id, account, ref)
   return pool.withMailbox(ref.mailbox, { readOnly: false }, async (mailbox) => {
-    assertFreshRef(ref, mailbox.uidValidity);
-    if (!mailbox.setFlags) throw unsupported(id, "setFlags");
-    await mailbox.setFlags(ref.uid, flags);
-  });
+    assertFreshRef(ref, mailbox.uidValidity)
+    if (!mailbox.setFlags) throw unsupported(id, 'setFlags')
+    await mailbox.setFlags(ref.uid, flags)
+  })
 }
 
 async function imapMove(
@@ -670,20 +612,20 @@ async function imapMove(
   ref: MessageRef,
   toMailbox: string,
 ): Promise<MessageRef> {
-  assertOwnProvider(id, account, ref);
+  assertOwnProvider(id, account, ref)
   return pool.withMailbox(ref.mailbox, { readOnly: false }, async (mailbox) => {
-    assertFreshRef(ref, mailbox.uidValidity);
-    if (!mailbox.move) throw unsupported(id, "move");
-    const moved = await mailbox.move(ref.uid, toMailbox);
+    assertFreshRef(ref, mailbox.uidValidity)
+    if (!mailbox.move) throw unsupported(id, 'move')
+    const moved = await mailbox.move(ref.uid, toMailbox)
     if (!moved) {
-      throw new Error(`move of uid ${ref.uid} to ${toMailbox} failed`);
+      throw new Error(`move of uid ${ref.uid} to ${toMailbox} failed`)
     }
     if (moved.uid === null || moved.uidValidity === null) {
       throw new Error(
         `move of uid ${ref.uid} to ${toMailbox} succeeded, but the server ` +
-          "reported no destination UID/UIDVALIDITY (no UIDPLUS) — refusing " +
-          "to build a ref that might target the wrong message",
-      );
+          'reported no destination UID/UIDVALIDITY (no UIDPLUS) — refusing ' +
+          'to build a ref that might target the wrong message',
+      )
     }
     return {
       provider: id,
@@ -691,24 +633,21 @@ async function imapMove(
       mailbox: toMailbox,
       uidValidity: moved.uidValidity,
       uid: moved.uid,
-    };
-  });
+    }
+  })
 }
 
 // Reconnect backoff for watch()'s dedicated connection: same shape as
 // src/db/jobs.ts's backoff jitter (base + up to 20% jitter), doubled each
 // attempt up to a 5-minute cap, reset to the floor on every successful
 // reconnect.
-const IDLE_RECONNECT_INITIAL_MS = 5_000;
-const IDLE_RECONNECT_MAX_MS = 5 * 60 * 1000;
-const IDLE_RECONNECT_JITTER_RATIO = 0.2;
+const IDLE_RECONNECT_INITIAL_MS = 5_000
+const IDLE_RECONNECT_MAX_MS = 5 * 60 * 1000
+const IDLE_RECONNECT_JITTER_RATIO = 0.2
 
 function idleReconnectDelayMs(attempt: number, random: () => number): number {
-  const base = Math.min(
-    IDLE_RECONNECT_INITIAL_MS * 2 ** attempt,
-    IDLE_RECONNECT_MAX_MS,
-  );
-  return base + Math.floor(random() * base * IDLE_RECONNECT_JITTER_RATIO);
+  const base = Math.min(IDLE_RECONNECT_INITIAL_MS * 2 ** attempt, IDLE_RECONNECT_MAX_MS)
+  return base + Math.floor(random() * base * IDLE_RECONNECT_JITTER_RATIO)
 }
 
 // Plain network hang guard (not an agent budget) on one connect() +
@@ -716,39 +655,39 @@ function idleReconnectDelayMs(attempt: number, random: () => number): number {
 // timeouts; this is the backstop that keeps the reconnect loop alive if an
 // attempt ever stalls past all of them — an attempt that never settles would
 // end the loop silently, and the watch with it.
-const IDLE_CONNECT_HANG_GUARD_MS = 2 * 60 * 1000;
+const IDLE_CONNECT_HANG_GUARD_MS = 2 * 60 * 1000
 
 // Names, codes and flags only — never the server's response text.
 function watchErrorAttrs(error: unknown): Record<string, string | boolean> {
-  const attrs: Record<string, string | boolean> = { error: errorName(error) };
-  if (typeof error !== "object" || error === null) return attrs;
-  if ("code" in error && typeof error.code === "string") {
-    attrs.code = error.code;
+  const attrs: Record<string, string | boolean> = { error: errorName(error) }
+  if (typeof error !== 'object' || error === null) return attrs
+  if ('code' in error && typeof error.code === 'string') {
+    attrs.code = error.code
   }
-  if ("authenticationFailed" in error && error.authenticationFailed === true) {
-    attrs.authenticationFailed = true;
+  if ('authenticationFailed' in error && error.authenticationFailed === true) {
+    attrs.authenticationFailed = true
   }
-  return attrs;
+  return attrs
 }
 
 function withHangGuard<T>(work: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined
   const guard = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      const error = new Error(`IMAP watch connect did not settle in ${ms}ms`);
-      Object.assign(error, { code: "WATCH_CONNECT_HANG" });
-      reject(error);
-    }, ms);
-    timer.unref();
-  });
-  return Promise.race([work, guard]).finally(() => clearTimeout(timer));
+      const error = new Error(`IMAP watch connect did not settle in ${ms}ms`)
+      Object.assign(error, { code: 'WATCH_CONNECT_HANG' })
+      reject(error)
+    }, ms)
+    timer.unref()
+  })
+  return Promise.race([work, guard]).finally(() => clearTimeout(timer))
 }
 
 function defaultIdleReconnectWait(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref();
-  });
+    const timer = setTimeout(resolve, ms)
+    timer.unref()
+  })
 }
 
 // watch()'s own dedicated connection, deliberately separate from the pooled
@@ -764,44 +703,44 @@ async function imapWatch(
     random = Math.random,
     connectHangGuardMs = IDLE_CONNECT_HANG_GUARD_MS,
   }: {
-    createIdleClient?: (config: ImapConfig) => ImapIdleClient;
-    wait?: (ms: number) => Promise<void>;
-    random?: () => number;
-    connectHangGuardMs?: number;
+    createIdleClient?: (config: ImapConfig) => ImapIdleClient
+    wait?: (ms: number) => Promise<void>
+    random?: () => number
+    connectHangGuardMs?: number
   } = {},
 ): Promise<Unsubscribe> {
-  let stopped = false;
-  let client: ImapIdleClient | null = null;
-  let attempt = 0;
+  let stopped = false
+  let client: ImapIdleClient | null = null
+  let attempt = 0
   // A dropped connection fires both the idle loop's rejected idle() and the
   // client's own 'close'/'error' events — guard against starting two
   // concurrent reconnect loops for the same drop.
-  let reconnecting = false;
+  let reconnecting = false
   // Only true once a connectAndIdle() has actually finished connecting and
   // opening the mailbox. Until then, handleDrop() must stay inert: the very
   // first connect (or its mailboxOpen) failing already rejects watch()'s own
   // promise via the `await connectAndIdle()` below, and its caller has no
   // Unsubscribe yet to ever stop a reconnect loop — without this guard a bad
   // first connection would retry forever in the background.
-  let everConnected = false;
+  let everConnected = false
 
   function handleDrop(): void {
-    if (stopped || reconnecting || !everConnected) return;
-    reconnecting = true;
-    void reconnectLoop();
+    if (stopped || reconnecting || !everConnected) return
+    reconnecting = true
+    void reconnectLoop()
   }
 
   // Stable references so detachListeners() below can remove exactly these
   // listeners later via off(event, listener) — an anonymous arrow passed to
   // on() can never be un-registered by reference.
-  const handleChange = (): void => onChange();
+  const handleChange = (): void => onChange()
 
   function attachListeners(current: ImapIdleClient): void {
-    current.on("exists", handleChange);
-    current.on("expunge", handleChange);
-    current.on("flags", handleChange);
-    current.on("close", handleDrop);
-    current.on("error", handleDrop);
+    current.on('exists', handleChange)
+    current.on('expunge', handleChange)
+    current.on('flags', handleChange)
+    current.on('close', handleDrop)
+    current.on('error', handleDrop)
   }
 
   // Removes only the listeners attachListeners() added above, scoped by both
@@ -814,11 +753,11 @@ async function imapWatch(
   // a late error the socket routinely still emits during teardown (see
   // PLAN.md Wave 4 review round 2, bug 1).
   function detachListeners(current: ImapIdleClient): void {
-    current.off("exists", handleChange);
-    current.off("expunge", handleChange);
-    current.off("flags", handleChange);
-    current.off("close", handleDrop);
-    current.off("error", handleDrop);
+    current.off('exists', handleChange)
+    current.off('expunge', handleChange)
+    current.off('flags', handleChange)
+    current.off('close', handleDrop)
+    current.off('error', handleDrop)
   }
 
   async function idleLoop(current: ImapIdleClient): Promise<void> {
@@ -826,7 +765,7 @@ async function imapWatch(
       // idle() resolves when IDLE ends (RFC's ~29-minute cap, or another
       // command interrupting it) — re-enter it to keep watching.
       while (!stopped && client === current) {
-        await current.idle();
+        await current.idle()
       }
     } catch (error) {
       // A reconnect may already have swapped `client` to a new connection by
@@ -836,18 +775,18 @@ async function imapWatch(
       // fresh here would start a second reconnect loop and tear down the
       // just-established replacement (see PLAN.md Wave 4 review round 2,
       // bug 2).
-      if (client !== current) return;
-      log.error("[imap] watch idle loop failed", {
+      if (client !== current) return
+      log.error('[imap] watch idle loop failed', {
         mailbox: mailboxRole(mailboxPath),
         ...watchErrorAttrs(error),
-      });
-      handleDrop();
+      })
+      handleDrop()
     }
   }
 
   async function connectAndOpenMailbox(current: ImapIdleClient): Promise<void> {
-    await current.connect();
-    await current.mailboxOpen(mailboxPath, { readOnly: true });
+    await current.connect()
+    await current.mailboxOpen(mailboxPath, { readOnly: true })
   }
 
   async function connectAndIdle(): Promise<void> {
@@ -856,79 +795,79 @@ async function imapWatch(
     // handleDrop() again and start a second, redundant reconnect once this
     // one succeeds and resets `reconnecting` — plus it leaks the connection
     // on Bridge's side.
-    const previous = client;
-    const current = createIdleClient(config);
-    client = current;
+    const previous = client
+    const current = createIdleClient(config)
+    client = current
     if (previous) {
-      detachListeners(previous);
+      detachListeners(previous)
       previous.logout().catch(() => {
         // the socket may already be dead.
-      });
+      })
     }
-    attachListeners(current);
+    attachListeners(current)
     try {
-      await withHangGuard(connectAndOpenMailbox(current), connectHangGuardMs);
+      await withHangGuard(connectAndOpenMailbox(current), connectHangGuardMs)
     } catch (error) {
-      detachListeners(current);
-      if (client === current) client = null;
+      detachListeners(current)
+      if (client === current) client = null
       try {
-        current.close();
+        current.close()
       } catch {
         // the socket may already be dead.
       }
-      throw error;
+      throw error
     }
     // Unsubscribed while this attempt was in flight: Unsubscribe already
     // detached and logged out `current`, so drop it without any bookkeeping.
-    if (stopped) return;
-    everConnected = true;
-    attempt = 0;
-    reconnecting = false;
-    void idleLoop(current);
+    if (stopped) return
+    everConnected = true
+    attempt = 0
+    reconnecting = false
+    void idleLoop(current)
   }
 
   async function reconnectLoop(): Promise<void> {
-    if (stopped) return;
-    const delay = idleReconnectDelayMs(attempt, random);
-    attempt++;
-    log.error("[imap] watch connection dropped, reconnecting", {
+    if (stopped) return
+    const delay = idleReconnectDelayMs(attempt, random)
+    attempt++
+    log.error('[imap] watch connection dropped, reconnecting', {
       mailbox: mailboxRole(mailboxPath),
       delayMs: delay,
-    });
-    await wait(delay);
-    if (stopped) return;
+    })
+    await wait(delay)
+    if (stopped) return
     try {
-      await connectAndIdle();
+      await connectAndIdle()
     } catch (error) {
       // Bridge right after a restart answers LOGIN with "no such user" until
       // it has loaded the account — an auth failure here is transient, so it
       // backs off and retries like any other failure, never gives up.
-      log.error("[imap] watch reconnect failed", {
+      log.error('[imap] watch reconnect failed', {
         mailbox: mailboxRole(mailboxPath),
         ...watchErrorAttrs(error),
-      });
-      void reconnectLoop();
-      return;
+      })
+      void reconnectLoop()
+      return
     }
-    if (stopped) return;
-    log.info("[imap] watch reconnected", { mailbox: mailboxRole(mailboxPath) });
+    if (stopped) return
+    log.info('[imap] watch reconnected', { mailbox: mailboxRole(mailboxPath) })
     // IDLE only reports changes from now on: anything that arrived while the
     // connection was down needs one sync of its own.
-    onChange();
+    onChange()
   }
 
-  await connectAndIdle();
+  await connectAndIdle()
 
   return () => {
-    stopped = true;
-    const current = client;
-    client = null;
-    if (!current) return;
-    detachListeners(current);
+    stopped = true
+    const current = client
+    client = null
+    if (!current) return
+    detachListeners(current)
     current.logout().catch(() => {
       // the socket may already be dead.
-    });
-  };
+    })
+  }
 }
 
 export function createImapProvider(
@@ -943,38 +882,30 @@ export function createImapProvider(
     idleReconnectRandom,
     idleConnectHangGuardMs,
   }: {
-    id: ImapProviderId;
-    account: string;
-    port?: ImapPort;
-    poolIdleMs?: number;
+    id: ImapProviderId
+    account: string
+    port?: ImapPort
+    poolIdleMs?: number
     // watch()-only overrides, for tests: its dedicated connection never
     // touches the session pool above.
-    createIdleClient?: (config: ImapConfig) => ImapIdleClient;
-    idleReconnectWait?: (ms: number) => Promise<void>;
-    idleReconnectRandom?: () => number;
-    idleConnectHangGuardMs?: number;
+    createIdleClient?: (config: ImapConfig) => ImapIdleClient
+    idleReconnectWait?: (ms: number) => Promise<void>
+    idleReconnectRandom?: () => number
+    idleConnectHangGuardMs?: number
   },
 ): MailProvider {
-  const pool = createSessionPool(port, poolIdleMs);
+  const pool = createSessionPool(port, poolIdleMs)
   // CONDSTORE bookmarks are process-local: a restart just costs one full head
   // scan per mailbox and re-bootstraps the bookmark. Never persisted, so a
   // stale bookmark can't survive a mailbox recreation either.
-  const modseqByMailbox = new Map<string, bigint>();
+  const modseqByMailbox = new Map<string, bigint>()
   return {
     id,
     account,
     capabilities: () => imapCapabilities(pool, id),
     listMailboxes: () => imapListMailboxes(pool, id),
     list: (mailboxPath, cursor, options) =>
-      imapList(
-        pool,
-        id,
-        account,
-        mailboxPath,
-        cursor,
-        modseqByMailbox,
-        options,
-      ),
+      imapList(pool, id, account, mailboxPath, cursor, modseqByMailbox, options),
     read: (ref) => imapRead(pool, id, account, ref),
     search: (query) => imapSearch(pool, id, account, query),
     setFlags: (ref, flags) => imapSetFlags(pool, id, account, ref, flags),
@@ -986,5 +917,5 @@ export function createImapProvider(
         random: idleReconnectRandom,
         connectHangGuardMs: idleConnectHangGuardMs,
       }),
-  };
+  }
 }

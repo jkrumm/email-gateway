@@ -1,16 +1,16 @@
-import { renderTemplate, type SendProvider } from "../providers/send-port";
-import { sendProviderByName } from "../providers/send-registry";
+import { renderTemplate, type SendProvider } from '../providers/send-port'
+import { sendProviderByName } from '../providers/send-registry'
 import {
   sendBodiesRepo as defaultSendBodies,
   sendLogRepo as defaultSendLog,
-} from "../db/mail-index";
-import type { SendBodiesRepo } from "../db/send-bodies";
-import { SEND_CLAIM_STALE_MS, type SendLogRepo } from "../db/send-log";
-import { findTemplateEntry, renderTemplateElement } from "../emails/registry";
-import { storeSendBody } from "../utils/send-body";
-import { emitSendResult } from "../utils/send-result";
-import type { JobHandler } from "./runner";
-import { log } from "../telemetry/log";
+} from '../db/mail-index'
+import type { SendBodiesRepo } from '../db/send-bodies'
+import { SEND_CLAIM_STALE_MS, type SendLogRepo } from '../db/send-log'
+import { findTemplateEntry, renderTemplateElement } from '../emails/registry'
+import { storeSendBody } from '../utils/send-body'
+import { emitSendResult } from '../utils/send-result'
+import type { JobHandler } from './runner'
+import { log } from '../telemetry/log'
 
 // The `send` job kind (docs/architecture.md §Jobs: "sends become jobs"):
 // template test-send and agent `POST /api/sends` insert the send_log row and
@@ -18,16 +18,16 @@ import { log } from "../telemetry/log";
 // enqueue nothing.
 export interface SendJobPayload {
   // The send_log row id, already inserted by the caller before enqueueing.
-  id: string;
-  from: string;
-  to: string;
-  replyTo?: string;
-  subject: string;
+  id: string
+  from: string
+  to: string
+  replyTo?: string
+  subject: string
   // A React element can't survive payload_json — the registered template's
   // id and the props to render it with are stored instead (src/emails/
   // registry.ts), and re-rendered here.
-  templateName: string;
-  templateProps: unknown;
+  templateName: string
+  templateProps: unknown
 }
 
 export function createSendHandler({
@@ -35,15 +35,12 @@ export function createSendHandler({
   sendLog = defaultSendLog,
   sendBodies = defaultSendBodies,
 }: {
-  providerByName?: (name: string) => SendProvider | null;
-  sendLog?: Pick<
-    SendLogRepo,
-    "recordProviderResult" | "getSendLog" | "claimSend" | "releaseSend"
-  >;
-  sendBodies?: Pick<SendBodiesRepo, "save">;
+  providerByName?: (name: string) => SendProvider | null
+  sendLog?: Pick<SendLogRepo, 'recordProviderResult' | 'getSendLog' | 'claimSend' | 'releaseSend'>
+  sendBodies?: Pick<SendBodiesRepo, 'save'>
 } = {}): JobHandler {
   return async (payload) => {
-    const input = payload as SendJobPayload;
+    const input = payload as SendJobPayload
 
     // Idempotency guard: provider.send runs before recordProviderResult's
     // UPDATE. If that UPDATE throws (e.g. SQLITE_BUSY during the
@@ -54,32 +51,26 @@ export function createSendHandler({
     // id counts, not only status "sent": the SES event webhook may have
     // advanced the row to "delivered", and a provider without an idempotency
     // key (SES) would send the mail a second time.
-    const existing = sendLog.getSendLog(input.id);
-    if (existing?.providerMessageId) return;
+    const existing = sendLog.getSendLog(input.id)
+    if (existing?.providerMessageId) return
 
     // The provider was chosen at enqueue time (enqueueTemplateSend) and
     // stored on the row, so a row written under another provider name is
     // never rerouted to this one.
     if (!existing) {
-      throw new Error(`send job ${input.id}: no send_log row`);
+      throw new Error(`send job ${input.id}: no send_log row`)
     }
-    const provider = providerByName(existing.provider);
+    const provider = providerByName(existing.provider)
     if (!provider) {
-      throw new Error(
-        `send job ${input.id}: unknown provider "${existing.provider}"`,
-      );
+      throw new Error(`send job ${input.id}: unknown provider "${existing.provider}"`)
     }
 
-    const entry = findTemplateEntry(input.templateName);
+    const entry = findTemplateEntry(input.templateName)
     if (!entry) {
-      throw new Error(
-        `send job ${input.id}: unknown template "${input.templateName}"`,
-      );
+      throw new Error(`send job ${input.id}: unknown template "${input.templateName}"`)
     }
 
-    const { html, text } = await renderTemplate(
-      renderTemplateElement(entry, input.templateProps),
-    );
+    const { html, text } = await renderTemplate(renderTemplateElement(entry, input.templateProps))
 
     // The read above and the send below race when two containers overlap on
     // a deploy: both could see no provider message id and both send, which a
@@ -94,14 +85,10 @@ export function createSendHandler({
     // response or the recordProviderResult write was lost — which can send
     // again once the claim goes stale (SEND_CLAIM_STALE_MS), because SES has
     // no idempotency key.
-    const staleBefore = new Date(
-      Date.now() - SEND_CLAIM_STALE_MS,
-    ).toISOString();
-    const claim = sendLog.claimSend(input.id, staleBefore);
+    const staleBefore = new Date(Date.now() - SEND_CLAIM_STALE_MS).toISOString()
+    const claim = sendLog.claimSend(input.id, staleBefore)
     if (!claim) {
-      throw new Error(
-        `send job ${input.id}: another worker holds the send claim, retrying later`,
-      );
+      throw new Error(`send job ${input.id}: another worker holds the send claim, retrying later`)
     }
 
     // The provider's own idempotency key is the second line of defense: if
@@ -109,9 +96,9 @@ export function createSendHandler({
     // crash mid-handler, not just the recordProviderResult write below
     // throwing), the provider refuses the duplicate itself instead of
     // sending it.
-    let providerMessageId: string;
+    let providerMessageId: string
     try {
-      ({ providerMessageId } = await provider.send({
+      ;({ providerMessageId } = await provider.send({
         from: input.from,
         to: input.to,
         replyTo: input.replyTo,
@@ -120,22 +107,22 @@ export function createSendHandler({
         text,
         idempotencyKey: input.id,
         tags: { template: input.templateName, source: existing.requestedBy },
-      }));
+      }))
     } catch (error) {
       // Nothing was sent: hand the claim back so the retry can take it.
-      sendLog.releaseSend(input.id, claim);
+      sendLog.releaseSend(input.id, claim)
       emitSendResult({
         template: input.templateName,
         source: existing.requestedBy,
-        status: "failed",
-      });
-      throw error;
+        status: 'failed',
+      })
+      throw error
     }
     emitSendResult({
       template: input.templateName,
       source: existing.requestedBy,
-      status: "sent",
-    });
+      status: 'sent',
+    })
 
     // A write failure here must never propagate: the email already sent, so
     // the runner's at-least-once retry on a thrown error would call send()
@@ -145,13 +132,13 @@ export function createSendHandler({
     try {
       sendLog.recordProviderResult(input.id, {
         providerMessageId,
-        status: "sent",
-      });
+        status: 'sent',
+      })
     } catch (error) {
-      log.error("Failed to record send_log provider result", {
+      log.error('Failed to record send_log provider result', {
         error,
         id: input.id,
-      });
+      })
     }
 
     // Fail-open like the write above: the mail is out, a body that cannot be
@@ -162,6 +149,6 @@ export function createSendHandler({
       rendered: { html, text },
       templateId: input.templateName,
       templateProps: input.templateProps,
-    });
-  };
+    })
+  }
 }

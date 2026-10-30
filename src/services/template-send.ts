@@ -1,9 +1,9 @@
-import type { Database } from "bun:sqlite";
-import type { JobQueue } from "../db/jobs";
-import type { SendLogRepo } from "../db/send-log";
-import type { SendJobPayload } from "../jobs/send";
-import { sendProvider } from "../providers/send-registry";
-import { DEFAULT_FROM } from "../utils/send-mail";
+import type { Database } from 'bun:sqlite'
+import type { JobQueue } from '../db/jobs'
+import type { SendLogRepo } from '../db/send-log'
+import type { SendJobPayload } from '../jobs/send'
+import { sendProvider } from '../providers/send-registry'
+import { DEFAULT_FROM } from '../utils/send-mail'
 
 // The one send_log-insert + send-job-enqueue sequence every template send
 // shares (src/services/agent-api.ts's agent sends, src/api/plugin.ts's
@@ -12,12 +12,12 @@ import { DEFAULT_FROM } from "../utils/send-mail";
 // would leave a send_log row with no job behind it while the caller already got
 // back the jobId.
 export interface EnqueueTemplateSendInput {
-  templateId: string;
-  to: string;
-  subject: string;
-  templateProps: unknown;
-  requestedBy: string;
-  replyTo?: string;
+  templateId: string
+  to: string
+  subject: string
+  templateProps: unknown
+  requestedBy: string
+  replyTo?: string
 }
 
 export function enqueueTemplateSend(
@@ -25,16 +25,16 @@ export function enqueueTemplateSend(
   input: EnqueueTemplateSendInput,
 ): { sendLogId: string; jobId: string } {
   return db.transaction(() => {
-    const sendLogId = crypto.randomUUID();
+    const sendLogId = crypto.randomUUID()
     sendLog.insertSendLog({
       id: sendLogId,
       templateId: input.templateId,
       recipients: [input.to],
       provider: sendProvider().id,
       requestedBy: input.requestedBy,
-    });
+    })
     const jobId = jobs.enqueue({
-      kind: "send",
+      kind: 'send',
       payload: {
         id: sendLogId,
         from: DEFAULT_FROM,
@@ -45,7 +45,7 @@ export function enqueueTemplateSend(
         ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       } satisfies SendJobPayload,
       subjectKey: sendLogId,
-    });
-    return { sendLogId, jobId };
-  })();
+    })
+    return { sendLogId, jobId }
+  })()
 }

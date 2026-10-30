@@ -1,41 +1,41 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from 'bun:sqlite'
 import {
   mailDb as defaultMailDb,
   messagesRepo as defaultMessages,
   sendLogRepo as defaultSendLog,
   threadSummariesRepo as defaultThreadSummaries,
-} from "../db/mail-index";
+} from '../db/mail-index'
 import type {
   Classification,
   ListMessagesResult,
   MessageEnvelope,
   MessageLocation,
   MessagesRepo,
-} from "../db/messages";
-import type { JobQueue, JobRecord } from "../db/jobs";
-import type { SendLogRepo } from "../db/send-log";
-import type { ThreadSummariesRepo } from "../db/thread-summaries";
-import { jobQueue as defaultJobQueue } from "../jobs/queue";
-import { providerForAccountId as defaultProviderFor } from "../providers/from-env";
-import type { MailProvider, MessageRef } from "../providers/port";
+} from '../db/messages'
+import type { JobQueue, JobRecord } from '../db/jobs'
+import type { SendLogRepo } from '../db/send-log'
+import type { ThreadSummariesRepo } from '../db/thread-summaries'
+import { jobQueue as defaultJobQueue } from '../jobs/queue'
+import { providerForAccountId as defaultProviderFor } from '../providers/from-env'
+import type { MailProvider, MessageRef } from '../providers/port'
 import {
   summarizeThread as defaultSummarizeThread,
   type ThreadMessageForSummary,
-} from "../llm/thread-summary";
-import { draftReply as defaultDraftReply } from "../llm/draft-reply";
-import { getLlmConfig } from "../llm/model";
-import { findTemplateEntry } from "../emails/registry";
-import { enqueueTemplateSend } from "./template-send";
-import { log } from "../telemetry/log";
+} from '../llm/thread-summary'
+import { draftReply as defaultDraftReply } from '../llm/draft-reply'
+import { getLlmConfig } from '../llm/model'
+import { findTemplateEntry } from '../emails/registry'
+import { enqueueTemplateSend } from './template-send'
+import { log } from '../telemetry/log'
 
 // The one service layer both doors call (docs/architecture.md §Agent API: "Both
 // doors share one service layer; neither talks to SQLite or a provider
 // directly") — the REST routes in src/api/plugin.ts now, the MCP tools in a
 // later episode. Injectable deps default to the production singletons, matching
 // createApiRoutes/createClassifyHandler's own DI style.
-type ThreadRowForSummary = Omit<ThreadMessageForSummary, "summary"> & {
-  classification: Classification | null;
-};
+type ThreadRowForSummary = Omit<ThreadMessageForSummary, 'summary'> & {
+  classification: Classification | null
+}
 
 // Every service failure the agent-facing doors can surface, mapped to a stable
 // public status + code. Anything not listed here is an upstream LLM or
@@ -46,19 +46,19 @@ type ThreadRowForSummary = Omit<ThreadMessageForSummary, "summary"> & {
 // routes and the MCP tools route their error strings through this, so the two
 // doors never disagree on what a caller sees for the same failure.
 const AGENT_ERROR_STATUS: Record<string, { status: number; code: string }> = {
-  not_found: { status: 404, code: "not_found" },
-  llm_not_configured: { status: 503, code: "llm_not_configured" },
-  invalid_cursor: { status: 400, code: "invalid_cursor" },
-  no_location: { status: 502, code: "message_unavailable" },
-  provider_not_found: { status: 502, code: "message_unavailable" },
-  read_failed: { status: 502, code: "read_failed" },
-};
+  not_found: { status: 404, code: 'not_found' },
+  llm_not_configured: { status: 503, code: 'llm_not_configured' },
+  invalid_cursor: { status: 400, code: 'invalid_cursor' },
+  no_location: { status: 502, code: 'message_unavailable' },
+  provider_not_found: { status: 502, code: 'message_unavailable' },
+  read_failed: { status: 502, code: 'read_failed' },
+}
 
 export function agentErrorStatus(error: string): {
-  status: number;
-  code: string;
+  status: number
+  code: string
 } {
-  return AGENT_ERROR_STATUS[error] ?? { status: 502, code: "internal_error" };
+  return AGENT_ERROR_STATUS[error] ?? { status: 502, code: 'internal_error' }
 }
 
 // src/db/messages.ts, src/db/mail-submissions.ts and src/db/send-log.ts's
@@ -67,7 +67,7 @@ export function agentErrorStatus(error: string): {
 // validated only as an opaque string, so a garbage value would otherwise
 // surface as an unhandled 500 instead of a clean 400.
 export function isInvalidCursorError(error: unknown): boolean {
-  return error instanceof Error && error.message === "Invalid cursor";
+  return error instanceof Error && error.message === 'Invalid cursor'
 }
 
 export function createAgentApi({
@@ -81,123 +81,112 @@ export function createAgentApi({
   draftReply = defaultDraftReply,
   isLlmConfigured = () => getLlmConfig() !== null,
 }: {
-  db?: Database;
-  messages?: MessagesRepo;
-  jobs?: JobQueue;
-  sendLog?: SendLogRepo;
-  threadSummaries?: ThreadSummariesRepo;
-  providerFor?: (accountId: string) => MailProvider | null;
-  summarizeThread?: typeof defaultSummarizeThread;
-  draftReply?: typeof defaultDraftReply;
-  isLlmConfigured?: () => boolean;
+  db?: Database
+  messages?: MessagesRepo
+  jobs?: JobQueue
+  sendLog?: SendLogRepo
+  threadSummaries?: ThreadSummariesRepo
+  providerFor?: (accountId: string) => MailProvider | null
+  summarizeThread?: typeof defaultSummarizeThread
+  draftReply?: typeof defaultDraftReply
+  isLlmConfigured?: () => boolean
 } = {}) {
   function searchMail({
     q,
     accountIds,
     limit,
   }: {
-    q: string;
-    accountIds?: string[];
-    limit?: number;
+    q: string
+    accountIds?: string[]
+    limit?: number
   }) {
-    const keys = messages.searchMessages(q, { accountIds, limit });
+    const keys = messages.searchMessages(q, { accountIds, limit })
 
     return {
-      via: "fts" as const,
+      via: 'fts' as const,
       keys: keys
         .map((key) => {
-          const message = messages.getMessage(key);
-          if (!message) return null;
+          const message = messages.getMessage(key)
+          if (!message) return null
           return {
             ...message,
             classification: messages.getClassification(key),
-          };
+          }
         })
         .filter((row): row is NonNullable<typeof row> => row !== null),
-    };
+    }
   }
 
-  function readMessage({
-    key,
-    includeBody,
-  }: {
-    key: string;
-    includeBody?: boolean;
-  }):
+  function readMessage({ key, includeBody }: { key: string; includeBody?: boolean }):
     | {
-        ok: true;
+        ok: true
         message: MessageEnvelope & {
-          locations: MessageLocation[];
-          classification: Classification | null;
+          locations: MessageLocation[]
+          classification: Classification | null
           body?: {
-            html: string | null;
-            text: string | null;
-            fetchedAt: string;
-          } | null;
-        };
+            html: string | null
+            text: string | null
+            fetchedAt: string
+          } | null
+        }
       }
-    | { ok: false; error: "not_found" } {
-    const message = messages.getMessage(key);
-    if (!message) return { ok: false as const, error: "not_found" as const };
+    | { ok: false; error: 'not_found' } {
+    const message = messages.getMessage(key)
+    if (!message) return { ok: false as const, error: 'not_found' as const }
 
-    const classification = messages.getClassification(key);
-    const base = { ...message, classification };
-    if (!includeBody) return { ok: true as const, message: base };
+    const classification = messages.getClassification(key)
+    const base = { ...message, classification }
+    if (!includeBody) return { ok: true as const, message: base }
 
     return {
       ok: true as const,
       message: { ...base, body: messages.getBody(key) },
-    };
+    }
   }
 
   function getThread({ key }: { key: string }) {
-    const message = messages.getMessage(key);
-    if (!message) return { ok: false as const, error: "not_found" as const };
+    const message = messages.getMessage(key)
+    if (!message) return { ok: false as const, error: 'not_found' as const }
 
     if (!message.threadKey) {
-      const classification = messages.getClassification(key);
+      const classification = messages.getClassification(key)
       return {
         ok: true as const,
         thread: { rows: [{ ...message, classification }], nextCursor: null },
-      };
+      }
     }
 
     return {
       ok: true as const,
       thread: messages.listMessages({ threadKey: message.threadKey }),
-    };
+    }
   }
 
   // One row, so a cache hit never fetches the whole thread. Falls back to the
   // message's own key when there is no threadKey (its cache key) or the
   // thread lookup comes back empty.
-  function latestThreadMessageKey(
-    threadKey: string | null,
-    fallbackKey: string,
-  ): string {
-    if (!threadKey) return fallbackKey;
-    return (
-      messages.listMessages({ threadKey, limit: 1 }).rows[0]?.key ?? fallbackKey
-    );
+  function latestThreadMessageKey(threadKey: string | null, fallbackKey: string): string {
+    if (!threadKey) return fallbackKey
+    return messages.listMessages({ threadKey, limit: 1 }).rows[0]?.key ?? fallbackKey
   }
 
   async function getThreadSummary({ key }: { key: string }) {
-    const message = messages.getMessage(key);
-    if (!message) return { ok: false as const, error: "not_found" as const };
+    const message = messages.getMessage(key)
+    if (!message) return { ok: false as const, error: 'not_found' as const }
     if (!isLlmConfigured()) {
-      return { ok: false as const, error: "llm_not_configured" as const };
+      return { ok: false as const, error: 'llm_not_configured' as const }
     }
 
     // A message with no threadKey is summarized and cached on its own key.
-    const cacheKey = message.threadKey ?? message.key;
+    const cacheKey = message.threadKey ?? message.key
 
     // The newest message's key is the cache-invalidation key: a thread longer
     // than one 100-row page always reports the same page length, so a row
     // count can never notice an arrival past the cap. One row is cheap on a
     // cache hit; the full page is only fetched on a miss.
-    const latestKey = latestThreadMessageKey(message.threadKey, message.key);
+    const latestKey = latestThreadMessageKey(message.threadKey, message.key)
 
-    const cachedRow = threadSummaries.getSummary(cacheKey);
+    const cachedRow = threadSummaries.getSummary(cacheKey)
     if (cachedRow && cachedRow.latestKey === latestKey) {
       return {
         ok: true as const,
@@ -205,10 +194,10 @@ export function createAgentApi({
         model: cachedRow.model,
         messageCount: cachedRow.messageCount,
         cached: true,
-      };
+      }
     }
 
-    let rows: ThreadRowForSummary[];
+    let rows: ThreadRowForSummary[]
     if (message.threadKey) {
       // 100 = src/db/messages.ts's MAX_LIST_LIMIT: fetch as much of the
       // thread as the store will return in one page. A longer thread is
@@ -217,7 +206,7 @@ export function createAgentApi({
       rows = messages.listMessages({
         threadKey: message.threadKey,
         limit: 100,
-      }).rows;
+      }).rows
     } else {
       rows = [
         {
@@ -227,12 +216,12 @@ export function createAgentApi({
           direction: message.direction,
           classification: messages.getClassification(key),
         },
-      ];
+      ]
     }
 
     const outcome = await summarizeThread({
       messages: [...rows]
-        .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""))
+        .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
         .map((row) => ({
           fromAddress: row.fromAddress,
           subject: row.subject,
@@ -240,22 +229,22 @@ export function createAgentApi({
           direction: row.direction,
           summary: row.classification?.summary ?? null,
         })),
-    });
-    if (!outcome.ok) return { ok: false as const, error: outcome.error };
+    })
+    if (!outcome.ok) return { ok: false as const, error: outcome.error }
 
     threadSummaries.saveSummary(cacheKey, {
       summary: outcome.summary,
       model: outcome.model,
       messageCount: rows.length,
       latestKey,
-    });
+    })
     return {
       ok: true as const,
       summary: outcome.summary,
       model: outcome.model,
       messageCount: rows.length,
       cached: false,
-    };
+    }
   }
 
   function listNeedsAction({
@@ -265,11 +254,11 @@ export function createAgentApi({
     limit,
     cursor,
   }: {
-    accountIds?: string[];
-    since?: string;
-    until?: string;
-    limit?: number;
-    cursor?: string;
+    accountIds?: string[]
+    since?: string
+    until?: string
+    limit?: number
+    cursor?: string
   }): ListMessagesResult {
     return messages.listMessages({
       accountIds,
@@ -278,49 +267,48 @@ export function createAgentApi({
       until,
       limit,
       cursor,
-    });
+    })
   }
 
   async function draftReplyForMessage({
     key,
     instructions,
   }: {
-    key: string;
-    instructions?: string;
+    key: string
+    instructions?: string
   }) {
-    const message = messages.getMessage(key);
-    if (!message) return { ok: false as const, error: "not_found" as const };
+    const message = messages.getMessage(key)
+    if (!message) return { ok: false as const, error: 'not_found' as const }
     if (!isLlmConfigured()) {
-      return { ok: false as const, error: "llm_not_configured" as const };
+      return { ok: false as const, error: 'llm_not_configured' as const }
     }
 
-    let body = messages.getBody(key);
+    let body = messages.getBody(key)
     if (!body) {
       // One bounded live read for the one message being drafted — never a
       // fan-out (mirrors src/jobs/classify.ts's read).
-      const location = message.locations[0];
-      if (!location)
-        return { ok: false as const, error: "no_location" as const };
+      const location = message.locations[0]
+      if (!location) return { ok: false as const, error: 'no_location' as const }
 
-      const provider = providerFor(message.account);
+      const provider = providerFor(message.account)
       if (!provider) {
-        return { ok: false as const, error: "provider_not_found" as const };
+        return { ok: false as const, error: 'provider_not_found' as const }
       }
 
       // A thrown provider or DB error here must become a returned outcome:
       // letting it escape would bypass the routes' error mapping and surface
       // as an unmapped 500 (with raw text) instead of a stable 502 code.
       try {
-        const full = await provider.read(location.providerRef as MessageRef);
-        messages.saveBody(key, { html: full.html, text: full.text });
+        const full = await provider.read(location.providerRef as MessageRef)
+        messages.saveBody(key, { html: full.html, text: full.text })
         body = {
           html: full.html,
           text: full.text,
           fetchedAt: new Date().toISOString(),
-        };
+        }
       } catch (error) {
-        log.error("Draft reply body read failed", { error });
-        return { ok: false as const, error: "read_failed" as const };
+        log.error('Draft reply body read failed', { error })
+        return { ok: false as const, error: 'read_failed' as const }
       }
     }
 
@@ -332,10 +320,10 @@ export function createAgentApi({
         html: body.html,
       },
       instructions,
-    });
-    if (!outcome.ok) return { ok: false as const, error: outcome.error };
+    })
+    if (!outcome.ok) return { ok: false as const, error: outcome.error }
 
-    return { ok: true as const, draft: outcome.draft, model: outcome.model };
+    return { ok: true as const, draft: outcome.draft, model: outcome.model }
   }
 
   function sendTemplate({
@@ -345,14 +333,14 @@ export function createAgentApi({
     subject,
     replyTo,
   }: {
-    templateId: string;
-    to: string;
-    templateProps: unknown;
-    subject?: string;
-    replyTo?: string;
+    templateId: string
+    to: string
+    templateProps: unknown
+    subject?: string
+    replyTo?: string
   }) {
-    const entry = findTemplateEntry(templateId);
-    if (!entry) return { ok: false as const, error: "not_found" as const };
+    const entry = findTemplateEntry(templateId)
+    if (!entry) return { ok: false as const, error: 'not_found' as const }
 
     const { sendLogId, jobId } = enqueueTemplateSend(
       { db, jobs, sendLog },
@@ -361,18 +349,18 @@ export function createAgentApi({
         to,
         subject: subject ?? `Message: ${entry.name}`,
         templateProps,
-        requestedBy: "agent",
+        requestedBy: 'agent',
         replyTo,
       },
-    );
+    )
 
-    return { ok: true as const, sendLogId, jobId };
+    return { ok: true as const, sendLogId, jobId }
   }
 
   function getJobStatus({ jobId }: { jobId: string }) {
-    const job: JobRecord | null = jobs.getJob(jobId);
-    if (!job) return { ok: false as const, error: "not_found" as const };
-    return { ok: true as const, job };
+    const job: JobRecord | null = jobs.getJob(jobId)
+    if (!job) return { ok: false as const, error: 'not_found' as const }
+    return { ok: true as const, job }
   }
 
   return {
@@ -384,7 +372,7 @@ export function createAgentApi({
     draftReply: draftReplyForMessage,
     sendTemplate,
     getJobStatus,
-  };
+  }
 }
 
-export type AgentApi = ReturnType<typeof createAgentApi>;
+export type AgentApi = ReturnType<typeof createAgentApi>

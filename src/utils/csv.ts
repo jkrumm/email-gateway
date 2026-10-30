@@ -3,8 +3,8 @@
 // empty/whitespace value means "no filter", never a filter matching nothing.
 export function splitCsv(value: string | undefined): string[] | undefined {
   const parts = value
-    ?.split(",")
+    ?.split(',')
     .map((part) => part.trim())
-    .filter(Boolean);
-  return parts && parts.length > 0 ? parts : undefined;
+    .filter(Boolean)
+  return parts && parts.length > 0 ? parts : undefined
 }

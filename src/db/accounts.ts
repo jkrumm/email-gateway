@@ -1,39 +1,39 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from 'bun:sqlite'
 
-export type AccountProvider = "proton" | "gmail";
+export type AccountProvider = 'proton' | 'gmail'
 
 export interface Account {
-  id: string;
-  provider: AccountProvider;
-  address: string;
-  mailboxes: string[];
-  cursors: Record<string, string>;
-  lastSuccessAt: string | null;
-  lastError: string | null;
-  lastErrorAt: string | null;
-  lastWarning: string | null;
-  lastWarningAt: string | null;
-  createdAt: string;
+  id: string
+  provider: AccountProvider
+  address: string
+  mailboxes: string[]
+  cursors: Record<string, string>
+  lastSuccessAt: string | null
+  lastError: string | null
+  lastErrorAt: string | null
+  lastWarning: string | null
+  lastWarningAt: string | null
+  createdAt: string
 }
 
 export interface UpsertAccountInput {
-  id: string;
-  provider: AccountProvider;
-  address: string;
+  id: string
+  provider: AccountProvider
+  address: string
 }
 
 interface AccountRow {
-  id: string;
-  provider: AccountProvider;
-  address: string;
-  mailboxes: string | null;
-  cursors: string | null;
-  last_success_at: string | null;
-  last_error: string | null;
-  last_error_at: string | null;
-  last_warning: string | null;
-  last_warning_at: string | null;
-  created_at: string;
+  id: string
+  provider: AccountProvider
+  address: string
+  mailboxes: string | null
+  cursors: string | null
+  last_success_at: string | null
+  last_error: string | null
+  last_error_at: string | null
+  last_warning: string | null
+  last_warning_at: string | null
+  created_at: string
 }
 
 function toAccount(row: AccountRow): Account {
@@ -49,7 +49,7 @@ function toAccount(row: AccountRow): Account {
     lastWarning: row.last_warning,
     lastWarningAt: row.last_warning_at,
     createdAt: row.created_at,
-  };
+  }
 }
 
 // One row per mail account (Proton hello@, a Gmail address);
@@ -63,28 +63,20 @@ export function createAccountsRepo(db: Database) {
        VALUES (?, ?, ?, '[]', '{}', ?)
        ON CONFLICT(id) DO NOTHING`,
       [input.id, input.provider, input.address, new Date().toISOString()],
-    );
+    )
   }
 
   function getAccount(id: string): Account | null {
-    const row = db
-      .query<AccountRow, [string]>("SELECT * FROM accounts WHERE id = ?")
-      .get(id);
-    return row ? toAccount(row) : null;
+    const row = db.query<AccountRow, [string]>('SELECT * FROM accounts WHERE id = ?').get(id)
+    return row ? toAccount(row) : null
   }
 
   function listAccounts(): Account[] {
-    return db
-      .query<AccountRow, []>("SELECT * FROM accounts ORDER BY id")
-      .all()
-      .map(toAccount);
+    return db.query<AccountRow, []>('SELECT * FROM accounts ORDER BY id').all().map(toAccount)
   }
 
   function updateMailboxes(id: string, mailboxes: string[]): void {
-    db.run("UPDATE accounts SET mailboxes = ? WHERE id = ?", [
-      JSON.stringify(mailboxes),
-      id,
-    ]);
+    db.run('UPDATE accounts SET mailboxes = ? WHERE id = ?', [JSON.stringify(mailboxes), id])
   }
 
   // Single atomic statement — merges one mailbox's cursor into the stored
@@ -110,13 +102,10 @@ export function createAccountsRepo(db: Database) {
        SET cursors = json_patch(COALESCE(cursors, '{}'), json_object(?, ?))
        WHERE id = ?`,
       [mailbox, cursor, id],
-    );
+    )
   }
 
-  function recordSuccess(
-    id: string,
-    now: string = new Date().toISOString(),
-  ): void {
+  function recordSuccess(id: string, now: string = new Date().toISOString()): void {
     db.run(
       `UPDATE accounts SET
          last_success_at = ?,
@@ -124,18 +113,11 @@ export function createAccountsRepo(db: Database) {
          last_error_at = NULL
        WHERE id = ?`,
       [now, id],
-    );
+    )
   }
 
-  function recordError(
-    id: string,
-    error: string,
-    now: string = new Date().toISOString(),
-  ): void {
-    db.run(
-      "UPDATE accounts SET last_error = ?, last_error_at = ? WHERE id = ?",
-      [error, now, id],
-    );
+  function recordError(id: string, error: string, now: string = new Date().toISOString()): void {
+    db.run('UPDATE accounts SET last_error = ?, last_error_at = ? WHERE id = ?', [error, now, id])
   }
 
   function recordWarning(
@@ -143,10 +125,11 @@ export function createAccountsRepo(db: Database) {
     warning: string,
     now: string = new Date().toISOString(),
   ): void {
-    db.run(
-      "UPDATE accounts SET last_warning = ?, last_warning_at = ? WHERE id = ?",
-      [warning, now, id],
-    );
+    db.run('UPDATE accounts SET last_warning = ?, last_warning_at = ? WHERE id = ?', [
+      warning,
+      now,
+      id,
+    ])
   }
 
   return {
@@ -158,7 +141,7 @@ export function createAccountsRepo(db: Database) {
     recordSuccess,
     recordError,
     recordWarning,
-  };
+  }
 }
 
-export type AccountsRepo = ReturnType<typeof createAccountsRepo>;
+export type AccountsRepo = ReturnType<typeof createAccountsRepo>

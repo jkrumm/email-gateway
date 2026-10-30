@@ -1,110 +1,110 @@
-import type { Classification, MessageLocation } from "../../../src/db/messages";
-import type { SubmissionSource } from "../../../src/db/mail-submissions";
+import type { Classification, MessageLocation } from '../../../src/db/messages'
+import type { SubmissionSource } from '../../../src/db/mail-submissions'
 
-export type { Classification, MessageLocation };
+export type { Classification, MessageLocation }
 
 export interface MessageRow {
-  key: string;
-  account: string;
-  direction: "inbound" | "outbound";
-  fromAddress: string | null;
-  toAddresses: string[];
-  cc: string[] | null;
-  subject: string | null;
-  date: string | null;
-  size: number | null;
-  hasAttachments: boolean;
-  threadKey: string | null;
-  flags: string[];
-  classification: Classification | null;
+  key: string
+  account: string
+  direction: 'inbound' | 'outbound'
+  fromAddress: string | null
+  toAddresses: string[]
+  cc: string[] | null
+  subject: string | null
+  date: string | null
+  size: number | null
+  hasAttachments: boolean
+  threadKey: string | null
+  flags: string[]
+  classification: Classification | null
 }
 
 export interface MessageDetail extends MessageRow {
-  locations: MessageLocation[];
-  body?: { html: string | null; text: string | null; fetchedAt: string } | null;
+  locations: MessageLocation[]
+  body?: { html: string | null; text: string | null; fetchedAt: string } | null
 }
 
 export interface MessageList {
-  rows: MessageRow[];
-  nextCursor: string | null;
+  rows: MessageRow[]
+  nextCursor: string | null
 }
 
 export interface Submission {
-  id: string;
-  receivedAt: string;
-  source: SubmissionSource;
-  verdict: "legit" | "spam" | "marketing";
-  confidence: number;
-  reason: string;
-  model: string | null;
-  delivered: boolean;
-  submission: Record<string, unknown>;
-  llmLatencyMs: number | null;
+  id: string
+  receivedAt: string
+  source: SubmissionSource
+  verdict: 'legit' | 'spam' | 'marketing'
+  confidence: number
+  reason: string
+  model: string | null
+  delivered: boolean
+  submission: Record<string, unknown>
+  llmLatencyMs: number | null
   jev: {
-    verdict: string | null;
-    confidence: number | null;
-    probabilities: Record<string, number> | null;
-    latencyMs: number | null;
-    model: string | null;
-    error: string | null;
-  };
+    verdict: string | null
+    confidence: number | null
+    probabilities: Record<string, number> | null
+    latencyMs: number | null
+    model: string | null
+    error: string | null
+  }
 }
 
 export interface SubmissionList {
-  data: Submission[];
-  nextCursor: string | null;
+  data: Submission[]
+  nextCursor: string | null
 }
 
 export interface AccountSummary {
-  id: string;
-  provider: string;
-  address: string;
-  lastSuccessAt?: string | null;
-  lastError?: string | null;
+  id: string
+  provider: string
+  address: string
+  lastSuccessAt?: string | null
+  lastError?: string | null
 }
 
 export interface Stats {
   messages: {
-    total: number;
-    inbound: number;
-    outbound: number;
-    byCategory: Record<string, number>;
-  };
-  jevComparison: unknown;
-  jobs: { pending: number; failed: number };
-  accounts: AccountSummary[];
+    total: number
+    inbound: number
+    outbound: number
+    byCategory: Record<string, number>
+  }
+  jevComparison: unknown
+  jobs: { pending: number; failed: number }
+  accounts: AccountSummary[]
 }
 
 export interface AccountInfo {
-  id: string;
-  provider: string;
-  address: string;
+  id: string
+  provider: string
+  address: string
 }
 
 export interface Template {
-  id: string;
-  name: string;
-  previewProps: Record<string, unknown> | null;
-  lastTestSendAt: string | null;
-  createdAt: string;
+  id: string
+  name: string
+  previewProps: Record<string, unknown> | null
+  lastTestSendAt: string | null
+  createdAt: string
 }
 
-export type TemplateList = Template[];
+export type TemplateList = Template[]
 
 export interface SendLogEntry {
-  id: string;
-  templateId: string | null;
-  recipients: string[];
-  provider: string;
-  providerMessageId: string | null;
-  status: string | null;
-  lastEvent: string | null;
-  requestedBy: string;
-  createdAt: string;
-  updatedAt: string;
+  id: string
+  templateId: string | null
+  recipients: string[]
+  provider: string
+  providerMessageId: string | null
+  status: string | null
+  lastEvent: string | null
+  requestedBy: string
+  createdAt: string
+  updatedAt: string
 }
 
 export interface SendLogList {
-  data: SendLogEntry[];
-  nextCursor: string | null;
+  data: SendLogEntry[]
+  nextCursor: string | null
 }

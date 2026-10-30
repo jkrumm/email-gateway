@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { createImapProvider } from "./provider";
+import { describe, expect, test } from 'bun:test'
+import { createImapProvider } from './provider'
 import type {
   ImapChangedListing,
   ImapEnvelopeInfo,
@@ -7,18 +7,18 @@ import type {
   ImapMailbox,
   ImapPort,
   ImapSession,
-} from "./adapter";
-import type { Capabilities } from "../port";
+} from './adapter'
+import type { Capabilities } from '../port'
 
 const config = {
-  host: "h",
+  host: 'h',
   port: 1143,
-  user: "u",
-  password: "p",
-  mailboxes: ["INBOX"],
-  tls: "starttls" as const,
+  user: 'u',
+  password: 'p',
+  mailboxes: ['INBOX'],
+  tls: 'starttls' as const,
   tlsInsecure: false,
-};
+}
 
 // A fake at the ImapPort/ImapSession level (the shape createImapProvider
 // wraps), not the raw imapflow client — proves the generic MailProvider
@@ -34,37 +34,37 @@ function createFakePort({
   },
   envelopes = [] as ImapEnvelopeInfo[],
   source = new TextEncoder().encode(
-    "From: Ada <ada@example.com>\r\nTo: hello@example.com\r\nSubject: Hi\r\n\r\nBody",
+    'From: Ada <ada@example.com>\r\nTo: hello@example.com\r\nSubject: Hi\r\n\r\nBody',
   ),
   // A destination UIDVALIDITY distinct from the source mailbox's ("1"),
   // so a test that asserts on it catches the adapter reusing the wrong one.
-  movedUidValidity = "2" as string | null,
+  movedUidValidity = '2' as string | null,
   highestModseq,
   changedListing,
 }: {
-  capabilities?: Capabilities;
-  envelopes?: ImapEnvelopeInfo[];
-  source?: Uint8Array;
-  movedUidValidity?: string | null;
+  capabilities?: Capabilities
+  envelopes?: ImapEnvelopeInfo[]
+  source?: Uint8Array
+  movedUidValidity?: string | null
   // CONDSTORE-only: the mailbox's HIGHESTMODSEQ and the changedSince listing
   // it answers a head call with once a bookmark exists.
-  highestModseq?: bigint;
-  changedListing?: ImapChangedListing;
+  highestModseq?: bigint
+  changedListing?: ImapChangedListing
 } = {}) {
-  const closes = { session: 0, mailbox: 0 };
-  const connects = { count: 0 };
-  const opens: { path: string; readOnly?: boolean }[] = [];
-  const changedSinceCalls: { changedSince: bigint; limit: number }[] = [];
-  let usable = true;
+  const closes = { session: 0, mailbox: 0 }
+  const connects = { count: 0 }
+  const opens: { path: string; readOnly?: boolean }[] = []
+  const changedSinceCalls: { changedSince: bigint; limit: number }[] = []
+  let usable = true
 
   const mailbox: ImapMailbox = {
-    uidValidity: "1",
+    uidValidity: '1',
     ...(highestModseq !== undefined ? { highestModseq } : {}),
     ...(changedListing
       ? {
           listChangedSince: async (changedSince, limit) => {
-            changedSinceCalls.push({ changedSince, limit });
-            return changedListing;
+            changedSinceCalls.push({ changedSince, limit })
+            return changedListing
           },
         }
       : {}),
@@ -81,30 +81,30 @@ function createFakePort({
     move: async (uid) => ({ uid: uid + 1000, uidValidity: movedUidValidity }),
     search: async () => [1, 2],
     release: () => {
-      closes.mailbox++;
+      closes.mailbox++
     },
-  };
+  }
 
   const session: ImapSession = {
     capabilities: () => capabilities,
-    listMailboxes: async () => [{ path: "INBOX", name: "INBOX" }],
+    listMailboxes: async () => [{ path: 'INBOX', name: 'INBOX' }],
     openMailbox: async (path, options) => {
-      opens.push({ path, readOnly: options?.readOnly });
-      return mailbox;
+      opens.push({ path, readOnly: options?.readOnly })
+      return mailbox
     },
     close: async () => {
-      closes.session++;
+      closes.session++
     },
     isUsable: () => usable,
-  };
+  }
 
   const port: ImapPort = {
     connect: async () => {
-      connects.count++;
-      usable = true;
-      return session;
+      connects.count++
+      usable = true
+      return session
     },
-  };
+  }
   return {
     port,
     closes,
@@ -117,37 +117,37 @@ function createFakePort({
     // handle's live fields, exactly like the real ImapMailbox does.
     mailbox,
     setUsable: (value: boolean) => {
-      usable = value;
+      usable = value
     },
-  };
+  }
 }
 
 function freshRef() {
   return {
-    provider: "proton" as const,
-    account: "hello@example.com",
-    mailbox: "INBOX",
-    uidValidity: "1",
+    provider: 'proton' as const,
+    account: 'hello@example.com',
+    mailbox: 'INBOX',
+    uidValidity: '1',
     uid: 5,
-  };
+  }
 }
 
-describe("createImapProvider", () => {
-  test("capabilities() and listMailboxes() pass through the session, reusing the pooled connection", async () => {
-    const { port, closes, connects } = createFakePort();
+describe('createImapProvider', () => {
+  test('capabilities() and listMailboxes() pass through the session, reusing the pooled connection', async () => {
+    const { port, closes, connects } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    expect(await provider.capabilities()).toMatchObject({ move: true });
+    expect(await provider.capabilities()).toMatchObject({ move: true })
     // watch() exists now — idle must reflect exactly what the session
     // reported, never a hardcoded override.
     expect(
       await createImapProvider(config, {
-        id: "proton",
-        account: "hello@example.com",
+        id: 'proton',
+        account: 'hello@example.com',
         port: createFakePort({
           capabilities: {
             list: true,
@@ -159,206 +159,194 @@ describe("createImapProvider", () => {
           },
         }).port,
       }).capabilities(),
-    ).toMatchObject({ idle: true });
-    expect(await provider.listMailboxes()).toEqual([
-      { path: "INBOX", name: "INBOX" },
-    ]);
+    ).toMatchObject({ idle: true })
+    expect(await provider.listMailboxes()).toEqual([{ path: 'INBOX', name: 'INBOX' }])
     // Both calls into the same provider instance shared one pooled
     // connection instead of opening one per call.
-    expect(connects.count).toBe(1);
-    expect(closes.session).toBe(0);
-  });
+    expect(connects.count).toBe(1)
+    expect(closes.session).toBe(0)
+  })
 
-  test("list() maps envelopes to the generic Envelope shape with an opaque ref", async () => {
+  test('list() maps envelopes to the generic Envelope shape with an opaque ref', async () => {
     const { port } = createFakePort({
       envelopes: [
         {
           uid: 5,
           size: 10,
-          internalDate: new Date("2026-09-15T00:00:00.000Z"),
-          from: "ada@example.com",
-          to: ["hello@example.com"],
-          subject: "Hi",
+          internalDate: new Date('2026-09-15T00:00:00.000Z'),
+          from: 'ada@example.com',
+          to: ['hello@example.com'],
+          subject: 'Hi',
           hasAttachments: false,
           flags: [],
         },
       ],
-    });
+    })
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    const page = await provider.list("INBOX", undefined);
+    const page = await provider.list('INBOX', undefined)
 
     expect(page.items).toEqual([
       {
         ref: {
-          provider: "proton",
-          account: "hello@example.com",
-          mailbox: "INBOX",
-          uidValidity: "1",
+          provider: 'proton',
+          account: 'hello@example.com',
+          mailbox: 'INBOX',
+          uidValidity: '1',
           uid: 5,
         },
-        from: "ada@example.com",
-        to: ["hello@example.com"],
-        subject: "Hi",
-        date: "2026-09-15T00:00:00.000Z",
+        from: 'ada@example.com',
+        to: ['hello@example.com'],
+        subject: 'Hi',
+        date: '2026-09-15T00:00:00.000Z',
         size: 10,
         hasAttachments: false,
         flags: [],
       },
-    ]);
-    expect(page.cursor).toBeUndefined();
-  });
+    ])
+    expect(page.cursor).toBeUndefined()
+  })
 
-  test("list() reports a null date rather than fabricating one when the server gave no internal date", async () => {
+  test('list() reports a null date rather than fabricating one when the server gave no internal date', async () => {
     const { port } = createFakePort({
       envelopes: [
         {
           uid: 5,
           size: 10,
           internalDate: null,
-          from: "ada@example.com",
+          from: 'ada@example.com',
           to: [],
-          subject: "Hi",
+          subject: 'Hi',
           hasAttachments: false,
           flags: [],
         },
       ],
-    });
+    })
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    expect((await provider.list("INBOX", undefined)).items[0]?.date).toBeNull();
-  });
+    expect((await provider.list('INBOX', undefined)).items[0]?.date).toBeNull()
+  })
 
-  test("read() fetches the source by ref and parses it", async () => {
-    const { port } = createFakePort();
+  test('read() fetches the source by ref and parses it', async () => {
+    const { port } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    const message = await provider.read(freshRef());
+    const message = await provider.read(freshRef())
 
-    expect(message.from).toBe("ada@example.com");
-    expect(message.subject).toBe("Hi");
-    expect(message.text?.trim()).toBe("Body");
-  });
+    expect(message.from).toBe('ada@example.com')
+    expect(message.subject).toBe('Hi')
+    expect(message.text?.trim()).toBe('Body')
+  })
 
-  test("read() maps a Cc header onto Message.cc", async () => {
+  test('read() maps a Cc header onto Message.cc', async () => {
     const { port } = createFakePort({
       source: new TextEncoder().encode(
-        "From: Ada <ada@example.com>\r\nTo: hello@example.com\r\n" +
-          "Cc: extra@example.com\r\nSubject: Hi\r\n\r\nBody",
+        'From: Ada <ada@example.com>\r\nTo: hello@example.com\r\n' +
+          'Cc: extra@example.com\r\nSubject: Hi\r\n\r\nBody',
       ),
-    });
+    })
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    expect((await provider.read(freshRef())).cc).toEqual(["extra@example.com"]);
-  });
+    expect((await provider.read(freshRef())).cc).toEqual(['extra@example.com'])
+  })
 
-  test("read() normalizes a valid Date header to ISO and a malformed one to null", async () => {
+  test('read() normalizes a valid Date header to ISO and a malformed one to null', async () => {
     const { port } = createFakePort({
       source: new TextEncoder().encode(
-        "From: Ada <ada@example.com>\r\nTo: hello@example.com\r\n" +
-          "Date: Tue, 15 Sep 2026 07:15:57 +0000\r\nSubject: Hi\r\n\r\nBody",
+        'From: Ada <ada@example.com>\r\nTo: hello@example.com\r\n' +
+          'Date: Tue, 15 Sep 2026 07:15:57 +0000\r\nSubject: Hi\r\n\r\nBody',
       ),
-    });
+    })
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    expect((await provider.read(freshRef())).date).toBe(
-      "2026-09-15T07:15:57.000Z",
-    );
+    expect((await provider.read(freshRef())).date).toBe('2026-09-15T07:15:57.000Z')
 
     const { port: malformedPort } = createFakePort({
       source: new TextEncoder().encode(
-        "From: Ada <ada@example.com>\r\nTo: hello@example.com\r\n" +
-          "Date: not a date\r\nSubject: Hi\r\n\r\nBody",
+        'From: Ada <ada@example.com>\r\nTo: hello@example.com\r\n' +
+          'Date: not a date\r\nSubject: Hi\r\n\r\nBody',
       ),
-    });
+    })
     const malformedProvider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: malformedPort,
-    });
+    })
 
-    expect((await malformedProvider.read(freshRef())).date).toBeNull();
-  });
+    expect((await malformedProvider.read(freshRef())).date).toBeNull()
+  })
 
-  test("read()/setFlags()/move() reject a ref from a stale UIDVALIDITY", async () => {
-    const { port } = createFakePort();
+  test('read()/setFlags()/move() reject a ref from a stale UIDVALIDITY', async () => {
+    const { port } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
-    const staleRef = { ...freshRef(), uidValidity: "0" };
+    })
+    const staleRef = { ...freshRef(), uidValidity: '0' }
 
-    await expect(provider.read(staleRef)).rejects.toThrow("stale ref");
-    await expect(provider.setFlags(staleRef, {})).rejects.toThrow("stale ref");
-    await expect(provider.move(staleRef, "Archive")).rejects.toThrow(
-      "stale ref",
-    );
-  });
+    await expect(provider.read(staleRef)).rejects.toThrow('stale ref')
+    await expect(provider.setFlags(staleRef, {})).rejects.toThrow('stale ref')
+    await expect(provider.move(staleRef, 'Archive')).rejects.toThrow('stale ref')
+  })
 
-  test("read()/setFlags()/move() reject a ref issued for a different provider instance", async () => {
-    const { port } = createFakePort();
+  test('read()/setFlags()/move() reject a ref issued for a different provider instance', async () => {
+    const { port } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
-    const gmailRef = { ...freshRef(), provider: "gmail" as const };
+    })
+    const gmailRef = { ...freshRef(), provider: 'gmail' as const }
 
-    await expect(provider.read(gmailRef)).rejects.toThrow(
-      'ref for provider "gmail"',
-    );
-    await expect(provider.setFlags(gmailRef, {})).rejects.toThrow(
-      'ref for provider "gmail"',
-    );
-    await expect(provider.move(gmailRef, "Archive")).rejects.toThrow(
-      'ref for provider "gmail"',
-    );
-  });
+    await expect(provider.read(gmailRef)).rejects.toThrow('ref for provider "gmail"')
+    await expect(provider.setFlags(gmailRef, {})).rejects.toThrow('ref for provider "gmail"')
+    await expect(provider.move(gmailRef, 'Archive')).rejects.toThrow('ref for provider "gmail"')
+  })
 
-  test("read()/setFlags()/move() reject a ref issued for a different account of the same provider kind (Wave 8: two Gmail accounts)", async () => {
-    const { port } = createFakePort();
+  test('read()/setFlags()/move() reject a ref issued for a different account of the same provider kind (Wave 8: two Gmail accounts)', async () => {
+    const { port } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
-    const otherAccountRef = { ...freshRef(), account: "other@example.com" };
+    })
+    const otherAccountRef = { ...freshRef(), account: 'other@example.com' }
 
     await expect(provider.read(otherAccountRef)).rejects.toThrow(
       'received a ref for account "other@example.com"',
-    );
+    )
     await expect(provider.setFlags(otherAccountRef, {})).rejects.toThrow(
       'received a ref for account "other@example.com"',
-    );
-    await expect(provider.move(otherAccountRef, "Archive")).rejects.toThrow(
+    )
+    await expect(provider.move(otherAccountRef, 'Archive')).rejects.toThrow(
       'received a ref for account "other@example.com"',
-    );
-  });
+    )
+  })
 
-  test("list() still returns a continuation cursor on an empty-but-truncated page (window budget hit before finding anything)", async () => {
+  test('list() still returns a continuation cursor on an empty-but-truncated page (window budget hit before finding anything)', async () => {
     const mailbox: ImapMailbox = {
-      uidValidity: "1",
+      uidValidity: '1',
       listAfter: async () => ({ messages: [], truncated: false }),
       // Simulates makeListBefore hitting its window cap on a sparse mailbox:
       // nothing found, but there's more mailbox below nextBeforeUid.
@@ -371,295 +359,273 @@ describe("createImapProvider", () => {
       fetchHeaders: async () => null,
       existingUids: async () => new Set(),
       release: () => undefined,
-    };
+    }
     const session: ImapSession = {
       openMailbox: async () => mailbox,
       close: async () => undefined,
-    };
+    }
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: { connect: async () => session },
-    });
+    })
 
-    const page = await provider.list("INBOX", undefined);
+    const page = await provider.list('INBOX', undefined)
 
-    expect(page.items).toEqual([]);
+    expect(page.items).toEqual([])
     // Must NOT be undefined — that would read as "pagination ended" and
     // silently drop everything below uid 42.
-    expect(page.cursor).toBe("1:42");
-  });
+    expect(page.cursor).toBe('1:42')
+  })
 
-  test("list() rejects a stale cursor from a UIDVALIDITY the mailbox no longer has", async () => {
-    const { port } = createFakePort();
+  test('list() rejects a stale cursor from a UIDVALIDITY the mailbox no longer has', async () => {
+    const { port } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
     // The fake mailbox is at uidValidity "1"; this cursor was issued for "0".
-    await expect(provider.list("INBOX", "0:5")).rejects.toThrow(
-      "stale list() cursor",
-    );
-  });
+    await expect(provider.list('INBOX', '0:5')).rejects.toThrow('stale list() cursor')
+  })
 
-  test("list() rejects a garbage cursor instead of silently returning an empty page", async () => {
-    const { port } = createFakePort();
+  test('list() rejects a garbage cursor instead of silently returning an empty page', async () => {
+    const { port } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    await expect(provider.list("INBOX", "not-a-number")).rejects.toThrow(
-      "invalid list() cursor",
-    );
-    await expect(provider.list("INBOX", "")).rejects.toThrow(
-      "invalid list() cursor",
-    );
+    await expect(provider.list('INBOX', 'not-a-number')).rejects.toThrow('invalid list() cursor')
+    await expect(provider.list('INBOX', '')).rejects.toThrow('invalid list() cursor')
     // No uidValidity part at all.
-    await expect(provider.list("INBOX", "5")).rejects.toThrow(
-      "invalid list() cursor",
-    );
+    await expect(provider.list('INBOX', '5')).rejects.toThrow('invalid list() cursor')
     // Number("") is 0, not NaN — must not silently pass as uid 0.
-    await expect(provider.list("INBOX", "1:")).rejects.toThrow(
-      "invalid list() cursor",
-    );
+    await expect(provider.list('INBOX', '1:')).rejects.toThrow('invalid list() cursor')
     // IMAP UIDs start at 1: "0" must not silently look like a valid uid and
     // return an empty page that reads as "pagination legitimately ended".
-    await expect(provider.list("INBOX", "1:0")).rejects.toThrow(
-      "invalid list() cursor",
-    );
-  });
+    await expect(provider.list('INBOX', '1:0')).rejects.toThrow('invalid list() cursor')
+  })
 
-  test("a ref for another provider kind is rejected before any mailbox is opened", async () => {
-    const { port, closes } = createFakePort();
+  test('a ref for another provider kind is rejected before any mailbox is opened', async () => {
+    const { port, closes } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
     const gmailRef = {
-      provider: "gmail" as const,
-      account: "hello@example.com",
-      mailbox: "INBOX",
-      uidValidity: "1",
+      provider: 'gmail' as const,
+      account: 'hello@example.com',
+      mailbox: 'INBOX',
+      uidValidity: '1',
       uid: 1,
-    };
+    }
 
-    await expect(provider.read(gmailRef)).rejects.toThrow(
-      'ref for provider "gmail"',
-    );
-    await expect(provider.setFlags(gmailRef, {})).rejects.toThrow(
-      'ref for provider "gmail"',
-    );
-    await expect(provider.move(gmailRef, "Archive")).rejects.toThrow(
-      'ref for provider "gmail"',
-    );
+    await expect(provider.read(gmailRef)).rejects.toThrow('ref for provider "gmail"')
+    await expect(provider.setFlags(gmailRef, {})).rejects.toThrow('ref for provider "gmail"')
+    await expect(provider.move(gmailRef, 'Archive')).rejects.toThrow('ref for provider "gmail"')
     // No mailbox/session was ever touched for the rejected calls.
-    expect(closes.session).toBe(0);
-    expect(closes.mailbox).toBe(0);
-  });
+    expect(closes.session).toBe(0)
+    expect(closes.mailbox).toBe(0)
+  })
 
   test("search() returns opaque refs built from the mailbox's search()", async () => {
-    const { port } = createFakePort();
+    const { port } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    expect(await provider.search({ from: "ada@example.com" })).toEqual([
+    expect(await provider.search({ from: 'ada@example.com' })).toEqual([
       {
-        provider: "proton",
-        account: "hello@example.com",
-        mailbox: "INBOX",
-        uidValidity: "1",
+        provider: 'proton',
+        account: 'hello@example.com',
+        mailbox: 'INBOX',
+        uidValidity: '1',
         uid: 1,
       },
       {
-        provider: "proton",
-        account: "hello@example.com",
-        mailbox: "INBOX",
-        uidValidity: "1",
+        provider: 'proton',
+        account: 'hello@example.com',
+        mailbox: 'INBOX',
+        uidValidity: '1',
         uid: 2,
       },
-    ]);
-  });
+    ])
+  })
 
   test("move() uses the destination's own UIDVALIDITY from the move response, not the source ref's", async () => {
-    const { port } = createFakePort({ movedUidValidity: "2" });
+    const { port } = createFakePort({ movedUidValidity: '2' })
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    const moved = await provider.move(freshRef(), "Archive");
+    const moved = await provider.move(freshRef(), 'Archive')
 
     expect(moved).toEqual({
-      provider: "proton",
-      account: "hello@example.com",
-      mailbox: "Archive",
-      uidValidity: "2",
+      provider: 'proton',
+      account: 'hello@example.com',
+      mailbox: 'Archive',
+      uidValidity: '2',
       uid: 1005,
-    });
-  });
+    })
+  })
 
-  test("move() refuses to build a ref when the server reports no destination UIDVALIDITY", async () => {
-    const { port } = createFakePort({ movedUidValidity: null });
+  test('move() refuses to build a ref when the server reports no destination UIDVALIDITY', async () => {
+    const { port } = createFakePort({ movedUidValidity: null })
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    await expect(provider.move(freshRef(), "Archive")).rejects.toThrow(
-      "no destination UID/UIDVALIDITY",
-    );
-  });
+    await expect(provider.move(freshRef(), 'Archive')).rejects.toThrow(
+      'no destination UID/UIDVALIDITY',
+    )
+  })
 
   test("capabilities()/listMailboxes()/list()/search() reject when the session/mailbox doesn't implement them", async () => {
     const bareMailbox: ImapMailbox = {
-      uidValidity: "1",
+      uidValidity: '1',
       listAfter: async () => ({ messages: [], truncated: false }),
       fetchSources: async () => new Map(),
       fetchHeaders: async () => null,
       existingUids: async () => new Set(),
       release: () => undefined,
-    };
+    }
     const bareSession: ImapSession = {
       openMailbox: async () => bareMailbox,
       close: async () => undefined,
-    };
-    const port: ImapPort = { connect: async () => bareSession };
+    }
+    const port: ImapPort = { connect: async () => bareSession }
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    await expect(provider.capabilities()).rejects.toThrow("capabilities");
-    await expect(provider.listMailboxes()).rejects.toThrow("listMailboxes");
-    await expect(provider.list("INBOX", undefined)).rejects.toThrow("list");
-    await expect(provider.search({})).rejects.toThrow("search");
-    await expect(provider.setFlags(freshRef(), {})).rejects.toThrow("setFlags");
-    await expect(provider.move(freshRef(), "Archive")).rejects.toThrow("move");
-  });
+    await expect(provider.capabilities()).rejects.toThrow('capabilities')
+    await expect(provider.listMailboxes()).rejects.toThrow('listMailboxes')
+    await expect(provider.list('INBOX', undefined)).rejects.toThrow('list')
+    await expect(provider.search({})).rejects.toThrow('search')
+    await expect(provider.setFlags(freshRef(), {})).rejects.toThrow('setFlags')
+    await expect(provider.move(freshRef(), 'Archive')).rejects.toThrow('move')
+  })
 
-  test("read() throws when the fetched uid has no source", async () => {
+  test('read() throws when the fetched uid has no source', async () => {
     const mailbox: ImapMailbox = {
-      uidValidity: "1",
+      uidValidity: '1',
       listAfter: async () => ({ messages: [], truncated: false }),
       fetchSources: async () => new Map(),
       fetchHeaders: async () => null,
       existingUids: async () => new Set(),
       release: () => undefined,
-    };
+    }
     const session: ImapSession = {
       openMailbox: async () => mailbox,
       close: async () => undefined,
-    };
+    }
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: { connect: async () => session },
-    });
+    })
 
-    await expect(provider.read(freshRef())).rejects.toThrow(
-      "not found in INBOX",
-    );
-  });
+    await expect(provider.read(freshRef())).rejects.toThrow('not found in INBOX')
+  })
 
-  test("move() throws when the low-level move() resolves null", async () => {
+  test('move() throws when the low-level move() resolves null', async () => {
     const mailbox: ImapMailbox = {
-      uidValidity: "1",
+      uidValidity: '1',
       listAfter: async () => ({ messages: [], truncated: false }),
       fetchSources: async () => new Map(),
       fetchHeaders: async () => null,
       existingUids: async () => new Set(),
       move: async () => null,
       release: () => undefined,
-    };
+    }
     const session: ImapSession = {
       openMailbox: async () => mailbox,
       close: async () => undefined,
-    };
+    }
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: { connect: async () => session },
-    });
+    })
 
-    await expect(provider.move(freshRef(), "Archive")).rejects.toThrow(
-      "failed",
-    );
-  });
-});
+    await expect(provider.move(freshRef(), 'Archive')).rejects.toThrow('failed')
+  })
+})
 
-describe("createImapProvider session pooling", () => {
-  test("two sequential calls into the same provider instance reuse one connect()", async () => {
-    const { port, connects } = createFakePort();
+describe('createImapProvider session pooling', () => {
+  test('two sequential calls into the same provider instance reuse one connect()', async () => {
+    const { port, connects } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    await provider.list("INBOX", undefined);
-    await provider.list("INBOX", undefined);
+    await provider.list('INBOX', undefined)
+    await provider.list('INBOX', undefined)
 
-    expect(connects.count).toBe(1);
-  });
+    expect(connects.count).toBe(1)
+  })
 
-  test("a call to a different mailbox reopens the mailbox but not the connection", async () => {
-    const { port, connects, opens } = createFakePort();
+  test('a call to a different mailbox reopens the mailbox but not the connection', async () => {
+    const { port, connects, opens } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    await provider.list("INBOX", undefined);
-    await provider.list("Archive", undefined);
+    await provider.list('INBOX', undefined)
+    await provider.list('Archive', undefined)
 
-    expect(connects.count).toBe(1);
-    expect(opens.map((open) => open.path)).toEqual(["INBOX", "Archive"]);
-  });
+    expect(connects.count).toBe(1)
+    expect(opens.map((open) => open.path)).toEqual(['INBOX', 'Archive'])
+  })
 
-  test("a call to the same mailbox in a different read/write mode reopens it too", async () => {
-    const { port, connects, opens } = createFakePort();
+  test('a call to the same mailbox in a different read/write mode reopens it too', async () => {
+    const { port, connects, opens } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    await provider.list("INBOX", undefined);
-    await provider.setFlags(freshRef(), { add: ["\\Seen"] });
-    await provider.list("INBOX", undefined);
+    await provider.list('INBOX', undefined)
+    await provider.setFlags(freshRef(), { add: ['\\Seen'] })
+    await provider.list('INBOX', undefined)
 
-    expect(connects.count).toBe(1);
+    expect(connects.count).toBe(1)
     expect(opens.map((open) => [open.path, open.readOnly])).toEqual([
-      ["INBOX", true],
-      ["INBOX", false],
-      ["INBOX", true],
-    ]);
-  });
+      ['INBOX', true],
+      ['INBOX', false],
+      ['INBOX', true],
+    ])
+  })
 
-  test("a connection-level failure invalidates the pooled session and retries once against a fresh one", async () => {
-    let failuresLeft = 1;
-    let usable = true;
-    const connects = { count: 0 };
-    const closes = { session: 0 };
-    const opens: string[] = [];
+  test('a connection-level failure invalidates the pooled session and retries once against a fresh one', async () => {
+    let failuresLeft = 1
+    let usable = true
+    const connects = { count: 0 }
+    const closes = { session: 0 }
+    const opens: string[] = []
     const source = new TextEncoder().encode(
-      "From: Ada <ada@example.com>\r\nTo: hello@example.com\r\nSubject: Hi\r\n\r\nBody",
-    );
+      'From: Ada <ada@example.com>\r\nTo: hello@example.com\r\nSubject: Hi\r\n\r\nBody',
+    )
 
     const mailbox: ImapMailbox = {
-      uidValidity: "1",
+      uidValidity: '1',
       listAfter: async () => ({ messages: [], truncated: false }),
       listBefore: async () => ({
         messages: [],
@@ -668,62 +634,62 @@ describe("createImapProvider session pooling", () => {
       }),
       fetchSources: async (uids) => {
         if (failuresLeft > 0) {
-          failuresLeft--;
-          usable = false;
-          throw new Error("socket closed unexpectedly");
+          failuresLeft--
+          usable = false
+          throw new Error('socket closed unexpectedly')
         }
-        return new Map(uids.map((uid) => [uid, source]));
+        return new Map(uids.map((uid) => [uid, source]))
       },
       fetchHeaders: async () => null,
       existingUids: async () => new Set(),
       release: () => undefined,
-    };
+    }
 
     const session: ImapSession = {
       openMailbox: async (path) => {
-        opens.push(path);
-        return mailbox;
+        opens.push(path)
+        return mailbox
       },
       close: async () => {
-        closes.session++;
+        closes.session++
       },
       isUsable: () => usable,
-    };
+    }
 
     const port: ImapPort = {
       connect: async () => {
-        connects.count++;
-        usable = true;
-        return session;
+        connects.count++
+        usable = true
+        return session
       },
-    };
+    }
 
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    const message = await provider.read(freshRef());
+    const message = await provider.read(freshRef())
 
-    expect(message.subject).toBe("Hi");
+    expect(message.subject).toBe('Hi')
     // One connect for the attempt that hit the dead connection, one more for
     // the retry's fresh session.
-    expect(connects.count).toBe(2);
+    expect(connects.count).toBe(2)
     // The dead session was closed before the retry opened a new one.
-    expect(closes.session).toBe(1);
-    expect(opens).toEqual(["INBOX", "INBOX"]);
-  });
+    expect(closes.session).toBe(1)
+    expect(opens).toEqual(['INBOX', 'INBOX'])
+  })
 
-  test("a dead connection detected while opening the mailbox (not during fn) also invalidates and retries once", async () => {
-    let openFailuresLeft = 1;
-    let usable = true;
-    const connects = { count: 0 };
-    const closes = { session: 0 };
-    const opens: string[] = [];
+  test('a dead connection detected while opening the mailbox (not during fn) also invalidates and retries once', async () => {
+    let openFailuresLeft = 1
+    let usable = true
+    const connects = { count: 0 }
+    const closes = { session: 0 }
+    const opens: string[] = []
 
     const mailbox: ImapMailbox = {
-      uidValidity: "1",
+      uidValidity: '1',
       listAfter: async () => ({ messages: [], truncated: false }),
       listBefore: async () => ({
         messages: [],
@@ -734,62 +700,62 @@ describe("createImapProvider session pooling", () => {
       fetchHeaders: async () => null,
       existingUids: async () => new Set(),
       release: () => undefined,
-    };
+    }
 
     const session: ImapSession = {
       openMailbox: async (path) => {
-        opens.push(path);
+        opens.push(path)
         // The pooled connection died between calls, not mid-fn: the very
         // next call's openMailbox() (a cache miss, since the path changes)
         // is what discovers it.
-        if (path === "Archive" && openFailuresLeft > 0) {
-          openFailuresLeft--;
-          usable = false;
-          throw new Error("socket closed unexpectedly");
+        if (path === 'Archive' && openFailuresLeft > 0) {
+          openFailuresLeft--
+          usable = false
+          throw new Error('socket closed unexpectedly')
         }
-        return mailbox;
+        return mailbox
       },
       close: async () => {
-        closes.session++;
+        closes.session++
       },
       isUsable: () => usable,
-    };
+    }
 
     const port: ImapPort = {
       connect: async () => {
-        connects.count++;
-        usable = true;
-        return session;
+        connects.count++
+        usable = true
+        return session
       },
-    };
+    }
 
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
     // First call opens and caches INBOX on the one pooled connection.
-    await provider.list("INBOX", undefined);
-    expect(connects.count).toBe(1);
+    await provider.list('INBOX', undefined)
+    expect(connects.count).toBe(1)
 
     // Second call switches mailboxes, forcing a fresh openMailbox("Archive")
     // — it fails because the pooled connection died in between, and must hit
     // the same dead-connection retry a fn-time failure would.
-    const page = await provider.list("Archive", undefined);
+    const page = await provider.list('Archive', undefined)
 
-    expect(page.items).toEqual([]);
-    expect(opens).toEqual(["INBOX", "Archive", "Archive"]);
+    expect(page.items).toEqual([])
+    expect(opens).toEqual(['INBOX', 'Archive', 'Archive'])
     // One connect for the original session, one more for the retry's fresh
     // session.
-    expect(connects.count).toBe(2);
-    expect(closes.session).toBe(1);
-  });
+    expect(connects.count).toBe(2)
+    expect(closes.session).toBe(1)
+  })
 
-  test("an application-level error on a healthy connection is never retried", async () => {
-    const connects = { count: 0 };
+  test('an application-level error on a healthy connection is never retried', async () => {
+    const connects = { count: 0 }
     const mailbox: ImapMailbox = {
-      uidValidity: "1",
+      uidValidity: '1',
       listAfter: async () => ({ messages: [], truncated: false }),
       listBefore: async () => ({
         messages: [],
@@ -800,145 +766,143 @@ describe("createImapProvider session pooling", () => {
       fetchHeaders: async () => null,
       existingUids: async () => new Set(),
       release: () => undefined,
-    };
+    }
     const session: ImapSession = {
       openMailbox: async () => mailbox,
       close: async () => undefined,
       isUsable: () => true,
-    };
+    }
     const port: ImapPort = {
       connect: async () => {
-        connects.count++;
-        return session;
+        connects.count++
+        return session
       },
-    };
+    }
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    await expect(provider.read(freshRef())).rejects.toThrow(
-      "not found in INBOX",
-    );
-    expect(connects.count).toBe(1);
-  });
+    await expect(provider.read(freshRef())).rejects.toThrow('not found in INBOX')
+    expect(connects.count).toBe(1)
+  })
 
-  test("idle-closes the pooled session after poolIdleMs of no calls, then reconnects on the next call", async () => {
-    const { port, closes, connects } = createFakePort();
+  test('idle-closes the pooled session after poolIdleMs of no calls, then reconnects on the next call', async () => {
+    const { port, closes, connects } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
       poolIdleMs: 20,
-    });
+    })
 
-    await provider.capabilities();
-    expect(connects.count).toBe(1);
-    expect(closes.session).toBe(0);
+    await provider.capabilities()
+    expect(connects.count).toBe(1)
+    expect(closes.session).toBe(0)
 
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => setTimeout(resolve, 60))
 
-    expect(closes.session).toBe(1);
+    expect(closes.session).toBe(1)
 
-    await provider.capabilities();
-    expect(connects.count).toBe(2);
-  });
+    await provider.capabilities()
+    expect(connects.count).toBe(2)
+  })
 
-  test("the idle-close timer only starts counting after a call completes, never mid-call", async () => {
-    const closes = { session: 0 };
-    const connects = { count: 0 };
+  test('the idle-close timer only starts counting after a call completes, never mid-call', async () => {
+    const closes = { session: 0 }
+    const connects = { count: 0 }
     const session: ImapSession = {
       listMailboxes: async () => {
         // Outlasts poolIdleMs below — if the timer were armed before this
         // call ran (the bug), it would fire mid-flight and invalidate a
         // perfectly healthy, still in-progress session.
-        await new Promise((resolve) => setTimeout(resolve, 60));
-        return [{ path: "INBOX", name: "INBOX" }];
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        return [{ path: 'INBOX', name: 'INBOX' }]
       },
       openMailbox: async () => {
-        throw new Error("not used by this test");
+        throw new Error('not used by this test')
       },
       close: async () => {
-        closes.session++;
+        closes.session++
       },
       isUsable: () => true,
-    };
+    }
     const port: ImapPort = {
       connect: async () => {
-        connects.count++;
-        return session;
+        connects.count++
+        return session
       },
-    };
+    }
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
       poolIdleMs: 20,
-    });
+    })
 
-    await provider.listMailboxes();
+    await provider.listMailboxes()
 
-    expect(closes.session).toBe(0);
-    expect(connects.count).toBe(1);
+    expect(closes.session).toBe(0)
+    expect(connects.count).toBe(1)
 
     // The timer only starts once the call returns — confirm it still fires
     // on its own from there.
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(closes.session).toBe(1);
-  });
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(closes.session).toBe(1)
+  })
 
-  test("setFlags()/move() never retry a mutating command after the connection turns unusable — the error propagates and the session is dropped instead", async () => {
-    let setFlagsCalls = 0;
-    let usable = true;
-    const connects = { count: 0 };
-    const closes = { session: 0 };
+  test('setFlags()/move() never retry a mutating command after the connection turns unusable — the error propagates and the session is dropped instead', async () => {
+    let setFlagsCalls = 0
+    let usable = true
+    const connects = { count: 0 }
+    const closes = { session: 0 }
     const mailbox: ImapMailbox = {
-      uidValidity: "1",
+      uidValidity: '1',
       listAfter: async () => ({ messages: [], truncated: false }),
       fetchSources: async () => new Map(),
       fetchHeaders: async () => null,
       existingUids: async () => new Set(),
       setFlags: async () => {
-        setFlagsCalls++;
-        usable = false;
-        throw new Error("socket closed unexpectedly");
+        setFlagsCalls++
+        usable = false
+        throw new Error('socket closed unexpectedly')
       },
       release: () => undefined,
-    };
+    }
     const session: ImapSession = {
       openMailbox: async () => mailbox,
       close: async () => {
-        closes.session++;
+        closes.session++
       },
       isUsable: () => usable,
-    };
+    }
     const port: ImapPort = {
       connect: async () => {
-        connects.count++;
-        usable = true;
-        return session;
+        connects.count++
+        usable = true
+        return session
       },
-    };
+    }
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    await expect(
-      provider.setFlags(freshRef(), { add: ["\\Seen"] }),
-    ).rejects.toThrow("socket closed unexpectedly");
+    await expect(provider.setFlags(freshRef(), { add: ['\\Seen'] })).rejects.toThrow(
+      'socket closed unexpectedly',
+    )
 
     // The mutating command was issued exactly once — never replayed once its
     // outcome became unknown.
-    expect(setFlagsCalls).toBe(1);
-    expect(connects.count).toBe(1);
+    expect(setFlagsCalls).toBe(1)
+    expect(connects.count).toBe(1)
     // The dead session was still dropped so the next, unrelated call gets a
     // fresh one.
-    expect(closes.session).toBe(1);
-  });
-});
+    expect(closes.session).toBe(1)
+  })
+})
 
 // A fake at the ImapIdleClient level (the Pick<ImapFlow, ...> shape
 // watch()'s dedicated connection consumes) — an event-emitter-ish stub the
@@ -957,28 +921,28 @@ function createFakeIdleClient({
   // connect is still in flight.
   connectGate,
 }: {
-  connectError?: Error;
-  log?: string[];
-  connectHangs?: boolean;
-  connectGate?: Promise<void>;
+  connectError?: Error
+  log?: string[]
+  connectHangs?: boolean
+  connectGate?: Promise<void>
 } = {}) {
-  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
-  const calls = { connect: 0, mailboxOpen: 0, logout: 0, idle: 0 };
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>()
+  const calls = { connect: 0, mailboxOpen: 0, logout: 0, idle: 0 }
   const idleWaiters: Array<{
-    resolve: () => void;
-    reject: (error: unknown) => void;
-  }> = [];
+    resolve: () => void
+    reject: (error: unknown) => void
+  }> = []
 
   function on(event: string, listener: (...args: unknown[]) => void) {
-    if (!listeners.has(event)) listeners.set(event, new Set());
-    listeners.get(event)?.add(listener);
-    return client;
+    if (!listeners.has(event)) listeners.set(event, new Set())
+    listeners.get(event)?.add(listener)
+    return client
   }
 
   function off(event: string, listener: (...args: unknown[]) => void) {
-    listeners.get(event)?.delete(listener);
-    log?.push(`off:${event}`);
-    return client;
+    listeners.get(event)?.delete(listener)
+    log?.push(`off:${event}`)
+    return client
   }
 
   const client = {
@@ -986,29 +950,29 @@ function createFakeIdleClient({
     on,
     off,
     connect: async () => {
-      calls.connect++;
-      log?.push("connect");
-      if (connectHangs) return new Promise<void>(() => undefined);
-      if (connectGate) await connectGate;
-      if (connectError) throw connectError;
+      calls.connect++
+      log?.push('connect')
+      if (connectHangs) return new Promise<void>(() => undefined)
+      if (connectGate) await connectGate
+      if (connectError) throw connectError
     },
     mailboxOpen: async () => {
-      calls.mailboxOpen++;
-      log?.push("mailboxOpen");
-      return {} as never;
+      calls.mailboxOpen++
+      log?.push('mailboxOpen')
+      return {} as never
     },
     logout: async () => {
-      calls.logout++;
-      log?.push("logout");
+      calls.logout++
+      log?.push('logout')
     },
     close: () => undefined,
     idle: () => {
-      calls.idle++;
+      calls.idle++
       return new Promise<boolean>((resolve, reject) => {
-        idleWaiters.push({ resolve: () => resolve(true), reject });
-      });
+        idleWaiters.push({ resolve: () => resolve(true), reject })
+      })
     },
-  } as unknown as ImapIdleClient;
+  } as unknown as ImapIdleClient
 
   // Mirrors adapter.ts's createIdleClient, which attaches its own 'error'
   // listener directly to the real socket so an emitted error can never reach
@@ -1016,425 +980,421 @@ function createFakeIdleClient({
   // through the ImapIdleClient surface and provider.ts must never be able to
   // remove it — bake in an equivalent survivor here so a test can assert it
   // stays attached across every detach path.
-  let crashGuardFired = false;
-  on("error", () => {
-    crashGuardFired = true;
-  });
+  let crashGuardFired = false
+  on('error', () => {
+    crashGuardFired = true
+  })
 
   return {
     client,
     calls,
     emit: (event: string, ...args: unknown[]) => {
-      for (const listener of listeners.get(event) ?? []) listener(...args);
+      for (const listener of listeners.get(event) ?? []) listener(...args)
     },
     listenerCount: (event: string) => listeners.get(event)?.size ?? 0,
     get crashGuardFired() {
-      return crashGuardFired;
+      return crashGuardFired
     },
     // Rejects (or resolves) the oldest still-pending idle() call — simulates
     // IDLE finally reporting the drop of a socket that was already torn down
     // earlier via some other signal (e.g. 'close').
     rejectIdle: (error: unknown) => idleWaiters.shift()?.reject(error),
     resolveIdle: () => idleWaiters.shift()?.resolve(),
-  };
+  }
 }
 
-describe("createImapProvider watch()", () => {
+describe('createImapProvider watch()', () => {
   function immediateWait() {
-    return Promise.resolve();
+    return Promise.resolve()
   }
 
   // Flushes both the microtask queue and one macrotask turn, so every
   // `await` in the reconnect loop (wait(), connect(), mailboxOpen()) has
   // settled — more robust than counting microtask hops by hand.
   function flush() {
-    return new Promise((resolve) => setTimeout(resolve, 0));
+    return new Promise((resolve) => setTimeout(resolve, 0))
   }
 
-  test("fires onChange on exists/expunge/flags events", async () => {
-    const fake = createFakeIdleClient();
-    const changes = { count: 0 };
+  test('fires onChange on exists/expunge/flags events', async () => {
+    const fake = createFakeIdleClient()
+    const changes = { count: 0 }
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: createFakePort().port,
       createIdleClient: () => fake.client,
-    });
+    })
 
-    const unsubscribe = await provider.watch!("INBOX", () => {
-      changes.count++;
-    });
+    const unsubscribe = await provider.watch!('INBOX', () => {
+      changes.count++
+    })
 
-    fake.emit("exists");
-    fake.emit("expunge");
-    fake.emit("flags");
+    fake.emit('exists')
+    fake.emit('expunge')
+    fake.emit('flags')
 
-    expect(changes.count).toBe(3);
-    expect(fake.calls.mailboxOpen).toBe(1);
+    expect(changes.count).toBe(3)
+    expect(fake.calls.mailboxOpen).toBe(1)
 
-    unsubscribe();
-  });
+    unsubscribe()
+  })
 
-  test("reconnects after an unsolicited close, not triggered by unsubscribe()", async () => {
-    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
+  test('reconnects after an unsolicited close, not triggered by unsubscribe()', async () => {
+    const instances: ReturnType<typeof createFakeIdleClient>[] = []
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: createFakePort().port,
       createIdleClient: () => {
-        const fake = createFakeIdleClient();
-        instances.push(fake);
-        return fake.client;
+        const fake = createFakeIdleClient()
+        instances.push(fake)
+        return fake.client
       },
       idleReconnectWait: immediateWait,
       idleReconnectRandom: () => 0,
-    });
+    })
 
-    const unsubscribe = await provider.watch!("INBOX", () => undefined);
-    expect(instances).toHaveLength(1);
+    const unsubscribe = await provider.watch!('INBOX', () => undefined)
+    expect(instances).toHaveLength(1)
 
-    instances[0]!.emit("close");
-    await flush();
+    instances[0]!.emit('close')
+    await flush()
 
-    expect(instances).toHaveLength(2);
-    expect(instances[1]!.calls.connect).toBe(1);
-    expect(instances[1]!.calls.mailboxOpen).toBe(1);
+    expect(instances).toHaveLength(2)
+    expect(instances[1]!.calls.connect).toBe(1)
+    expect(instances[1]!.calls.mailboxOpen).toBe(1)
 
-    unsubscribe();
-  });
+    unsubscribe()
+  })
 
-  test("Unsubscribe stops further reconnects and logs out", async () => {
-    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
+  test('Unsubscribe stops further reconnects and logs out', async () => {
+    const instances: ReturnType<typeof createFakeIdleClient>[] = []
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: createFakePort().port,
       createIdleClient: () => {
-        const fake = createFakeIdleClient();
-        instances.push(fake);
-        return fake.client;
+        const fake = createFakeIdleClient()
+        instances.push(fake)
+        return fake.client
       },
       idleReconnectWait: immediateWait,
       idleReconnectRandom: () => 0,
-    });
+    })
 
-    const unsubscribe = await provider.watch!("INBOX", () => undefined);
-    const first = instances[0]!;
+    const unsubscribe = await provider.watch!('INBOX', () => undefined)
+    const first = instances[0]!
 
-    unsubscribe();
+    unsubscribe()
 
     // Only the listeners this module attached are gone; the crash-guard
     // 'error' listener baked into the fake (mirroring adapter.ts's own) is
     // never touched.
-    expect(first.listenerCount("close")).toBe(0);
-    expect(first.listenerCount("error")).toBe(1);
-    expect(first.calls.logout).toBe(1);
+    expect(first.listenerCount('close')).toBe(0)
+    expect(first.listenerCount('error')).toBe(1)
+    expect(first.calls.logout).toBe(1)
 
     // A close arriving after unsubscribe (listeners already removed) must
     // not start a reconnect.
-    first.emit("close");
-    await flush();
+    first.emit('close')
+    await flush()
 
-    expect(instances).toHaveLength(1);
-  });
+    expect(instances).toHaveLength(1)
+  })
 
   test("removeAllListeners is never called bare — a discarded client's crash-guard 'error' listener survives detachment and unsubscribe, and emitting 'error' on it never throws", async () => {
-    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
+    const instances: ReturnType<typeof createFakeIdleClient>[] = []
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: createFakePort().port,
       createIdleClient: () => {
-        const fake = createFakeIdleClient();
-        instances.push(fake);
-        return fake.client;
+        const fake = createFakeIdleClient()
+        instances.push(fake)
+        return fake.client
       },
       idleReconnectWait: immediateWait,
       idleReconnectRandom: () => 0,
-    });
+    })
 
-    const unsubscribe = await provider.watch!("INBOX", () => undefined);
-    const first = instances[0]!;
+    const unsubscribe = await provider.watch!('INBOX', () => undefined)
+    const first = instances[0]!
 
     // Trigger a reconnect, which detaches the outgoing (first) client.
-    first.emit("close");
-    await flush();
+    first.emit('close')
+    await flush()
 
-    expect(instances).toHaveLength(2);
+    expect(instances).toHaveLength(2)
     // The crash-preventing 'error' listener is still attached to the
     // discarded client — a late error on that dying socket must not crash
     // the process by hitting zero listeners.
-    expect(first.listenerCount("error")).toBe(1);
-    expect(() =>
-      first.emit("error", new Error("late socket error")),
-    ).not.toThrow();
-    expect(first.crashGuardFired).toBe(true);
+    expect(first.listenerCount('error')).toBe(1)
+    expect(() => first.emit('error', new Error('late socket error'))).not.toThrow()
+    expect(first.crashGuardFired).toBe(true)
 
-    unsubscribe();
-  });
+    unsubscribe()
+  })
 
   test("a superseded connection's late idle() rejection does not start a second reconnect loop", async () => {
-    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
+    const instances: ReturnType<typeof createFakeIdleClient>[] = []
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: createFakePort().port,
       createIdleClient: () => {
-        const fake = createFakeIdleClient();
-        instances.push(fake);
-        return fake.client;
+        const fake = createFakeIdleClient()
+        instances.push(fake)
+        return fake.client
       },
       idleReconnectWait: immediateWait,
       idleReconnectRandom: () => 0,
-    });
+    })
 
-    const unsubscribe = await provider.watch!("INBOX", () => undefined);
-    const first = instances[0]!;
+    const unsubscribe = await provider.watch!('INBOX', () => undefined)
+    const first = instances[0]!
 
     // A legitimate reconnect via 'close' completes, swapping in a second
     // client — the first client's own idle() call is still pending.
-    first.emit("close");
-    await flush();
-    expect(instances).toHaveLength(2);
-    expect(instances[1]!.calls.connect).toBe(1);
+    first.emit('close')
+    await flush()
+    expect(instances).toHaveLength(2)
+    expect(instances[1]!.calls.connect).toBe(1)
 
     // The old (now-superseded) connection's pending idle() finally rejects
     // late — its socket was already torn down, just slow to report it.
-    first.rejectIdle(new Error("late socket teardown"));
-    await flush();
+    first.rejectIdle(new Error('late socket teardown'))
+    await flush()
 
     // Must not start a second, redundant reconnect beyond the one legitimate
     // reconnect that already completed.
-    expect(instances).toHaveLength(2);
-    expect(instances[1]!.calls.connect).toBe(1);
+    expect(instances).toHaveLength(2)
+    expect(instances[1]!.calls.connect).toBe(1)
 
-    unsubscribe();
-  });
+    unsubscribe()
+  })
 
-  test("watch() rejects cleanly when the very first connect() fails, and never starts a background reconnect loop", async () => {
-    const attempts: ReturnType<typeof createFakeIdleClient>[] = [];
+  test('watch() rejects cleanly when the very first connect() fails, and never starts a background reconnect loop', async () => {
+    const attempts: ReturnType<typeof createFakeIdleClient>[] = []
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: createFakePort().port,
       createIdleClient: () => {
         const fake = createFakeIdleClient({
-          connectError: new Error("ECONNREFUSED"),
-        });
-        attempts.push(fake);
-        return fake.client;
+          connectError: new Error('ECONNREFUSED'),
+        })
+        attempts.push(fake)
+        return fake.client
       },
       idleReconnectWait: immediateWait,
       idleReconnectRandom: () => 0,
-    });
+    })
 
-    await expect(provider.watch!("INBOX", () => undefined)).rejects.toThrow(
-      "ECONNREFUSED",
-    );
-    expect(attempts).toHaveLength(1);
-    expect(attempts[0]!.calls.connect).toBe(1);
+    await expect(provider.watch!('INBOX', () => undefined)).rejects.toThrow('ECONNREFUSED')
+    expect(attempts).toHaveLength(1)
+    expect(attempts[0]!.calls.connect).toBe(1)
 
     // A late close/error firing on the failed client (imapflow can emit
     // these around a failed connect) must not start a reconnect loop —
     // watch() already rejected, and its caller never got an Unsubscribe to
     // stop one.
-    attempts[0]!.emit("close");
-    attempts[0]!.emit("error");
-    await flush();
-    await flush();
+    attempts[0]!.emit('close')
+    attempts[0]!.emit('error')
+    await flush()
+    await flush()
 
-    expect(attempts).toHaveLength(1);
-    expect(attempts[0]!.calls.connect).toBe(1);
-  });
+    expect(attempts).toHaveLength(1)
+    expect(attempts[0]!.calls.connect).toBe(1)
+  })
 
   test("keeps retrying through Bridge's post-restart auth failures, then reconnects and kicks one catch-up sync", async () => {
-    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
-    const authFailure = Object.assign(new Error("no such user"), {
+    const instances: ReturnType<typeof createFakeIdleClient>[] = []
+    const authFailure = Object.assign(new Error('no such user'), {
       authenticationFailed: true,
-    });
+    })
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: createFakePort().port,
       createIdleClient: () => {
         // Boot connects fine; the next three attempts hit a Bridge that has
         // not loaded the account yet.
-        const failing = instances.length >= 1 && instances.length <= 3;
+        const failing = instances.length >= 1 && instances.length <= 3
         const fake = createFakeIdleClient({
           connectError: failing ? authFailure : undefined,
-        });
-        instances.push(fake);
-        return fake.client;
+        })
+        instances.push(fake)
+        return fake.client
       },
       idleReconnectWait: immediateWait,
       idleReconnectRandom: () => 0,
-    });
-    const changes = { count: 0 };
+    })
+    const changes = { count: 0 }
 
-    const unsubscribe = await provider.watch!("INBOX", () => {
-      changes.count++;
-    });
+    const unsubscribe = await provider.watch!('INBOX', () => {
+      changes.count++
+    })
 
-    instances[0]!.emit("close");
-    for (let i = 0; i < 5; i++) await flush();
+    instances[0]!.emit('close')
+    for (let i = 0; i < 5; i++) await flush()
 
-    expect(instances).toHaveLength(5);
-    expect(instances[4]!.calls.mailboxOpen).toBe(1);
-    expect(instances[4]!.calls.idle).toBe(1);
-    expect(changes.count).toBe(1);
+    expect(instances).toHaveLength(5)
+    expect(instances[4]!.calls.mailboxOpen).toBe(1)
+    expect(instances[4]!.calls.idle).toBe(1)
+    expect(changes.count).toBe(1)
 
     // The recovered connection still watches.
-    instances[4]!.emit("exists");
-    expect(changes.count).toBe(2);
+    instances[4]!.emit('exists')
+    expect(changes.count).toBe(2)
 
-    unsubscribe();
-  });
+    unsubscribe()
+  })
 
-  test("a reconnect attempt that never settles is abandoned by the hang guard and retried", async () => {
-    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
+  test('a reconnect attempt that never settles is abandoned by the hang guard and retried', async () => {
+    const instances: ReturnType<typeof createFakeIdleClient>[] = []
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: createFakePort().port,
       createIdleClient: () => {
         const fake = createFakeIdleClient({
           connectHangs: instances.length === 1,
-        });
-        instances.push(fake);
-        return fake.client;
+        })
+        instances.push(fake)
+        return fake.client
       },
       idleReconnectWait: immediateWait,
       idleReconnectRandom: () => 0,
       idleConnectHangGuardMs: 5,
-    });
+    })
 
-    const unsubscribe = await provider.watch!("INBOX", () => undefined);
+    const unsubscribe = await provider.watch!('INBOX', () => undefined)
 
-    instances[0]!.emit("close");
+    instances[0]!.emit('close')
     for (let i = 0; i < 100 && instances.length < 3; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => setTimeout(resolve, 5))
     }
-    await flush();
+    await flush()
 
-    expect(instances).toHaveLength(3);
-    expect(instances[1]!.listenerCount("close")).toBe(0);
-    expect(instances[2]!.calls.mailboxOpen).toBe(1);
+    expect(instances).toHaveLength(3)
+    expect(instances[1]!.listenerCount('close')).toBe(0)
+    expect(instances[2]!.calls.mailboxOpen).toBe(1)
 
-    unsubscribe();
-  });
+    unsubscribe()
+  })
 
-  test("unsubscribe during an in-flight reconnect drops it without a catch-up sync", async () => {
-    let releaseConnect = () => undefined as void;
+  test('unsubscribe during an in-flight reconnect drops it without a catch-up sync', async () => {
+    let releaseConnect = () => undefined as void
     const connectGate = new Promise<void>((resolve) => {
-      releaseConnect = resolve;
-    });
-    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
+      releaseConnect = resolve
+    })
+    const instances: ReturnType<typeof createFakeIdleClient>[] = []
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: createFakePort().port,
       createIdleClient: () => {
         const fake = createFakeIdleClient({
           connectGate: instances.length === 1 ? connectGate : undefined,
-        });
-        instances.push(fake);
-        return fake.client;
+        })
+        instances.push(fake)
+        return fake.client
       },
       idleReconnectWait: immediateWait,
       idleReconnectRandom: () => 0,
-    });
-    const changes = { count: 0 };
+    })
+    const changes = { count: 0 }
 
-    const unsubscribe = await provider.watch!("INBOX", () => {
-      changes.count++;
-    });
-    instances[0]!.emit("close");
-    await flush();
-    expect(instances).toHaveLength(2);
+    const unsubscribe = await provider.watch!('INBOX', () => {
+      changes.count++
+    })
+    instances[0]!.emit('close')
+    await flush()
+    expect(instances).toHaveLength(2)
 
-    unsubscribe();
-    releaseConnect();
-    await flush();
-    await flush();
+    unsubscribe()
+    releaseConnect()
+    await flush()
+    await flush()
 
-    expect(instances).toHaveLength(2);
-    expect(instances[1]!.calls.logout).toBe(1);
-    expect(instances[1]!.calls.idle).toBe(0);
-    expect(changes.count).toBe(0);
-  });
+    expect(instances).toHaveLength(2)
+    expect(instances[1]!.calls.logout).toBe(1)
+    expect(instances[1]!.calls.idle).toBe(0)
+    expect(changes.count).toBe(0)
+  })
 
-  test("a reconnect detaches and closes the outgoing client before the new one ever connects", async () => {
-    const log: string[] = [];
-    const instances: ReturnType<typeof createFakeIdleClient>[] = [];
+  test('a reconnect detaches and closes the outgoing client before the new one ever connects', async () => {
+    const log: string[] = []
+    const instances: ReturnType<typeof createFakeIdleClient>[] = []
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port: createFakePort().port,
       createIdleClient: () => {
-        const fake = createFakeIdleClient({ log });
-        instances.push(fake);
-        return fake.client;
+        const fake = createFakeIdleClient({ log })
+        instances.push(fake)
+        return fake.client
       },
       idleReconnectWait: immediateWait,
       idleReconnectRandom: () => 0,
-    });
+    })
 
-    const unsubscribe = await provider.watch!("INBOX", () => undefined);
-    log.length = 0; // drop the initial connect's own log entries
+    const unsubscribe = await provider.watch!('INBOX', () => undefined)
+    log.length = 0 // drop the initial connect's own log entries
 
-    instances[0]!.emit("close");
-    await flush();
+    instances[0]!.emit('close')
+    await flush()
 
-    expect(instances).toHaveLength(2);
+    expect(instances).toHaveLength(2)
     // Only this module's own listeners were detached — the crash-guard
     // 'error' listener baked into the fake (mirroring adapter.ts's own)
     // survives.
-    expect(instances[0]!.listenerCount("close")).toBe(0);
-    expect(instances[0]!.listenerCount("error")).toBe(1);
-    expect(instances[0]!.calls.logout).toBe(1);
+    expect(instances[0]!.listenerCount('close')).toBe(0)
+    expect(instances[0]!.listenerCount('error')).toBe(1)
+    expect(instances[0]!.calls.logout).toBe(1)
     // The outgoing client was detached and logged out strictly before the
     // incoming one connected and opened the mailbox.
     expect(log).toEqual([
-      "off:exists",
-      "off:expunge",
-      "off:flags",
-      "off:close",
-      "off:error",
-      "logout",
-      "connect",
-      "mailboxOpen",
-    ]);
+      'off:exists',
+      'off:expunge',
+      'off:flags',
+      'off:close',
+      'off:error',
+      'logout',
+      'connect',
+      'mailboxOpen',
+    ])
 
-    unsubscribe();
-  });
+    unsubscribe()
+  })
 
-  test("a Bridge mailbox (no CONDSTORE) never takes the changedSince fast path", async () => {
-    const { port, changedSinceCalls } = createFakePort();
+  test('a Bridge mailbox (no CONDSTORE) never takes the changedSince fast path', async () => {
+    const { port, changedSinceCalls } = createFakePort()
     const provider = createImapProvider(config, {
-      id: "proton",
-      account: "hello@example.com",
+      id: 'proton',
+      account: 'hello@example.com',
       port,
-    });
+    })
 
-    await provider.list("INBOX", undefined);
-    await provider.list("INBOX", undefined);
+    await provider.list('INBOX', undefined)
+    await provider.list('INBOX', undefined)
 
     // No bookmark is ever established, so every head call is a full scan.
-    expect(changedSinceCalls).toHaveLength(0);
-  });
+    expect(changedSinceCalls).toHaveLength(0)
+  })
 
-  test("a Gmail mailbox seeds a modseq bookmark on the first head scan, then lists only changes", async () => {
+  test('a Gmail mailbox seeds a modseq bookmark on the first head scan, then lists only changes', async () => {
     const changed: ImapEnvelopeInfo = {
       uid: 7,
       size: 10,
-      internalDate: new Date("2026-09-15T00:00:00.000Z"),
-      from: "ada@example.com",
-      to: ["me@gmail.com"],
-      subject: "Changed",
+      internalDate: new Date('2026-09-15T00:00:00.000Z'),
+      from: 'ada@example.com',
+      to: ['me@gmail.com'],
+      subject: 'Changed',
       hasAttachments: false,
-      flags: ["\\Seen"],
-      threadKey: "42",
-    };
+      flags: ['\\Seen'],
+      threadKey: '42',
+    }
     const { port, changedSinceCalls } = createFakePort({
       highestModseq: 500n,
       changedListing: {
@@ -1443,77 +1403,77 @@ describe("createImapProvider watch()", () => {
         highestModseq: 510n,
       },
       envelopes: [],
-    });
+    })
     const provider = createImapProvider(config, {
-      id: "gmail",
-      account: "me@gmail.com",
+      id: 'gmail',
+      account: 'me@gmail.com',
       port,
-    });
+    })
 
     // First head call: no bookmark yet -> full scan, seeds 500.
-    const first = await provider.list("INBOX", undefined);
-    expect(first.items).toHaveLength(0);
-    expect(changedSinceCalls).toHaveLength(0);
+    const first = await provider.list('INBOX', undefined)
+    expect(first.items).toHaveLength(0)
+    expect(changedSinceCalls).toHaveLength(0)
 
     // Second head call: changedSince from the seeded bookmark.
-    const second = await provider.list("INBOX", undefined);
-    expect(changedSinceCalls).toEqual([{ changedSince: 500n, limit: 500 }]);
-    expect(second.items[0]?.threadKey).toBe("42");
-    expect(second.cursor).toBeUndefined();
-  });
+    const second = await provider.list('INBOX', undefined)
+    expect(changedSinceCalls).toEqual([{ changedSince: 500n, limit: 500 }])
+    expect(second.items[0]?.threadKey).toBe('42')
+    expect(second.cursor).toBeUndefined()
+  })
 
-  test("skipFastPath forces a full scan even with an existing bookmark, so a caller seeding backfill never gets an ambiguous undefined cursor", async () => {
+  test('skipFastPath forces a full scan even with an existing bookmark, so a caller seeding backfill never gets an ambiguous undefined cursor', async () => {
     const { port, changedSinceCalls } = createFakePort({
       highestModseq: 500n,
       changedListing: { messages: [], truncated: false, highestModseq: 500n },
       envelopes: [],
-    });
+    })
     const provider = createImapProvider(config, {
-      id: "gmail",
-      account: "me@gmail.com",
+      id: 'gmail',
+      account: 'me@gmail.com',
       port,
-    });
+    })
 
-    await provider.list("INBOX", undefined); // seeds the bookmark
-    const forced = await provider.list("INBOX", undefined, {
+    await provider.list('INBOX', undefined) // seeds the bookmark
+    const forced = await provider.list('INBOX', undefined, {
       skipFastPath: true,
-    });
+    })
 
     // Never took the fast path (which always returns cursor: undefined,
     // ambiguous with "genuinely nothing older") despite a bookmark existing.
-    expect(changedSinceCalls).toHaveLength(0);
-    expect(forced.cursor).toBeUndefined();
-  });
+    expect(changedSinceCalls).toHaveLength(0)
+    expect(forced.cursor).toBeUndefined()
+  })
 
   test("skipFastPath never re-bootstraps an existing bookmark, even when the mailbox's current HIGHESTMODSEQ has since advanced", async () => {
     const { port, changedSinceCalls, mailbox } = createFakePort({
       highestModseq: 500n,
       changedListing: { messages: [], truncated: false, highestModseq: 500n },
       envelopes: [],
-    });
+    })
     const provider = createImapProvider(config, {
-      id: "gmail",
-      account: "me@gmail.com",
+      id: 'gmail',
+      account: 'me@gmail.com',
       port,
-    });
+    })
 
-    await provider.list("INBOX", undefined); // seeds the bookmark at 500n
+    await provider.list('INBOX', undefined) // seeds the bookmark at 500n
 
     // The server's HIGHESTMODSEQ has since moved on — e.g. an older message
     // outside this UID-window scan's range got a flag change. A skipFastPath
     // call must not treat this as "no bookmark yet" and re-seed to the new,
     // higher value: that would silently widen the bookmark past what this
     // scan's limited (newest-page-only) results actually cover.
-    mailbox.highestModseq = 900n;
-    await provider.list("INBOX", undefined, { skipFastPath: true });
+    mailbox.highestModseq = 900n
+    await provider.list('INBOX', undefined, { skipFastPath: true })
 
     // The next ordinary head call must still ask changedSince the ORIGINAL
     // 500n bookmark, not the skipped call's un-seeded 900n.
-    await provider.list("INBOX", undefined);
-    expect(changedSinceCalls).toEqual([{ changedSince: 500n, limit: 500 }]);
-  });
+    await provider.list('INBOX', undefined)
+    expect(changedSinceCalls).toEqual([{ changedSince: 500n, limit: 500 }])
+  })
 
-  test("a changed set larger than one page falls back to the full scan instead of dropping changes", async () => {
+  test('a changed set larger than one page falls back to the full scan instead of dropping changes', async () => {
     const { port, changedSinceCalls } = createFakePort({
       highestModseq: 500n,
       // The changed set is truncated: the provider must not advance its
@@ -1524,9 +1484,9 @@ describe("createImapProvider watch()", () => {
             uid: 7,
             size: 1,
             internalDate: null,
-            from: "",
+            from: '',
             to: [],
-            subject: "x",
+            subject: 'x',
             hasAttachments: false,
             flags: [],
           },
@@ -1535,50 +1495,50 @@ describe("createImapProvider watch()", () => {
         highestModseq: 510n,
       },
       envelopes: [],
-    });
+    })
     const provider = createImapProvider(config, {
-      id: "gmail",
-      account: "me@gmail.com",
+      id: 'gmail',
+      account: 'me@gmail.com',
       port,
-    });
+    })
 
-    await provider.list("INBOX", undefined); // seed bookmark
-    await provider.list("INBOX", undefined); // changedSince, truncated -> falls back
+    await provider.list('INBOX', undefined) // seed bookmark
+    await provider.list('INBOX', undefined) // changedSince, truncated -> falls back
 
     // Truncated -> the fallback full scan ran, but the bookmark must NOT
     // advance to the full scan's current HIGHESTMODSEQ: that scan only
     // covers the newest page, not the whole changed set the server
     // reported, so advancing past it would drop whatever fell outside this
     // window forever. The next head call retries the SAME changedSince.
-    expect(changedSinceCalls).toEqual([{ changedSince: 500n, limit: 500 }]);
-    await provider.list("INBOX", undefined);
+    expect(changedSinceCalls).toEqual([{ changedSince: 500n, limit: 500 }])
+    await provider.list('INBOX', undefined)
     expect(changedSinceCalls).toEqual([
       { changedSince: 500n, limit: 500 },
       { changedSince: 500n, limit: 500 },
-    ]);
-  });
+    ])
+  })
 
-  test("a mailbox recreation (new UIDVALIDITY) invalidates the modseq bookmark instead of reporting nothing changed", async () => {
+  test('a mailbox recreation (new UIDVALIDITY) invalidates the modseq bookmark instead of reporting nothing changed', async () => {
     const { port, changedSinceCalls, mailbox } = createFakePort({
       highestModseq: 500n,
       changedListing: { messages: [], truncated: false, highestModseq: 500n },
       envelopes: [],
-    });
+    })
     const provider = createImapProvider(config, {
-      id: "gmail",
-      account: "me@gmail.com",
+      id: 'gmail',
+      account: 'me@gmail.com',
       port,
-    });
+    })
 
-    await provider.list("INBOX", undefined); // seeds a bookmark for "INBOX:1"
+    await provider.list('INBOX', undefined) // seeds a bookmark for "INBOX:1"
 
     // The mailbox is recreated: a new UIDVALIDITY and a reset modseq counter
     // (real IMAP servers issue a lower HIGHESTMODSEQ after a recreation,
     // since the modseq sequence itself restarts).
-    mailbox.uidValidity = "2";
-    mailbox.highestModseq = 5n;
+    mailbox.uidValidity = '2'
+    mailbox.highestModseq = 5n
 
-    await provider.list("INBOX", undefined);
+    await provider.list('INBOX', undefined)
 
     // A bookmark keyed only by mailbox path would read the "INBOX:1" value
     // (500n) against the new mailbox and ask for changes since a modseq the
@@ -1587,6 +1547,6 @@ describe("createImapProvider watch()", () => {
     // the mailbox's whole history is unseen under this UIDVALIDITY. Scoping
     // the bookmark by UIDVALIDITY makes this look like a fresh mailbox
     // instead, so the second call must fall through to a full scan.
-    expect(changedSinceCalls).toHaveLength(0);
-  });
-});
+    expect(changedSinceCalls).toHaveLength(0)
+  })
+})

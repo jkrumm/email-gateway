@@ -1,20 +1,15 @@
-import type { ReactNode } from "react";
-import { Table, Text } from "@mantine/core";
+import type { ReactNode } from 'react'
+import { Table, Text } from '@mantine/core'
 
 interface DataTableProps {
-  headers: readonly string[];
-  emptyText: string;
-  isEmpty: boolean;
-  children: ReactNode;
+  headers: readonly string[]
+  emptyText: string
+  isEmpty: boolean
+  children: ReactNode
 }
 
-export function DataTable({
-  headers,
-  emptyText,
-  isEmpty,
-  children,
-}: DataTableProps) {
-  if (isEmpty) return <Text c="dimmed">{emptyText}</Text>;
+export function DataTable({ headers, emptyText, isEmpty, children }: DataTableProps) {
+  if (isEmpty) return <Text c="dimmed">{emptyText}</Text>
   return (
     <Table.ScrollContainer minWidth={640}>
       <Table highlightOnHover>
@@ -28,5 +23,5 @@ export function DataTable({
         <Table.Tbody>{children}</Table.Tbody>
       </Table>
     </Table.ScrollContainer>
-  );
+  )
 }

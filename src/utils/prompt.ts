@@ -7,7 +7,5 @@
 // angle bracket to its JSON \u form keeps the payload inert to the delimiter
 // — the model reads the same value, the boundary holds.
 export function serializeUntrusted(value: unknown): string {
-  return JSON.stringify(value)
-    .replace(/</g, "\\u003c")
-    .replace(/>/g, "\\u003e");
+  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')
 }

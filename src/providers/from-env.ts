@@ -1,8 +1,8 @@
-import { gmailImapConfigFromEnv, imapConfigFromEnv } from "./imap/config";
-import { createImapProvider } from "./imap/provider";
-import type { MailProvider } from "./port";
+import { gmailImapConfigFromEnv, imapConfigFromEnv } from './imap/config'
+import { createImapProvider } from './imap/provider'
+import type { MailProvider } from './port'
 
-let cachedProviders: MailProvider[] | null = null;
+let cachedProviders: MailProvider[] | null = null
 
 // Builds (once per process) every MailProvider the env configures — IMAP
 // (Proton, via Bridge; Gmail, via app password) only when the matching env
@@ -10,31 +10,31 @@ let cachedProviders: MailProvider[] | null = null;
 // that re-fetches a message body, so a provider (and the IMAP session pool it
 // owns) is constructed once, not once per job.
 export function configuredProviders(): MailProvider[] {
-  if (cachedProviders) return cachedProviders;
+  if (cachedProviders) return cachedProviders
 
-  const providers: MailProvider[] = [];
+  const providers: MailProvider[] = []
 
-  const imapConfig = imapConfigFromEnv();
+  const imapConfig = imapConfigFromEnv()
   if (imapConfig) {
     providers.push(
       createImapProvider(imapConfig, {
-        id: "proton",
+        id: 'proton',
         account: imapConfig.user,
       }),
-    );
+    )
   }
 
-  const gmailConfig = gmailImapConfigFromEnv();
+  const gmailConfig = gmailImapConfigFromEnv()
   if (gmailConfig) {
     providers.push(
       createImapProvider(gmailConfig, {
-        id: "gmail",
+        id: 'gmail',
         account: gmailConfig.user,
       }),
-    );
+    )
   }
 
-  return (cachedProviders = providers);
+  return (cachedProviders = providers)
 }
 
 // Resolves the provider a stored account id ("<providerId>:<account>") names.
@@ -43,8 +43,7 @@ export function configuredProviders(): MailProvider[] {
 // since that row was written, not a bug in the lookup.
 export function providerForAccountId(accountId: string): MailProvider | null {
   return (
-    configuredProviders().find(
-      (provider) => `${provider.id}:${provider.account}` === accountId,
-    ) ?? null
-  );
+    configuredProviders().find((provider) => `${provider.id}:${provider.account}` === accountId) ??
+    null
+  )
 }

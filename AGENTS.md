@@ -110,7 +110,7 @@ build`, built by the Dockerfile's client stage) or the React Email preview
   (`defaultMailboxesFor`, `src/sync/composition.ts`) — never another account's.
 - **`messages` rows refresh on every re-sight** (Wave 4) — unlike the old
   Message-ID-derived id, `messages.key` is `sha256(account:provider:mailbox:
-uidValidity:uid)`, never attacker-influenced, so `ON CONFLICT DO UPDATE`ing
+  uidValidity:uid)`, never attacker-influenced, so `ON CONFLICT DO UPDATE`ing
   envelope metadata (flags, subject, date) on re-sight carries none of the old
   insert-only rule's spoofed-Message-ID risk. Ingest never touches a message's
   body at all (`src/sync/ingest.ts` is envelope-only); `body_cache` is filled
@@ -279,7 +279,7 @@ tests never need secrets.
   with `EmailTags` from `SendMessage.tags` via `sanitizeSesTag`, no `status()`;
   the registry builds it lazily from the required `SES_*` env), `events.ts` the
   pure SES event → `{providerMessageId, eventType, status | null, lastEvent,
-occurredAt, bounceType?, bounceSubtype?, diagnosticCode?}` mapping (`Send` →
+  occurredAt, bounceType?, bounceSubtype?, diagnosticCode?}` mapping (`Send` →
   status null, timeline only; ignored types → null), `account.ts` (Wave 18)
   the pure `GetAccount` → `SesAccountSnapshot` mapping + `fetchSesAccount`,
   `suppressions.ts` the injectable list/delete of the SES account suppression
@@ -316,7 +316,7 @@ occurredAt, bounceType?, bounceSubtype?, diagnosticCode?}` mapping (`Send` →
   both now called from job handlers, not a poll loop; `src/llm/` model
   factories (`model.ts`, `jev.ts` — picks the decision provider per
   `DECISION_PROVIDER`, default `ue` = `createTypeSafeAi({ baseURL, apiKey
-}).decisionModel(model)` over `…/decisions/v1/systemone`; base from
+  }).decisionModel(model)` over `…/decisions/v1/systemone`; base from
   `DECISION_BASE_URL` or the `LLM_BASE_URL` origin; the SDK validates the
   answers, the provider drops UE's `usage.cost` so `decide` computes it from
   `DECISION_RATES` in `src/llm/jev.ts`; `@ai-sdk/provider` stays a

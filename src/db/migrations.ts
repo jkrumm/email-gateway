@@ -1,5 +1,5 @@
-import type { Database } from "bun:sqlite";
-import { type Migration, applyMigrations } from "./migration-runner";
+import type { Database } from 'bun:sqlite'
+import { type Migration, applyMigrations } from './migration-runner'
 
 // Ordered, idempotent migrations tracked via PRAGMA user_version. Add new
 // entries with the next integer version — never edit a migration that has
@@ -190,11 +190,8 @@ const migrations: Migration[] = [
       CREATE INDEX idx_email_enrichments_jev_status ON email_enrichments (jev_status) WHERE jev_status = 'pending';
     `,
   },
-];
+]
 
-export function runMigrations(
-  db: Database,
-  opts?: { targetVersion?: number },
-): void {
-  applyMigrations(db, migrations, opts);
+export function runMigrations(db: Database, opts?: { targetVersion?: number }): void {
+  applyMigrations(db, migrations, opts)
 }
