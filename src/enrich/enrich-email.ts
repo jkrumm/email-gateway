@@ -3,7 +3,7 @@ import { z } from "zod";
 import { CATEGORIES } from "./categories";
 import { getLlmConfig, getModel, getModelId } from "../llm/model";
 import { plainText } from "../utils/html";
-import { trackLlmCall } from "../usage/argo";
+import { traceLlmCall } from "../telemetry/llm-call";
 import { log } from "../telemetry/log";
 
 export type EmailDirection = "inbound" | "outbound";
@@ -95,7 +95,7 @@ export async function enrichEmail({
     const resolvedModel = model ?? getModel();
     const payload = buildEmailPayload(email);
 
-    const result = await trackLlmCall({
+    const result = await traceLlmCall({
       subTool: "enrich",
       model: getModelId(resolvedModel),
       run: () =>

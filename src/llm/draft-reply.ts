@@ -2,7 +2,7 @@ import { generateText, type LanguageModel } from "ai";
 import { getLlmConfig, getModel, getModelId } from "./model";
 import { plainText } from "../utils/html";
 import { serializeUntrusted } from "../utils/prompt";
-import { trackLlmCall } from "../usage/argo";
+import { traceLlmCall } from "../telemetry/llm-call";
 import { log } from "../telemetry/log";
 
 export interface DraftReplyMessage {
@@ -48,7 +48,7 @@ export async function draftReply({
       ? `\n\n<instructions>\n${instructions}\n</instructions>`
       : "";
 
-    const result = await trackLlmCall({
+    const result = await traceLlmCall({
       subTool: "draft-reply",
       model: getModelId(resolvedModel),
       run: () =>

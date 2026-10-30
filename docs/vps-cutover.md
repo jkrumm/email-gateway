@@ -220,4 +220,4 @@ compose + `.env.tpl`, §5 backup cron after a manual dry run, then §6 items 4
 and 6 (argo#20, hermes-agent#3).
 
 Already live, unaffected by the migration: the decision lane on IU's decision API
-(README §Jev shadow mode) and Argo usage reporting (`src/usage/argo.ts`).
+(README §Jev shadow mode).

@@ -96,7 +96,6 @@ describe("createOpenRouterDecisionModel", () => {
       state,
       questions,
       subTool: "decision-email",
-      report: async () => {},
     });
     return { requests: bodies, answers };
   }

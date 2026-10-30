@@ -8,17 +8,7 @@ import { createTypeSafeAi } from "@ai-sdk/typesafe-ai";
 import { z } from "zod";
 import { env } from "../env";
 import { createOpenRouterDecisionModel } from "./openrouter-decision-model";
-import {
-  NO_COST,
-  computeDecisionCost,
-  ZERO_TOKENS,
-  reportUsage,
-  startLlmCall,
-  type UsageCost,
-  type UsageReporter,
-  type UsageSubTool,
-  type UsageTokens,
-} from "../usage/argo";
+import { startLlmCall, type LlmSubTool } from "../telemetry/llm-call";
 import { log } from "../telemetry/log";
 
 // The shadow decision lane ("Jev" is its historical name — job kinds, `jev_*`
@@ -42,8 +32,26 @@ export interface JevConfig {
   model: string;
 }
 
-// Argo `billing` per provider: UE is billed to IU, OpenRouter to the owner.
-const BILLING = { ue: "iu", openrouter: "openrouter" } as const;
+// Decision models on UE, whose reported `usage.cost` the TypeSafe provider
+// drops: USD per million tokens. decision-1 output is free (Microsoft,
+// 2026-10-09); pplx-decider-v1-27b is flat across input and output (derived
+// from a live call, 2026-10-13).
+export const DECISION_RATES: Record<string, { input: number; output: number }> =
+  {
+    "decision-1": { input: 0.042, output: 0 },
+    "decision-1-eu": { input: 0.042, output: 0 },
+    "pplx-decider-v1-27b": { input: 0.04, output: 0.04 },
+  };
+
+export function computeDecisionCost(
+  model: string,
+  inputTokens: number,
+  outputTokens = 0,
+): number | null {
+  const rate = DECISION_RATES[model];
+  if (rate === undefined) return null;
+  return (inputTokens * rate.input + outputTokens * rate.output) / 1_000_000;
+}
 
 // The key each provider files its `providerMetadata` under: the TypeSafe
 // provider (which serves UE) uses `typesafe`.
@@ -176,20 +184,17 @@ export async function decide<
   subTool,
   config = getJevConfig(),
   model,
-  report = reportUsage,
 }: {
   state: JevState;
   questions: Questions;
-  // Argo `sub_tool` the call is reported under.
-  subTool: Extract<UsageSubTool, `decision-${string}`>;
+  // The lane the call's span and event are filed under.
+  subTool: Extract<LlmSubTool, `decision-${string}`>;
   config?: JevConfig | null;
   // Injectable decision model (tests); defaults to the configured provider's.
   model?: DecisionModel;
-  report?: UsageReporter;
 }): Promise<JevDecision<Questions> & { usage: JevUsage }> {
   if (!config) throw new Error("Jev not configured");
 
-  const startedAt = Date.now();
   const call = startLlmCall(subTool, config.model);
   let result: Awaited<ReturnType<typeof decideWithModel<Questions>>>;
   try {
@@ -207,15 +212,6 @@ export async function decide<
     });
   } catch (error) {
     call.finish({ outcome: "error", error });
-    void report({
-      subTool,
-      model: config.model,
-      billing: BILLING[config.provider],
-      outcome: "error",
-      durationMs: Date.now() - startedAt,
-      tokens: ZERO_TOKENS,
-      cost: NO_COST,
-    }).catch(() => {});
     throw error;
   }
 
@@ -236,11 +232,10 @@ export async function decide<
   const reportedCostUsd = providerMeta?.usage?.cost ?? null;
   const inputTokens = result.usage.inputTokens ?? 0;
   const outputTokens = result.usage.outputTokens ?? 0;
-  const cost: UsageCost =
-    reportedCostUsd !== null
-      ? { usd: reportedCostUsd, source: "reported" }
-      : computeDecisionCost(config.model, inputTokens, outputTokens);
-  if (cost.source === "none" && config.provider === "ue") {
+  const costUsd =
+    reportedCostUsd ??
+    computeDecisionCost(config.model, inputTokens, outputTokens);
+  if (costUsd === null && config.provider === "ue") {
     log.warn(
       `Jev: no reported cost and no DECISION_RATES entry for "${config.model}"`,
     );
@@ -248,27 +243,19 @@ export async function decide<
   const usage: JevUsage = {
     inputTokens,
     outputTokens,
-    costUsd: cost.usd,
+    costUsd,
   };
   // The call was billed either way; a missing confidence below still makes
   // the decision a failure, so the outcome is settled only after the loop.
-  const billedTokens: UsageTokens = {
-    ...ZERO_TOKENS,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-  };
-  const reportBilled = (outcome: "ok" | "error") => {
-    call.finish({ outcome, tokens: billedTokens });
-    void report({
-      subTool,
-      model: config.model,
-      billing: BILLING[config.provider],
+  const finishCall = (outcome: "ok" | "error") =>
+    call.finish({
       outcome,
-      durationMs: Date.now() - startedAt,
-      tokens: billedTokens,
-      cost,
-    }).catch(() => {});
-  };
+      tokens: {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: 0,
+      },
+    });
 
   const answers: Record<string, unknown> = {};
   for (const [key, answer] of Object.entries(result.answers)) {
@@ -280,12 +267,12 @@ export async function decide<
     const confidence =
       confidences[key] ?? answer.probabilities?.[answer.choice];
     if (confidence === undefined) {
-      reportBilled("error");
+      finishCall("error");
       throw new Error(`Jev returned no confidence for "${key}"`);
     }
     answers[key] = { ...answer, confidence };
   }
-  reportBilled("ok");
+  finishCall("ok");
 
   // One answer per question, typed by the SDK; confidence was added above.
   return {
@@ -313,15 +300,13 @@ export function decideShadow<
   pick,
   config = getJevConfig(),
   model,
-  report,
 }: {
   state: JevState;
   questions: Questions;
-  subTool: Extract<UsageSubTool, `decision-${string}`>;
+  subTool: Extract<LlmSubTool, `decision-${string}`>;
   pick: (answers: JevDecision<Questions>["answers"]) => Fields;
   config?: JevConfig | null;
   model?: DecisionModel;
-  report?: UsageReporter;
 }): Promise<Fields & JevCallMeta> | null {
   if (!config) return null;
 
@@ -333,7 +318,6 @@ export function decideShadow<
     state,
     questions,
     subTool,
-    ...(report && { report }),
   }).then(({ answers, usage }) => ({
     ...pick(answers),
     latencyMs: Date.now() - startedAt,

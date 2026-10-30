@@ -33,12 +33,6 @@ LLM_MODEL=gpt-6-luna
 # DECISION_MODEL=cloudflare/clef
 OPENROUTER_API_KEY=op://common/openrouter/API_KEY
 
-# Usage/cost reporting to Argo (src/usage/argo.ts). Unset -> no-op; prod posts
-# to argo-api over the VPS proxy network.
-# ARGO_USAGE_URL=https://argo.<your-domain>/api/usage/records
-# ARGO_API_SECRET=op://common/api/SECRET
-# MACHINE=mini
-
 # /app session login (basic password auth, signed HttpOnly cookie); /app 404s
 # when unset.
 ADMIN_PASSWORD=local-dev-password

@@ -302,10 +302,12 @@ occurredAt, bounceType?, bounceSubtype?, diagnosticCode?}` mapping (`Send` →
   with the SSR admin; the client's Templates page (Wave 7) replaces it, now
   backed by `GET /api/templates(/:id/preview)` and
   `POST /api/templates/:id/test-send`
-- `src/usage/argo.ts` fire-and-forget Argo usage reporter (no-op unless
-  `ARGO_USAGE_URL`/`ARGO_API_SECRET` are set; injectable `fetch`/config): record
-  builder, IU rate table, `trackLlmCall` wrapping every `generateText` site, and
-  `src/llm/jev.ts`'s `decide` reports the decision calls itself
+- `src/telemetry/llm-call.ts` the `llm.<lane>` client span and `llm.call` event
+  for one model call (`traceLlmCall` wraps every `generateText` site;
+  `src/llm/jev.ts`'s `decide` uses `startLlmCall` itself). There is no usage
+  reporting: email-gateway's model spend is **not** in the `usage` schema (gap
+  for a later track: route calls through agw, or write `usage.records` via
+  agw's outbox)
 - `src/spam/` contact-form gate (`gate.ts` deadline race, enqueues a
   `jev_submission` job on the new `mail.sqlite` `submissions` table instead of
   the old in-memory kick; `classify.ts`, `jev-judge.ts`)
@@ -316,7 +318,7 @@ occurredAt, bounceType?, bounceSubtype?, diagnosticCode?}` mapping (`Send` →
 }).decisionModel(model)` over `…/decisions/v1/systemone`; base from
   `DECISION_BASE_URL` or the `LLM_BASE_URL` origin; the SDK validates the
   answers, the provider drops UE's `usage.cost` so `decide` computes it from
-  `DECISION_RATES` in `src/usage/argo.ts`; `@ai-sdk/provider` stays a
+  `DECISION_RATES` in `src/llm/jev.ts`; `@ai-sdk/provider` stays a
   types-only devDependency, runtime error classes come from `ai`; the
   OpenRouter model is wrapped in
   `openrouter-decision-model.ts` (`unwrapDecisionState` undoes `decide`'s

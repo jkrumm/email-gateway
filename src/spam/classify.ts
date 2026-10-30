@@ -2,7 +2,7 @@ import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import type { SubmissionSource, Verdict } from "../db/mail-submissions";
 import { getLlmConfig, getModel, getModelId } from "../llm/model";
-import { trackLlmCall } from "../usage/argo";
+import { traceLlmCall } from "../telemetry/llm-call";
 import { log } from "../telemetry/log";
 
 const SUPPRESS_CONFIDENCE_THRESHOLD = 0.7;
@@ -59,7 +59,7 @@ export async function classifySubmission({
 
   try {
     const resolvedModel = model ?? getModel();
-    const result = await trackLlmCall({
+    const result = await traceLlmCall({
       subTool: "spam-classify",
       model: getModelId(resolvedModel),
       run: () =>

@@ -2,7 +2,7 @@ import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import { getLlmConfig, getModel, getModelId } from "./model";
 import { serializeUntrusted } from "../utils/prompt";
-import { trackLlmCall } from "../usage/argo";
+import { traceLlmCall } from "../telemetry/llm-call";
 import { log } from "../telemetry/log";
 
 export interface ThreadMessageForSummary {
@@ -45,7 +45,7 @@ export async function summarizeThread({
   try {
     const resolvedModel = model ?? getModel();
 
-    const result = await trackLlmCall({
+    const result = await traceLlmCall({
       subTool: "thread-summary",
       model: getModelId(resolvedModel),
       run: () =>

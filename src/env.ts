@@ -70,10 +70,6 @@ export const envSchema = z
     OPENROUTER_API_KEY: z.string().optional(),
     DECISION_BASE_URL: z.string().url().optional(),
     DECISION_MODEL: z.string().default("pplx-decider-v1-27b"),
-    // Usage reporting to Argo (src/usage/argo.ts). Either unset -> no-op.
-    ARGO_USAGE_URL: z.string().optional(),
-    ARGO_API_SECRET: z.string().optional(),
-    MACHINE: z.string().default("vps"),
     ADMIN_PASSWORD: z.string().optional(),
     // Signing secret for the /app session cookie. Falls back to
     // ADMIN_PASSWORD when unset or shorter than 12 chars (src/session.ts's
