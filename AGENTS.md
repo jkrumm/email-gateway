@@ -304,10 +304,11 @@ occurredAt, bounceType?, bounceSubtype?, diagnosticCode?}` mapping (`Send` →
   `POST /api/templates/:id/test-send`
 - `src/telemetry/llm-call.ts` the `llm.<lane>` client span and `llm.call` event
   for one model call (`traceLlmCall` wraps every `generateText` site;
-  `src/llm/jev.ts`'s `decide` uses `startLlmCall` itself). There is no usage
-  reporting: email-gateway's model spend is **not** in the `usage` schema (gap
-  for a later track: route calls through agw, or write `usage.records` via
-  agw's outbox)
+  `src/llm/jev.ts`'s `decide` uses `startLlmCall` itself). The gateway
+  reports no usage itself: usage-tracker's `email-gateway` collector reads these
+  spans (tokens, model, outcome) from the VPS ClickStack into `usage.records`, so
+  keep the `llm.*` span names and the `llm.model` / `llm.input_tokens` /
+  `llm.output_tokens` / `llm.cache_read_tokens` attributes stable
 - `src/spam/` contact-form gate (`gate.ts` deadline race, enqueues a
   `jev_submission` job on the new `mail.sqlite` `submissions` table instead of
   the old in-memory kick; `classify.ts`, `jev-judge.ts`)
