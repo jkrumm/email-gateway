@@ -1,0 +1,12 @@
+# How the factory ships this project (software-factory docs/design.md §9).
+apiVersion: factory/v2
+name: email-gateway
+deploy:
+  mode: make # a push to master deploys via GitHub Actions + RollHook; `make deploy` only confirms that, `make version` reads the running image's sha
+  targets:
+    - { name: vps, host: vps, verify: make verify }
+  hold: 10m # the rolling update runs after the push; give it time before verify and version
+  migrations: [] # append-only SQLite migrations in src/db/mail-migrations.ts run at boot, no separate step
+ship:
+  - { paths: ['**'], via: push }
+leads: 1

@@ -212,6 +212,9 @@ password) — `docs/vps-cutover.md` has the ready-to-apply `.env.tpl`/
 - `make verify` probes the deployed container's `/health` over ssh
   (`HEALTH_URL=<public-url>` probes the public URL instead); `make logs` prints
   the last 200 container log lines, then exits.
+- `make version` prints the deployed commit sha (the running container's image
+  tag, which CI sets to the pushed sha), read-only. `project.yaml` is the
+  software-factory manifest: `deploy.mode make`, target `vps`, ship by push.
 
 ## Local dev
 

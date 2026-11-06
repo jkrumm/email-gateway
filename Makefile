@@ -26,6 +26,10 @@ verify: ## Probe production /health; exit 0 = live and healthy (HEALTH_URL=… p
 	    || { echo "email-gateway: UNHEALTHY — ssh vps + container /health probe failed"; exit 1; }; \
 	fi
 
+.PHONY: version
+version: ## Print the deployed commit sha (the running container's image tag; CI tags each build with the pushed sha). Read-only.
+	@ssh vps 'docker inspect --format "{{.Config.Image}}" $$(docker ps -q --filter "label=com.docker.compose.service=email-gateway" | head -n1)' | sed 's/.*://'
+
 .PHONY: logs
 logs: ## Bounded tail of the production container logs (last 200 lines, then exits)
 	@ssh vps 'docker logs --tail 200 $$(docker ps -q --filter "label=com.docker.compose.service=email-gateway" | head -n1)'
