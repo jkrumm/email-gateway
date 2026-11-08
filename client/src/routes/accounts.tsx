@@ -40,7 +40,7 @@ function AccountsPage() {
 
       {stats ? (
         <SimpleGrid type="container" cols={{ base: 1, [CONTAINER_KEYS.regular]: 3 }}>
-          <Card py="xs" px="sm">
+          <Card>
             <Text size="sm" c="dimmed">
               Messages (30d)
             </Text>
@@ -51,7 +51,7 @@ function AccountsPage() {
               {stats.messages.inbound} in / {stats.messages.outbound} out
             </Text>
           </Card>
-          <Card py="xs" px="sm">
+          <Card>
             <Text size="sm" c="dimmed">
               Jobs pending
             </Text>
@@ -62,7 +62,7 @@ function AccountsPage() {
               {stats.jobs.failed} failed
             </Text>
           </Card>
-          <Card py="xs" px="sm">
+          <Card>
             <Text size="sm" c="dimmed">
               Accounts
             </Text>
@@ -73,7 +73,7 @@ function AccountsPage() {
         </SimpleGrid>
       ) : null}
 
-      <Card py="xs" px="sm">
+      <Card>
         <Group justify="space-between" mb="sm">
           <Title order={4}>Configured accounts</Title>
         </Group>

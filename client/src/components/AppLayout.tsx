@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react'
 import { linkOptions, useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { BasaltShell, type SettingsMenuItem } from 'basalt-ui'
-import { defineNav, navGroup, useNav } from 'basalt-ui/router-tanstack'
+import { BasaltShell, defineNav, navGroup, type SettingsMenuItem } from 'basalt-ui'
 import { logout } from '../lib/session'
 
 const NAV = defineNav({
@@ -37,7 +36,6 @@ const NAV = defineNav({
 })
 
 export function AppLayout({ children }: { children: ReactNode }) {
-  const nav = useNav(NAV)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -52,7 +50,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   ]
 
   return (
-    <BasaltShell brand={{ name: 'email-gateway' }} {...nav} settingsMenuItems={settingsMenuItems}>
+    <BasaltShell brand={{ name: 'email-gateway' }} nav={NAV} settingsMenuItems={settingsMenuItems}>
       {children}
     </BasaltShell>
   )

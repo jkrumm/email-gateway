@@ -126,10 +126,18 @@ async function aws(args: string[]): Promise<AwsResult> {
   return { ok: (await proc.exited) === 0, out, err }
 }
 
-async function awsOk(args: string[]): Promise<any> {
+type AwsJson = {
+  Account: string
+  TopicArn: string
+  DkimAttributes?: { Tokens?: string[] }
+  AccessKeyMetadata?: unknown[]
+  AccessKey?: { AccessKeyId: string; SecretAccessKey: string }
+}
+
+async function awsOk(args: string[]): Promise<AwsJson> {
   const r = await aws(args)
   if (!r.ok) throw new Error(`aws ${args.slice(0, 2).join(' ')}: ${r.err.trim()}`)
-  return r.out.trim() ? JSON.parse(r.out) : {}
+  return (r.out.trim() ? JSON.parse(r.out) : {}) as AwsJson
 }
 
 async function ensureIdentity(domain: string): Promise<string[]> {
@@ -230,8 +238,8 @@ async function ensureIamUser(account: string, domains: string[], createKey: bool
     JSON.stringify(sendPolicy(account)),
   ])
   const keys = await awsOk(['iam', 'list-access-keys', '--user-name', IAM_USER])
-  if ((keys.AccessKeyMetadata ?? []).length > 0)
-    return { existingKeys: keys.AccessKeyMetadata.length }
+  const existingKeys = keys.AccessKeyMetadata?.length ?? 0
+  if (existingKeys > 0) return { existingKeys }
   if (!createKey) return { existingKeys: 0 }
   const created = await awsOk(['iam', 'create-access-key', '--user-name', IAM_USER])
   return {

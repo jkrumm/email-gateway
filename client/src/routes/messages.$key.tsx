@@ -47,7 +47,7 @@ function classificationRows(
 function ClassificationPanel({ classification }: { classification: Classification | null }) {
   const rows = classificationRows(classification)
   return (
-    <Card py="xs" px="sm">
+    <Card>
       <Title order={4} mb="xs">
         Classification
       </Title>
@@ -127,7 +127,7 @@ function MessageHeader({
   onMove: (toMailbox: string) => void
 }) {
   return (
-    <Card py="xs" px="sm">
+    <Card>
       <Stack gap="xs">
         <Title order={3}>{message.subject ?? '(no subject)'}</Title>
         <Group gap="xs">
@@ -153,7 +153,7 @@ function MessageHeader({
 function MessageBody({ body }: { body: MessageDetail['body'] }) {
   const { html, text } = body ?? { html: null, text: null }
   return (
-    <Card py="xs" px="sm">
+    <Card>
       <Divider />
       {html ? (
         // Untrusted mail HTML: sandbox="" disables scripts, forms and

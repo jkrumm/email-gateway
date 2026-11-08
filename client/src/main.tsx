@@ -1,16 +1,15 @@
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import { QueryClientProvider } from '@tanstack/react-query'
-import { RouterProvider, createRouter } from '@tanstack/react-router'
-import { BasaltProvider, createBasaltTheme } from 'basalt-ui'
+import { createRoot } from 'react-dom/client'
+import { BasaltProvider, createBasaltRouter } from 'basalt-ui'
 
-import '@mantine/core/styles.layer.css'
 import 'basalt-ui/styles.css'
 
-import { queryClient } from './lib/query'
 import { routeTree } from './routeTree.gen'
 
-const router = createRouter({ routeTree, basepath: '/app' })
+const router = createBasaltRouter({
+  routeTree,
+  basepath: '/app',
+  query: { defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } },
+})
 
 declare module '@tanstack/react-router' {
   interface Register {
@@ -18,12 +17,6 @@ declare module '@tanstack/react-router' {
   }
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <BasaltProvider theme={createBasaltTheme()} defaultColorScheme="dark">
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>
-    </BasaltProvider>
-  </React.StrictMode>,
+createRoot(document.getElementById('root')!).render(
+  <BasaltProvider router={router} defaultColorScheme="dark" />,
 )

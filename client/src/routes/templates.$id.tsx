@@ -1,9 +1,9 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { Alert, Badge, Button, Card, Group, Loader, Stack, Table, Text, Title } from '@mantine/core'
-import { createLocalStore, WidgetHeader } from 'basalt-ui'
+import { WidgetHeader } from 'basalt-ui'
 import { ViewTabs } from 'basalt-ui/controls'
-import { field } from 'basalt-ui/state'
+import { createLocalStore, field } from 'basalt-ui/state'
 import { listSendLog, listTemplates, testSendTemplate } from '../lib/api'
 import { formatDate } from '../lib/format'
 import { DataTable } from '../components/DataTable'
@@ -52,6 +52,7 @@ function TemplatePreviewCard({
   const previewUrl = templatePreviewPath(id, width)
   const previewQuery = useQuery({
     queryKey: ['template-preview', id, width],
+    // theme-allow query-fn-unwrap — raw HTML text from a same-origin preview route, not an Eden JSON call
     queryFn: async () => {
       // Fetched client-side (not a direct iframe src=) so the HTML can be
       // rendered via srcDoc with sandbox="" — same-origin-with-full-cookie
@@ -66,7 +67,7 @@ function TemplatePreviewCard({
   })
 
   return (
-    <Card py="xs" px="sm">
+    <Card>
       <Stack gap="sm">
         <WidgetHeader
           tier="widget"
@@ -134,7 +135,7 @@ function PreviewFrame({ width, query }: { width: string; query: UseQueryResult<s
 
 function TemplateSendLogCard({ rows, hasMore }: { rows: SendLogEntry[]; hasMore: boolean }) {
   return (
-    <Card py="xs" px="sm" style={{ overflowX: 'auto' }}>
+    <Card style={{ overflowX: 'auto' }}>
       <Title order={4} mb="sm">
         Send log
       </Title>

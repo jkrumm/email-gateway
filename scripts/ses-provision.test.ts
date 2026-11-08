@@ -8,6 +8,16 @@ import {
   topicPolicy,
 } from './ses-provision'
 
+type SendPolicyDoc = {
+  Statement: { Effect: string; Action: string[]; Resource: string | string[] }[]
+}
+type TopicPolicyDoc = {
+  Statement: {
+    Principal: { Service: string }
+    Condition: { StringEquals: Record<string, string> }
+  }[]
+}
+
 describe('ses-provision', () => {
   test('dnsRecords: three DKIM CNAMEs plus MAIL FROM MX and SPF on the ses. subdomain', () => {
     const recs = dnsRecords('example.com', ['a', 'b', 'c'])
@@ -21,7 +31,7 @@ describe('ses-provision', () => {
   })
 
   test("sendPolicy scopes to this account's identities and the configuration set", () => {
-    const p = sendPolicy('123') as any
+    const p = sendPolicy('123') as SendPolicyDoc
     expect(p.Statement[0].Resource).toEqual([
       'arn:aws:ses:eu-central-1:123:identity/*',
       'arn:aws:ses:eu-central-1:123:configuration-set/email-gateway',
@@ -29,7 +39,7 @@ describe('ses-provision', () => {
   })
 
   test('sendPolicy grants the account-level read/suppression actions on *', () => {
-    const p = sendPolicy('123') as any
+    const p = sendPolicy('123') as SendPolicyDoc
     expect(p.Statement).toHaveLength(2)
     expect(p.Statement[1]).toEqual({
       Effect: 'Allow',
@@ -43,7 +53,7 @@ describe('ses-provision', () => {
   })
 
   test("topicPolicy only lets SES of this account's configuration set publish", () => {
-    const p = topicPolicy('arn:aws:sns:eu-central-1:123:t', '123') as any
+    const p = topicPolicy('arn:aws:sns:eu-central-1:123:t', '123') as TopicPolicyDoc
     expect(p.Statement[0].Principal.Service).toBe('ses.amazonaws.com')
     expect(p.Statement[0].Condition.StringEquals['AWS:SourceAccount']).toBe('123')
   })

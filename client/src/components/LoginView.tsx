@@ -25,7 +25,7 @@ export function LoginView() {
 
   return (
     <Center h="100vh">
-      <Card py="xs" px="sm" w={340}>
+      <Card w={340}>
         <form onSubmit={handleSubmit}>
           <Stack>
             <Title order={3}>email-gateway</Title>
