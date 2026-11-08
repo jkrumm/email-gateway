@@ -266,6 +266,29 @@ describe('createImapProvider', () => {
     expect((await provider.read(freshRef())).cc).toEqual(['extra@example.com'])
   })
 
+  test('read() keeps To/Cc in document order and takes the first duplicate Subject/From', async () => {
+    const { port } = createFakePort({
+      source: new TextEncoder().encode(
+        'From: First <first@example.com>\r\nFrom: Second <second@example.com>\r\n' +
+          'To: a@example.com, b@example.com\r\nTo: c@example.com\r\n' +
+          'Cc: x@example.com, y@example.com\r\n' +
+          'Subject: First subject\r\nSubject: Second subject\r\n\r\nBody',
+      ),
+    })
+    const provider = createImapProvider(config, {
+      id: 'proton',
+      account: 'hello@example.com',
+      port,
+    })
+
+    const message = await provider.read(freshRef())
+
+    expect(message.to).toEqual(['a@example.com', 'b@example.com', 'c@example.com'])
+    expect(message.cc).toEqual(['x@example.com', 'y@example.com'])
+    expect(message.subject).toBe('First subject')
+    expect(message.from).toBe('first@example.com')
+  })
+
   test('read() normalizes a valid Date header to ISO and a malformed one to null', async () => {
     const { port } = createFakePort({
       source: new TextEncoder().encode(
