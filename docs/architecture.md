@@ -283,10 +283,11 @@ later wave doesn't rediscover them by surprise.
 Vite + React + basalt-ui SPA in `client/`, built into `client/dist`, served by
 the same Elysia process at `/app`. Pattern: `argo/apps/dashboard` —
 `basaltViteConfig` from `basalt-ui/vite`, TanStack Router (file routes) +
-TanStack Query, Eden Treaty typed against the Elysia app, `BasaltProvider` with
-the `.layer.css` import order.
+TanStack Query, Eden Treaty typed against the Elysia app, wired by
+`createBasaltRouter` + `BasaltProvider` (basalt-ui 2; `basalt-ui/styles.css`
+imports the Mantine layer CSS itself).
 
-- **Serving.** `@elysia/static` (1.4.11, the current scope; `@elysiajs/static`
+- **Serving.** `@elysia/static` (1.4.12, the current scope; `@elysiajs/static`
   is the older alias) with `assets: 'client/dist'`, `prefix: '/app'`,
   `alwaysStatic: true`, plus an explicit `/app/*` catch-all returning
   `index.html` — the plugin's `indexHTML` only resolves directory indexes, not
