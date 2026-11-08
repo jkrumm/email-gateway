@@ -22,7 +22,7 @@ file is what a dispatched agent needs before touching code.
 
 Bun 1.4 · Elysia 1.4 (`@elysiajs/bearer`) · `bun:sqlite` (WAL, migrations by
 `PRAGMA user_version`, append-only) · imapflow 2 + postal-mime ·
-react-email 6 · `@aws-sdk/client-sesv2` 3.1149.0 (SES, the only send provider) · AI SDK 7 (`ai` 7.0.137; `@ai-sdk/openai-compatible` for the LLM; the shadow
+react-email 6 · `@aws-sdk/client-sesv2` 3.1161.0 (SES, the only send provider) · AI SDK 7 (`ai` 7.0.137; `@ai-sdk/openai-compatible` for the LLM; the shadow
 lane "Jev" runs `pplx-decider-v1-27b` on IU's native decision API
 (`POST <ue-origin>/decisions/v1/systemone`) through the official
 `@ai-sdk/typesafe-ai` provider and `experimental_decide`, OpenRouter's
