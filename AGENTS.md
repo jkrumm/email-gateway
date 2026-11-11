@@ -86,7 +86,7 @@ build`, built by the Dockerfile's client stage) or the React Email preview
   no spam gate; synchronous; 502 on a provider error; `sensitiveSubject: true`),
   and stricter: `code` is exactly six digits, `expiresInMinutes` ≤ 15, `to` is one
   `@iu.org` address (anything else is a 422, so a leaked key cannot mail outsiders).
-  The code appears spelled two ways (`482915`, `482 915`); the template's `redact`
+  The subject spells the code spaced (`482 915`), the body once as `482915`; the template's `redact`
   returns both. Sender and Reply-To come from `ATHENA_FROM_EMAIL` / `ATHENA_REPLY_TO`
   in the deploy env (the repo is public); never an `@iu.org` From.
 - **Three live callers, contract frozen.** FPP web (Vercel, 7 s abort),
@@ -258,7 +258,7 @@ tests never need secrets.
   from `apps/share/src/lib/brand`)
 - `src/routes/athena.ts` — `createAthenaRoutes`, `POST /athena` (own bearer, 404
   when unset, `@iu.org` recipients only); template `src/emails/athena/code-mail.tsx`
-  on `src/layouts/athena.layout.tsx` (Athena's tokens ported as hex)
+  on `src/layouts/athena.layout.tsx` (self-contained text-first palette, light and dark)
 - `src/routes/sy-serendipity-requests.ts` — `GET /sy-serendipity/requests`, the
   read-only admin feed over `mail-submissions.ts`'s `listBySource`; own key
   `SY_SERENDIPITY_READ_KEY` (unset → 404), never `SECRET_KEY`/`API_KEY`, not host-gated
