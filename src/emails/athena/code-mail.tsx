@@ -27,51 +27,43 @@ export function athenaCodeSecrets(code: string): string[] {
 }
 
 export default function AthenaCodeMail({ code, expiresInMinutes }: AthenaCodeProps) {
-  const noteStyle = {
-    fontSize: '14px',
-    lineHeight: '22px',
-    color: c.muted,
-    margin: '0 0 8px',
+  const lineStyle = {
+    fontSize: '16px',
+    lineHeight: '24px',
+    margin: '0 0 12px',
   }
 
   return (
-    <AthenaLayout preview={athenaCodeSubject(code)}>
-      <Text
-        className="at-body"
-        style={{
-          fontSize: '16px',
-          lineHeight: '24px',
-          color: c.body,
-          margin: '0 0 16px',
-        }}
-      >
-        {`Use this code to sign in to Athena. It expires in ${expiresInMinutes} minutes.`}
+    // The preview line leaves the code out: the code appears once in the body.
+    <AthenaLayout preview="Your Athena sign-in code">
+      <Text className="at-ink" style={{ ...lineStyle, color: c.ink, fontWeight: 600 }}>
+        Your Athena sign-in code
       </Text>
       <Text
         className="at-code at-ink"
         style={{
-          display: 'inline-block',
           fontFamily: athenaFonts.mono,
-          fontSize: '28px',
-          lineHeight: '36px',
-          fontWeight: 600,
-          letterSpacing: '4px',
+          fontSize: '32px',
+          lineHeight: '40px',
+          fontWeight: 700,
+          letterSpacing: '0.3em',
           color: c.ink,
           backgroundColor: c.wash,
           border: `1px solid ${c.border}`,
-          borderRadius: '6px',
-          padding: '12px 20px',
-          margin: '0 0 24px',
+          borderRadius: '8px',
+          padding: '16px 20px',
+          margin: '0 0 20px',
+          textAlign: 'center',
+          userSelect: 'all',
         }}
       >
-        {athenaCodeDisplay(code)}
+        {code}
       </Text>
-      <Text className="at-muted" style={noteStyle}>
-        Sent by Johannes Krumm&apos;s Athena for team Athena, because someone asked to sign in with
-        this address.
+      <Text className="at-body" style={{ ...lineStyle, color: c.body }}>
+        {`This code is valid for ${expiresInMinutes} minutes.`}
       </Text>
-      <Text className="at-muted" style={noteStyle}>
-        If you did not ask for this, ignore it.
+      <Text className="at-muted" style={{ ...lineStyle, fontSize: '14px', color: c.muted }}>
+        If you did not ask for this, ignore this mail.
       </Text>
     </AthenaLayout>
   )

@@ -1,44 +1,46 @@
-import { Body, Container, Head, Html, Preview, Section, Text } from 'react-email'
+import { Body, Container, Head, Html, Preview } from 'react-email'
 import type { ReactNode } from 'react'
 
-// Athena's tokens (chat/ui/src/tokens.css there: canvas, panel, ink ramp, rule,
-// brand), ported as literal hex: mail clients cannot load the app's stylesheet.
-// Dark mode follows prefers-color-scheme (Apple Mail); Gmail inverts on its own.
-export const athenaColors = {
-  bg: '#F2F2F5',
-  card: '#FFFFFF',
-  wash: '#F4F4F7',
-  border: '#DEDEE2',
-  ink: '#232327',
-  body: '#4E4E53',
-  muted: '#66666B',
-  brand: '#16324F',
+// Text-first on purpose: no images, no links, no card chrome. Mail clients cannot
+// load the app's stylesheet, so the palette is literal hex. Every foreground sits
+// at 4.5:1 or better on its background in both schemes (the template test checks
+// the pairs). The inline values are the light scheme and the safe default; the
+// prefers-color-scheme block restates every colour for dark, so a client that
+// honours `color-scheme` (Apple Mail, Outlook.com, Dark Reader) gets a designed
+// dark mail and one that inverts on its own (Gmail) starts from sane values.
+export const athenaLight = {
+  bg: '#FFFFFF',
+  wash: '#F1F1F4',
+  border: '#C9C9D0',
+  ink: '#16161A',
+  body: '#33333A',
+  muted: '#55555C',
 }
 
-const dark = {
-  bg: '#18181B',
-  card: '#2B2B2F',
-  wash: '#2F2F33',
-  border: '#46464A',
-  ink: '#E7E7EA',
-  body: '#C2C2C8',
-  muted: '#A0A0A6',
-  brand: '#E7E7EA',
+export const athenaDark = {
+  bg: '#16161A',
+  wash: '#26262B',
+  border: '#4A4A52',
+  ink: '#F2F2F5',
+  body: '#D6D6DC',
+  muted: '#A9A9B2',
 }
+
+export const athenaColors = athenaLight
 
 export const athenaFonts = {
-  sans: "'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-  mono: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace",
+  sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+  mono: "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace",
 }
 
-const darkCss = `@media (prefers-color-scheme: dark){
-.at-bg{background-color:${dark.bg} !important}
-.at-card{background-color:${dark.card} !important;border-color:${dark.border} !important}
-.at-brand{color:${dark.brand} !important}
-.at-ink{color:${dark.ink} !important}
-.at-body{color:${dark.body} !important}
-.at-muted{color:${dark.muted} !important}
-.at-code{background-color:${dark.wash} !important;border-color:${dark.border} !important}
+const d = athenaDark
+const schemeCss = `:root{color-scheme:light dark;supported-color-schemes:light dark}
+@media (prefers-color-scheme: dark){
+body,td,.at-bg{background-color:${d.bg} !important}
+.at-ink{color:${d.ink} !important}
+.at-body{color:${d.body} !important}
+.at-muted{color:${d.muted} !important}
+.at-code{background-color:${d.wash} !important;border-color:${d.border} !important}
 }`
 
 export default function AthenaLayout({
@@ -48,51 +50,25 @@ export default function AthenaLayout({
   children: ReactNode
   preview?: string
 }) {
-  const c = athenaColors
   return (
     <Html lang="en">
       <Head>
         <meta name="color-scheme" content="light dark" />
         <meta name="supported-color-schemes" content="light dark" />
-        <style>{darkCss}</style>
+        <style>{schemeCss}</style>
       </Head>
       {preview ? <Preview>{preview}</Preview> : null}
       <Body
         className="at-bg"
         style={{
-          backgroundColor: c.bg,
+          backgroundColor: athenaLight.bg,
+          color: athenaLight.body,
           fontFamily: athenaFonts.sans,
           margin: 0,
           padding: '32px 16px',
         }}
       >
-        <Container style={{ maxWidth: '480px', width: '100%' }}>
-          <Section style={{ padding: '0 0 16px 4px' }}>
-            <Text
-              className="at-brand"
-              style={{
-                fontSize: '18px',
-                lineHeight: '28px',
-                fontWeight: 600,
-                color: c.brand,
-                margin: 0,
-              }}
-            >
-              Athena
-            </Text>
-          </Section>
-          <Section
-            className="at-card"
-            style={{
-              backgroundColor: c.card,
-              border: `1px solid ${c.border}`,
-              borderRadius: '10px',
-              padding: '32px',
-            }}
-          >
-            {children}
-          </Section>
-        </Container>
+        <Container style={{ maxWidth: '30rem', width: '100%' }}>{children}</Container>
       </Body>
     </Html>
   )
