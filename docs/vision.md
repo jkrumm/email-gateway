@@ -17,8 +17,8 @@ Renamed from `bun-email-api` on 2026-09-27 to match `research-gateway` and
 | Receive | Read-only IMAP sync of Proton (`hello@`) through Proton Mail Bridge on the homelab over the tailnet |
 | Classify | LLM spam gate on contact forms, LLM enrichment of inbound mail, Jev in shadow mode as a durable retried queue |
 | Store | SQLite (`bun:sqlite`) in a VPS volume |
-| UI | Zero-JS SSR admin at `/admin` (Basic auth) using basalt-ui tokens |
-| API | `/api/*` behind a bearer token: emails, stats, submissions, sync |
+| UI | React + basalt-ui SPA at `/app`, signed session cookie login; `/admin` redirects to `/app` |
+| API | `/api/*` behind a bearer token or the `/app` session cookie: messages, submissions, sends, stats, sync, SES account |
 
 ## Target
 
