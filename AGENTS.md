@@ -366,11 +366,11 @@ tests never need secrets.
 - `src/db/mail-index.ts` (Wave 4): the `mail.sqlite` repo singletons
   (`accountsRepo`, `messagesRepo`, `mailSubmissionsRepo`, `templatesRepo`,
   `sendLogRepo`, `threadSummariesRepo` — Wave 8's cached LLM thread
-  summaries, `sendBodiesRepo`, `sesAccountRepo` — Wave 18), each bound to `mailDb` the same way the old-store repos
-  below are bound to `db`. `src/db/mail-migrations.ts`
+  summaries, `sendBodiesRepo`, `sesAccountRepo` — Wave 18), each bound to `mailDb`.
+  `src/db/mail-migrations.ts`
   - `src/db/mail-client.ts` own the schema (`docs/architecture.md` §Lean
     store) and the `mailDb` singleton, opened alongside — never replacing — the
-    untouched `email-gateway.sqlite`/`db` from `src/db/client.ts`; both share
+    untouched `email-gateway.sqlite` (`openDatabase` in `src/db/client.ts`); both share
     `src/db/migration-runner.ts`'s generic `applyMigrations`, and
     `mail-client.ts` also calls `ensureJobsSchema` so `jobs` is real there.
     `src/db/{accounts,messages,mail-submissions,templates,send-log,thread-summaries,send-bodies,ses-account}.ts`
