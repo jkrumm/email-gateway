@@ -38,7 +38,7 @@ const CONFIRMATION_KEYS = [
   'Type',
 ] as const
 
-export function signSnsMessage(message: Unsigned): SnsMessage {
+function signSnsMessage(message: Unsigned): SnsMessage {
   const signatureVersion = message.SignatureVersion ?? '2'
   const keys = message.Type === 'Notification' ? NOTIFICATION_KEYS : CONFIRMATION_KEYS
   const toSign = keys
