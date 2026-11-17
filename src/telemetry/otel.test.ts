@@ -239,6 +239,14 @@ describe('OTLP payloads', () => {
     )
     expect(resourceOf(_test.logsPayload([]), 'resourceLogs')).toContain('"service.name"')
   })
+
+  test('carry the environment as deployment.environment.name, not the deprecated key', () => {
+    const resource = JSON.stringify(_test.tracesPayload([]))
+    expect(resource).toMatch(
+      /"key":"deployment\.environment\.name","value":\{"stringValue":"(prod|dev)"\}/,
+    )
+    expect(resource).not.toContain('"key":"deployment.environment",')
+  })
 })
 
 /** Swap in a `fetch` stub for the duration of `fn`, always restoring the real one. */
