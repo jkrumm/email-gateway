@@ -7,7 +7,7 @@ process.env.SES_ACCESS_KEY_ID ??= 'test-ses-access-key-id'
 process.env.SES_SECRET_ACCESS_KEY ??= 'test-ses-secret-access-key'
 process.env.SES_CONFIGURATION_SET ??= 'test-ses-configuration-set'
 process.env.SY_SERENDIPITY_RECEIVER_EMAIL ??= 'sy-receiver@example.com'
-// Keep the default db singleton (src/db/client.ts) in-memory during tests so
+// Keep every DATA_DIR-derived store (src/db/mail-client.ts) in-memory during tests so
 // importing route/admin modules never touches the filesystem.
 process.env.DATA_DIR ??= ':memory:'
 process.env.SY_SERENDIPITY_READ_KEY ??= 'test-sy-serendipity-read-key-0123456789'

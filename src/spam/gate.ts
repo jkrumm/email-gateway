@@ -11,7 +11,7 @@ import { log } from '../telemetry/log'
 // (bounded only by its 30-min hang guard) would time them out. This deadline
 // makes the delivery decision fail open instead; the classification keeps
 // running in the background and its verdict is recorded late.
-export const CLASSIFY_DECISION_DEADLINE_MS = 8_000
+const CLASSIFY_DECISION_DEADLINE_MS = 8_000
 
 type RecordSubmission = typeof mailSubmissionsRepo.insertSubmission
 

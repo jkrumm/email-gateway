@@ -399,7 +399,7 @@ tests never need secrets.
   reconnect/backoff, kept entirely separate from the pool.
   `ProviderId` is `proton | gmail`.
 - `src/db/` (the old `email-gateway.sqlite` store, kept only for
-  `scripts/import-legacy.ts`) `client.ts` (lazy singleton, pragmas),
+  `scripts/import-legacy.ts`) `client.ts` (`openDatabase`: pragmas, migrations),
   `migrations.ts`, `submissions.ts` + `jev-queue.ts` (the queue module
   `submissions.ts` still depends on) — every other old-store repo
   (`emails.ts`, `imap-state.ts`, `sync-state.ts`) is deleted
