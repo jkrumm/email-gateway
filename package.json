@@ -21,16 +21,16 @@
     "format:check": "oxfmt --check ."
   },
   "dependencies": {
-    "@ai-sdk/gateway": "4.0.87",
-    "@ai-sdk/openai-compatible": "3.0.53",
-    "@ai-sdk/typesafe-ai": "3.0.17",
+    "@ai-sdk/gateway": "4.0.139",
+    "@ai-sdk/openai-compatible": "3.0.87",
+    "@ai-sdk/typesafe-ai": "3.0.35",
     "@aws-sdk/client-sesv2": "3.1165.0",
     "@elysia/static": "1.4.12",
     "@elysiajs/bearer": "1.4.4",
     "@modelcontextprotocol/server": "2.4.0",
     "@openrouter/ai-sdk-provider": "3.1.0",
     "@react-email/render": "2.3.1",
-    "ai": "7.0.137",
+    "ai": "7.0.166",
     "basalt-ui": "2.29.0",
     "elysia": "1.4.32",
     "imapflow": "2.11.0",
@@ -41,7 +41,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "4.0.26",
+    "@ai-sdk/provider": "4.0.37",
     "@types/bun": "1.4.4",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
