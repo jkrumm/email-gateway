@@ -51,7 +51,9 @@ describe('judgeEmailWithJev', () => {
     expect(calls).toHaveLength(1)
     const asked = calls[0]!.questions
     expect(asked.spam!.type).toBe('boolean')
-    expect(Object.keys(asked.category!.criteria as object)).toEqual([...CATEGORIES])
+    const category = asked.category!
+    if (category.type !== 'choice') throw new Error('category must be a choice question')
+    expect(Object.keys(category.criteria)).toEqual([...CATEGORIES])
   })
 
   test('caps the text state at 6,000 chars, keeping from/subject first', async () => {

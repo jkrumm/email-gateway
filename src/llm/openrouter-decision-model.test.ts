@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { decide, type JevConfig } from './jev'
-import { createOpenRouterDecisionModel, unwrapDecisionState } from './openrouter-decision-model'
+import {
+  createOpenRouterDecisionModel,
+  toOpenRouterQuestions,
+  unwrapDecisionState,
+} from './openrouter-decision-model'
 
 describe('unwrapDecisionState', () => {
   test('a single json object or array part is unwrapped to the raw value', () => {
@@ -44,6 +48,42 @@ describe('unwrapDecisionState', () => {
         },
       ]),
     ).toThrow('cannot carry files')
+  })
+})
+
+describe('toOpenRouterQuestions', () => {
+  test('passes choice, score and boolean questions through', () => {
+    const questions = {
+      c: { type: 'choice', instructions: 'pick', criteria: { a: 'A', b: null } },
+      s: { type: 'score', instructions: 'rate', criteria: ['low', 'high'] },
+      b: { type: 'boolean', instructions: 'yes?', criteria: { true: 'yes' } },
+    } as const
+    expect(toOpenRouterQuestions(questions)).toEqual(questions)
+  })
+
+  test('a boolean without or with null criteria omits them', () => {
+    expect(
+      toOpenRouterQuestions({
+        a: { type: 'boolean', instructions: 'x' },
+        b: { type: 'boolean', instructions: 'y', criteria: null },
+      }),
+    ).toEqual({
+      a: { type: 'boolean', instructions: 'x' },
+      b: { type: 'boolean', instructions: 'y' },
+    })
+  })
+
+  test('missing or null instructions throw', () => {
+    expect(() => toOpenRouterQuestions({ a: { type: 'boolean' } })).toThrow('require instructions')
+    expect(() =>
+      toOpenRouterQuestions({ a: { type: 'choice', instructions: null, criteria: { x: null } } }),
+    ).toThrow('require instructions')
+  })
+
+  test('a box question throws', () => {
+    expect(() => toOpenRouterQuestions({ a: { type: 'box', instructions: 'x' } })).toThrow(
+      'do not support box',
+    )
   })
 })
 

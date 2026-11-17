@@ -1,11 +1,16 @@
 import type { Experimental_DecisionModel as DecisionModel } from 'ai'
 // Types only: `@ai-sdk/provider` is a devDependency, so a runtime import
 // crashes the prod image.
-import type { Experimental_DecisionModelV4State as DecisionModelV4State } from '@ai-sdk/provider'
+import type {
+  Experimental_DecisionModelV4Question as DecisionModelV4Question,
+  Experimental_DecisionModelV4State as DecisionModelV4State,
+} from '@ai-sdk/provider'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 
 type OpenRouterModel = ReturnType<ReturnType<typeof createOpenRouter>['evaluationModel']>
-type OpenRouterState = Parameters<OpenRouterModel['doEvaluate']>[0]['state']
+type OpenRouterCallOptions = Parameters<OpenRouterModel['doEvaluate']>[0]
+type OpenRouterState = OpenRouterCallOptions['state']
+type OpenRouterQuestion = OpenRouterCallOptions['questions'][string]
 
 // `decide` hands models a normalized state (`[{ type: "json", value }]` or text
 // parts), while @openrouter/ai-sdk-provider's `doEvaluate` (3.1.0) still posts
@@ -25,6 +30,30 @@ export function unwrapDecisionState(parts: DecisionModelV4State): OpenRouterStat
       throw new Error('OpenRouter decisions state cannot carry files')
     })
     .join('\n')
+}
+
+// `@ai-sdk/provider` 4.0.37 relaxed `instructions` (optional/null) and added a
+// `box` question; OpenRouter's evaluation endpoint still requires instructions
+// and has no `box`. Fail loudly instead of posting a body it would reject.
+export function toOpenRouterQuestions(
+  questions: Readonly<Record<string, DecisionModelV4Question>>,
+): OpenRouterCallOptions['questions'] {
+  return Object.fromEntries(
+    Object.entries(questions).map(([name, question]): [string, OpenRouterQuestion] => {
+      if (question.type === 'box') {
+        throw new Error(`OpenRouter decisions do not support box questions ("${name}")`)
+      }
+      const { instructions } = question
+      if (instructions == null) {
+        throw new Error(`OpenRouter decisions require instructions ("${name}")`)
+      }
+      if (question.type === 'boolean') {
+        const { criteria } = question
+        return [name, { type: 'boolean', instructions, ...(criteria && { criteria }) }]
+      }
+      return [name, { ...question, instructions }]
+    }),
+  )
 }
 
 export function createOpenRouterDecisionModel({
@@ -56,6 +85,7 @@ export function createOpenRouterDecisionModel({
     doDecide: (options) =>
       evaluationModel.doEvaluate({
         ...options,
+        questions: toOpenRouterQuestions(options.questions),
         state: unwrapDecisionState(options.state),
       }),
   }
