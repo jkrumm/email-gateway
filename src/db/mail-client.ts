@@ -41,7 +41,7 @@ function getDefaultMailDatabase(): Database {
 
 // Lazily opened so importing this module (e.g. for types) never touches the
 // filesystem — only the first real query does. Named `mailDb` (not `db`) so
-// both singletons can be imported side by side while the cutover is in flight.
+// the name stays distinct from the old store.
 export const mailDb: Database = new Proxy({} as Database, {
   get(_target, prop, _receiver) {
     const instance = getDefaultMailDatabase()
