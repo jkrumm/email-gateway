@@ -169,6 +169,8 @@ OpenTelemetry traces and trace-linked logs for `service.name` `email-gateway`, e
 | `OTEL_SERVICE_NAME`           | Default `email-gateway`.                                                                |
 | `OTEL_RESOURCE_ATTRIBUTES`    | Optional `key=value,key=value` extra resource attributes (e.g. `host.name=...`).        |
 
+The resource also carries `deployment.environment.name` (`prod` when `NODE_ENV=production`, else `dev`) and `service.version` (the short `GIT_SHA` baked into the image by CI; omitted in dev). `OTEL_RESOURCE_ATTRIBUTES` overrides either.
+
 Spans (all attributes are names, outcomes and counts — never an address, subject, body, auth code, message id, header, query string or prompt; a failed span's status text and its `exception` event carry the error name only, never the message or stack):
 
 | Span                                                                                 | Kind   | Attributes                                                                                                                                                                      |

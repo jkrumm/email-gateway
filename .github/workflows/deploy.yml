@@ -32,3 +32,5 @@ jobs:
           image_name: email-gateway
           dockerfile: Dockerfile
           context: .
+          build_args: |
+            GIT_SHA=${{ github.sha }}

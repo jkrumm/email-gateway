@@ -3,6 +3,7 @@ import {
   createNanoClock,
   errorName,
   isSensitiveKey,
+  ownResourceAttributes,
   parseOtlpHeadersEnv,
   parseResourceAttributesEnv,
   scrubText,
@@ -52,6 +53,38 @@ describe('parseResourceAttributesEnv', () => {
 
   test('returns an empty object for the empty string', () => {
     expect(parseResourceAttributesEnv('')).toEqual({})
+  })
+})
+
+describe('ownResourceAttributes', () => {
+  test('maps NODE_ENV=production to prod and anything else to dev, under the new key only', () => {
+    expect(ownResourceAttributes({ nodeEnv: 'production', gitSha: undefined })).toEqual({
+      'deployment.environment.name': 'prod',
+    })
+    expect(ownResourceAttributes({ nodeEnv: 'development', gitSha: undefined })).toEqual({
+      'deployment.environment.name': 'dev',
+    })
+    expect(ownResourceAttributes({ nodeEnv: undefined, gitSha: undefined })).toEqual({
+      'deployment.environment.name': 'dev',
+    })
+  })
+
+  test('reports the short git sha as service.version', () => {
+    expect(
+      ownResourceAttributes({
+        nodeEnv: 'production',
+        gitSha: '0123456789abcdef0123456789abcdef01234567',
+      }),
+    ).toEqual({
+      'deployment.environment.name': 'prod',
+      'service.version': '0123456',
+    })
+  })
+
+  test('omits service.version when no build sha was baked in', () => {
+    expect(ownResourceAttributes({ nodeEnv: 'production', gitSha: '  ' })).not.toHaveProperty(
+      'service.version',
+    )
   })
 })
 
