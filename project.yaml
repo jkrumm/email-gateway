@@ -1,4 +1,4 @@
-# How the factory ships this project (software-factory docs/design.md §9).
+# How the factory ships this project (software-factory docs/project.md, the file's author page).
 apiVersion: factory/v2
 name: email-gateway
 deploy:
@@ -6,7 +6,7 @@ deploy:
   targets:
     - { name: vps, host: vps, verify: make verify }
   hold: 10m # the rolling update runs after the push; give it time before verify and version
-  migrations: [] # append-only SQLite migrations in src/db/mail-migrations.ts run at boot, no separate step
 ship:
-  - { paths: ['**'], via: push }
+  - { via: push }
+# One lead at a time: set at factory onboarding (commit 2a32c35) with no reason recorded; drop this line to lift the cap to the default.
 leads: 1
