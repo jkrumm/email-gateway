@@ -94,6 +94,9 @@ export const envSchema = z
     OTEL_EXPORTER_OTLP_HEADERS: z.string().optional(),
     OTEL_SERVICE_NAME: z.string().default('email-gateway'),
     OTEL_RESOURCE_ATTRIBUTES: z.string().optional(),
+    // Short-or-full git sha baked in at image build (Dockerfile ARG, deploy.yml build_args).
+    // Becomes `service.version`; unset in dev, where no version is reported.
+    GIT_SHA: z.string().optional(),
 
     // Directory for the SQLite database file. Defaults to ./data so local dev
     // doesn't need any setup; ops sets it to a mounted volume path in prod.

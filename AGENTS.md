@@ -120,7 +120,9 @@ password) — `docs/vps-cutover.md` has the ready-to-apply `.env.tpl`/
   (keyword `{"ok":true}`) in the Kuma `VPS` group.
 - **OTel `service.name`:** `email-gateway` — SDK-free OTLP/HTTP JSON traces and
   trace-linked logs to the ClickStack collector (`src/telemetry/`), off unless
-  `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Span and event names:
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Resource: `deployment.environment.name`
+  (`prod|dev`) and `service.version` (short `GIT_SHA`, build arg from
+  `deploy.yml`) per the vps telemetry contract. Span and event names:
   README.md §Observability. Telemetry never carries an address, subject, body,
   auth code or message id (the exporter drops sensitive keys and scrubs
   address-shaped text).

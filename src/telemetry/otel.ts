@@ -3,6 +3,7 @@ import { env } from '../env'
 import {
   createNanoClock,
   errorName,
+  ownResourceAttributes,
   parseOtlpHeadersEnv,
   parseResourceAttributesEnv,
   scrubText,
@@ -69,7 +70,7 @@ function toOtlpAttributes(attrs: Record<string, unknown>): OtlpAttribute[] {
 const RESOURCE = {
   attributes: toOtlpAttributes({
     'service.name': env.OTEL_SERVICE_NAME,
-    'deployment.environment': process.env['NODE_ENV'] ?? 'development',
+    ...ownResourceAttributes({ nodeEnv: process.env['NODE_ENV'], gitSha: env.GIT_SHA }),
     ...parseResourceAttributesEnv(env.OTEL_RESOURCE_ATTRIBUTES ?? ''),
   }),
 }

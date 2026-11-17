@@ -46,6 +46,9 @@ COPY --from=client-builder --chown=app:app /app/client/dist /app/client/dist
 
 ENV NODE_ENV=production
 ENV DATA_DIR=/data
+# The git sha of the built commit (deploy.yml build_args) → OTel `service.version`.
+ARG GIT_SHA=
+ENV GIT_SHA=$GIT_SHA
 EXPOSE 3010
 
 USER app

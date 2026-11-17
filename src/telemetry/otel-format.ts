@@ -36,6 +36,24 @@ export function parseResourceAttributesEnv(raw: string): Record<string, string> 
 }
 
 /**
+ * The resource attributes this service sets itself, per the vps telemetry contract: the
+ * environment as `deployment.environment.name` (`prod` or `dev`; the deprecated
+ * `deployment.environment` key is no longer sent) and the short git sha as `service.version`,
+ * which is omitted when no build sha was baked in rather than reported as a placeholder.
+ */
+export function ownResourceAttributes(input: {
+  nodeEnv: string | undefined
+  gitSha: string | undefined
+}): Record<string, string> {
+  const out: Record<string, string> = {
+    'deployment.environment.name': input.nodeEnv === 'production' ? 'prod' : 'dev',
+  }
+  const sha = input.gitSha?.trim().slice(0, 7)
+  if (sha) out['service.version'] = sha
+  return out
+}
+
+/**
  * The only part of a caught error that spans may carry: a failure's message and stack can
  * echo the mail being handled (subject, body, an auth code, a prompt), so span status and
  * exception events record the name alone.
