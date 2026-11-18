@@ -5,9 +5,12 @@ mail. Two doors onto the **same service layer** (`src/services/agent-api.ts`):
 a bearer JSON REST API at `/api/*` and an MCP endpoint at `/mcp`.
 
 Both are **bearer-only** — `Authorization: Bearer $API_KEY` (min 16 chars,
-`API_KEY` in the environment). Unset `API_KEY` 404s the whole `/api` and `/mcp`
-prefixes. A wrong or missing token is `401`. The `/app` session cookie never
-opens `/api` to an agent, and never opens `/mcp` at all: MCP is agent-only.
+`API_KEY` in the environment). Unset `API_KEY` 404s `/mcp`. `/api` 404s only
+when neither `API_KEY` nor an admin session secret is configured; with
+`API_KEY` unset but `ADMIN_PASSWORD` set, bearer calls to `/api` get `401`
+and the `/app` session cookie still works. A wrong or missing token is `401`.
+The `/app` session cookie never opens `/api` to an agent, and never opens
+`/mcp` at all: MCP is agent-only.
 
 Both doors sit behind the `MAIL_HOST` gate (a mismatching `Host` 404s them) and
 are reached at `https://mail.<domain>`. All examples below use that host.

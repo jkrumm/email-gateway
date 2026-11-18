@@ -281,7 +281,7 @@ Every newly-ingested message is enriched once by the LLM (`src/enrich/`, run fro
 
 ## API
 
-`GET`/`POST /api/*` — bearer-authenticated JSON API, now backed by the lean `mail.sqlite` tables (`src/db/messages.ts`, `src/db/mail-submissions.ts`, `src/db/accounts.ts`, `src/db/jobs.ts`) instead of the old `emails`/`submissions`/`imap_sync_state` store. Unset `API_KEY` → every `/api/*` route 404s; a wrong/missing bearer token → `401 { "error": "unauthorized" }`.
+`GET`/`POST /api/*` — bearer-authenticated JSON API, now backed by the lean `mail.sqlite` tables (`src/db/messages.ts`, `src/db/mail-submissions.ts`, `src/db/accounts.ts`, `src/db/jobs.ts`) instead of the old `emails`/`submissions`/`imap_sync_state` store. Unset `API_KEY` → `/api/*` 404s unless an admin session secret is configured (then bearer calls get `401`); a wrong/missing bearer token → `401 { "error": "unauthorized" }`.
 
 | Method & path                         | Query / body                                                                                                                                                            | Notes                                                                                                                                                                                                                                                                                                                          |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -320,7 +320,7 @@ curl -H "Authorization: Bearer $API_KEY" "https://<host>/api/messages?needs_me=1
 
 New env var:
 
-- `API_KEY` — bearer key for `/api/*`, min 16 chars. Unset → the whole `/api/*` prefix 404s.
+- `API_KEY` — bearer key for `/api/*`, min 16 chars. Unset → `/api/*` 404s when no admin session secret is set either; with `ADMIN_PASSWORD` set, bearer calls get `401`.
 - `JKRUMM_CONTACT_ORIGINS` — comma-separated browser Origins allowed to call `POST /jkrumm-contact`. Unset → that route 404s.
 - `JKRUMM_CONTACT_FROM_EMAIL` — optional sender for the `/jkrumm-contact` receiver mail; falls back to the default sender.
 - `JKRUMM_CONTACT_RECEIVER_EMAIL` — optional recipient of the `/jkrumm-contact` receiver mail (e.g. `hello@<your-domain>`); falls back to `RECEIVER_EMAIL`.
