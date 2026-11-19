@@ -8,5 +8,3 @@ deploy:
   hold: 10m # the rolling update runs after the push; give it time before verify and version
 ship:
   - { via: push }
-# One lead at a time: set at factory onboarding (commit 2a32c35) with no reason recorded; drop this line to lift the cap to the default.
-leads: 1
