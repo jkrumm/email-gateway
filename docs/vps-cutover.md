@@ -120,8 +120,9 @@ files and rsync them to `homelab:/mnt/hdd/backups/email-gateway/` — a new
 subdirectory under the path homelab's restic container already walks to B2
 (`homelab/docs/backups.md`), so it needs no homelab-side change once §1's ACL
 grant lands. `scripts/backup.ts`'s snapshot/prune logic is unit-tested
-(`scripts/backup.test.ts`, including the per-database isolation and integrity
-checks below); `scripts/backup.sh`'s own shell logic (container discovery,
+(`scripts/backup.test.ts`, covering per-database isolation and pruning). Its
+`PRAGMA integrity_check` gate is not covered by a test; `scripts/backup.sh`'s
+own shell logic (container discovery,
 the empty-source guard, the rsync invocation) is not — this repo has no
 shell-test harness — so it was smoke-tested by hand with `docker`/`rsync`
 replaced by stub scripts on `PATH`, not against a real container; dry-run it
